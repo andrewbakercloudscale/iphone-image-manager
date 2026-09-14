@@ -25,8 +25,11 @@ q() { sqlite3 "$TMP/p.sqlite" "$1" 2>/dev/null || echo "?"; }
 TOTAL=$(q "select count(*) from ZASSET where ZTRASHEDSTATE=0;")
 IMAGES=$(q "select count(*) from ZASSET where ZTRASHEDSTATE=0 and ZKIND=0;")
 VIDEOS=$(q "select count(*) from ZASSET where ZTRASHEDSTATE=0 and ZKIND=1;")
-LOCAL=$(q "select count(*) from ZASSET where ZTRASHEDSTATE=0 and ZCLOUDLOCALSTATE=0;")
-REMOTE=$(q "select count(*) from ZASSET where ZTRASHEDSTATE=0 and ZCLOUDLOCALSTATE<>0;")
+# ZCLOUDLOCALSTATE: 0 means the asset is not in iCloud at all, 1 means it is
+# synced. An earlier version of this script had the labels the wrong way round.
+NOTINCLOUD=$(q "select count(*) from ZASSET where ZTRASHEDSTATE=0 and ZCLOUDLOCALSTATE=0;")
+INCLOUD=$(q "select count(*) from ZASSET where ZTRASHEDSTATE=0 and ZCLOUDLOCALSTATE=1;")
+PENDINGUP=$(q "select count(*) from ZASSETRESOURCEUPLOADJOBREQUEST;")
 NEWEST=$(q "select datetime(max(ZDATECREATED)+978307200,'unixepoch') from ZASSET where ZTRASHEDSTATE=0;")
 SIZE=$(du -sh "$LIB" 2>/dev/null | awk '{print $1}')
 FREE=$(df -h /System/Volumes/Data | awk 'NR==2{print $4}')
@@ -37,7 +40,8 @@ PCT=0
 printf '\n  Photos library sync\n  -------------------\n'
 printf '  assets            %'"'"'d  of ~%'"'"'d expected  (%d%%)\n' "$TOTAL" "$TARGET" "$PCT"
 printf '  photos / videos   %'"'"'d / %'"'"'d\n' "$IMAGES" "$VIDEOS"
-printf '  local / in iCloud %'"'"'d / %'"'"'d\n' "$LOCAL" "$REMOTE"
+printf '  synced to iCloud  %'"'"'d  (not in iCloud: %'"'"'d)\n' "$INCLOUD" "$NOTINCLOUD"
+printf '  uploads queued    %s\n' "$PENDINGUP"
 printf '  newest item       %s\n' "$NEWEST"
 printf '  library on disk   %s   (free: %s)\n\n' "$SIZE" "$FREE"
 
@@ -45,9 +49,8 @@ if [ "$VIDEOS" -eq 0 ]; then
     echo "  NOT DONE: zero videos. Video syncs late, so this is the clearest signal."
 elif [ "$TOTAL" -lt $(( TARGET * 98 / 100 )) ]; then
     echo "  NOT DONE: still short of the expected count."
-elif [ "$REMOTE" -eq 0 ]; then
-    echo "  SUSPICIOUS: nothing is iCloud-only. Check you picked Optimise Mac Storage,"
-    echo "  not Download Originals, or the disk will fill."
+elif [ "$PENDINGUP" != "0" ] && [ "$PENDINGUP" != "?" ]; then
+    echo "  NOT DONE: $PENDINGUP upload job(s) still queued."
 else
     echo "  LOOKS DONE. Run the same command again in a few minutes; if the numbers"
     echo "  have not moved, it has settled."

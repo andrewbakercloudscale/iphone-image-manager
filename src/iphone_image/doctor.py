@@ -10,6 +10,7 @@ check that cannot run reports FAIL with the reason. None of them pass by default
 
 from __future__ import annotations
 
+import json
 import plistlib
 import shutil
 import sqlite3
@@ -20,6 +21,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from .config import Config
 
@@ -263,8 +265,13 @@ def check_sync(config: Config) -> Check:
         # Photos stores seconds since 2001-01-01.
         newest = datetime(2001, 1, 1, tzinfo=UTC) + timedelta(seconds=float(newest_raw))
 
+    # Trend, not a guess. A count that has not moved in hours is a fact; a
+    # percentage against a number somebody typed in is not. Recorded here so a
+    # later run can tell "finished" from "stuck" instead of inferring a cause
+    # from a static number, which is exactly the mistake this replaces.
+    history = _record_count(config, assets)
     expected = config.photos.expected_assets
-    data = {
+    data: dict[str, Any] = {
         "assets": assets,
         "videos": videos,
         "newest": newest.isoformat() if newest else None,
@@ -280,6 +287,8 @@ def check_sync(config: Config) -> Check:
             data,
         )
 
+    data["history"] = history
+
     if videos == 0:
         return Check(
             "iCloud sync",
@@ -287,6 +296,16 @@ def check_sync(config: Config) -> Check:
             f"{assets:,} assets but zero videos",
             "Video syncs late, so zero videos almost always means the sync has not "
             "finished. Leave Photos open and the Mac awake.",
+            data,
+        )
+
+    pending = _pending_uploads(config.photos.library_path)
+    if pending:
+        return Check(
+            "iCloud sync",
+            WARN,
+            f"{assets:,} assets, {pending:,} upload job(s) still queued",
+            "Photos has work outstanding. Leave it open and the Mac awake.",
             data,
         )
 
@@ -302,10 +321,23 @@ def check_sync(config: Config) -> Check:
         )
 
     if expected and assets < expected * 0.98:
+        stable = _hours_unchanged(history)
+        if stable is not None and stable >= 1:
+            return Check(
+                "iCloud sync",
+                WARN,
+                f"{assets:,} assets, unchanged for {stable:.1f} hours, "
+                f"against photos.expected_assets of {expected:,}",
+                "Either the sync has finished and expected_assets is wrong, or it "
+                "has stopped. Photos has no upload work queued, which points at the "
+                "first. Check the count in the Photos app and correct "
+                "photos.expected_assets, or clear it to stop comparing.",
+                data,
+            )
         return Check(
             "iCloud sync",
             WARN,
-            f"{assets:,} of ~{expected:,} expected ({assets * 100 // expected}%)",
+            f"{assets:,} of ~{expected:,} expected ({assets * 100 // expected}%), still moving",
             "Still syncing. Leave Photos open and the Mac awake.",
             data,
         )
@@ -314,6 +346,52 @@ def check_sync(config: Config) -> Check:
     if newest:
         detail += f", newest {newest:%Y-%m-%d}"
     return Check("iCloud sync", PASS, detail, "", data)
+
+
+def _pending_uploads(library: Path) -> int | None:
+    """Photos' own upload queue. Empty means it has nothing left to send."""
+    db = _copy_photos_db(library)
+    if db is None:
+        return None
+    return _count(db, "SELECT COUNT(*) FROM ZASSETRESOURCEUPLOADJOBREQUEST")
+
+
+def _record_count(config: Config, assets: int) -> list[dict[str, Any]]:
+    """Append the current count to a short history kept in the ledger."""
+    from .db.database import Database, DatabaseError, utcnow
+
+    try:
+        db = Database(config.database.path).connect()
+        db.migrate()
+    except (DatabaseError, sqlite3.Error):
+        return []
+    try:
+        raw = db.get_setting("library_count_history") or "[]"
+        history = json.loads(raw)
+        if not isinstance(history, list):
+            history = []
+        if not history or history[-1].get("assets") != assets:
+            history.append({"at": utcnow(), "assets": assets})
+        history = history[-40:]
+        db.set_setting("library_count_history", json.dumps(history))
+        return history
+    except (json.JSONDecodeError, sqlite3.Error):
+        return []
+    finally:
+        db.close()
+
+
+def _hours_unchanged(history: list[dict[str, Any]]) -> float | None:
+    """How long the asset count has sat at its current value."""
+    if len(history) < 1:
+        return None
+    try:
+        last_change = datetime.fromisoformat(history[-1]["at"])
+    except (KeyError, ValueError):
+        return None
+    if last_change.tzinfo is None:
+        last_change = last_change.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - last_change).total_seconds() / 3600
 
 
 def check_disk(config: Config) -> Check:
