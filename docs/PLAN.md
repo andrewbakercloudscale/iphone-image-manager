@@ -23,6 +23,7 @@ Plan of record for delivering `docs/SPEC.md`.
 | 12 | `local_objects` table | Dropped, `asset_resources` covers it |
 | 13 | Test device | The user's main iPhone. Mitigated by micro batches and filtering, see section 7. |
 | 14 | Removal granularity | Filtered micro batches with a low default limit, never a bulk sweep |
+| 15 | Media presentation | Always `.originalAssets`, read back and verified. See conflict 9. |
 
 ---
 
@@ -78,6 +79,26 @@ written in this phase.
 | 7 | What happens on lock, sleep and unplug mid-enumeration and mid-download? Which errors surface? | Determines the entire resume and error taxonomy. |
 | 8 | Sustained throughput and stability at 1, 2 and 4 concurrent downloads. | Sets the default for `performance.local_transfer_workers`. |
 | 9 | Does the helper need TCC / Full Disk Access? | Affects first-run experience. Signing is not in scope: the helper is built from source locally, so Gatekeeper quarantine does not apply. |
+
+### Already answered, from the SDK headers
+
+Reading `ImageCaptureCore.framework/Headers` before writing the spike settled more
+than expected, and moved two questions from "open" to "confirmed". Everything here
+is from the macOS 26.2 SDK, not from a device.
+
+| Finding | Consequence |
+|---|---|
+| `ICCameraDevice.iCloudPhotosEnabled` is a first-class property | Q6 answered. No heuristic needed to detect a synced library. |
+| `ICCameraDevice.capabilities` contains `ICCameraDeviceCanDeleteOneFile` / `CanDeleteAllFiles` | Q4 can be answered by reading a list, without deleting anything on the user's phone. |
+| `requestDeleteFiles:deleteFailed:completion:` reports per-item failures | Exactly the shape resumable micro-batch removal needs. |
+| `requestReadDataFromFile:atOffset:length:` | Chunk-level resume is possible, not just asset-level. Spec section 10 listed it as "should be considered". |
+| `ICCameraFile.originatingAssetID` | A stable Photos library identifier per asset. This is the right primary key, not a filename. |
+| `ICCameraFile.fingerprint` | A device-computed content fingerprint. If it is stable, exact deduplication needs no download at all, which changes P6 entirely. To be validated in the spike. |
+| `burstUUID`, `burstPicked`, `burstFavorite`, `relatedUUID`, `groupUUID`, `pairedRawImage`, `sidecarFiles` | Asset grouping is natively supported. This partly reverses conflict 4 below. |
+| `ICCameraFile.gpsString` | GPS is readable without downloading the file. |
+| `width`, `height`, `fileSize`, `duration`, `exifCreationDate` all pre-download | Proxy scoring and classification can run before a single byte is transferred. |
+| `isAccessRestrictedAppleDevice` plus the `cameraDeviceDidEnableAccessRestriction` delegate | Device lock is an explicit signal, not an inferred timeout. |
+| **`ICMediaPresentation` defaults to `ConvertedAssets`** | **A second proxy hazard, unrelated to iCloud. See conflict 9.** |
 
 ### Exit criteria
 
@@ -264,15 +285,22 @@ permanently, and surface the list explicitly. No override flag in v1. See
 Detect, state the consequence in the removal plan, require a typed confirmation
 phrase for `--apply`. See `docs/SAFETY.md` section 3.
 
-### 4. Spec section 7.3 lists metadata that is not obtainable **[settled]**
-Album metadata, source application metadata and burst relationships are
-`Photos.sqlite` residents. Edited-version relationships are partially inferable from
-`.AAE` sidecars. Burst membership is partially inferable from filename and
-sub-second capture time.
+### 4. Spec section 7.3 lists metadata that is not obtainable **[settled, and partly wrong]**
+Corrected after reading the SDK headers. My original claim was too pessimistic.
 
-**Settled:** mark these as best-effort in the schema, populate from inference where
-possible with recorded evidence, and never let a removal precondition depend on
-them. Confirm the exact list in P0 question 2.
+**Actually available natively**, contrary to what this section first said: burst
+relationships (`burstUUID`, `burstPicked`, `burstFavorite`), Live Photo and edited
+relationships (`relatedUUID`, `groupUUID`), RAW pairing (`pairedRawImage`), sidecars
+(`sidecarFiles`), and a stable Photos asset identifier (`originatingAssetID`).
+Asset grouping is therefore a first-class feature, not an inference exercise.
+
+**Genuinely absent**, still: album membership, and the source application bundle
+identifier. Both are `Photos.sqlite` residents. This is what keeps conflict 1 true.
+
+**Settled:** model the available relationships directly from the API. Mark album
+and source-app as absent rather than best-effort, because pretending to infer them
+would give a confidence number nothing justifies. Coverage percentages for every
+field are measured against the real library by `spikes/run_p0.py`.
 
 ### 5. "Estimated storage recovered" is misleading **[settled]**
 Spec section 21 shows `183.7 GB` as if removal frees it immediately. iOS holds
@@ -291,6 +319,24 @@ group-aware removal actually needs.
 
 ### 7. Section 53's twenty items as one release **[settled]**
 Covered in section 3 above. Cut into v0.1 through v1.0 so removal lands last.
+
+### 9. ImageCaptureCore hands out transcodes by default **[settled]**
+Found while writing the spike, and not in the specification at all.
+
+`ICCameraDevice.mediaPresentation` defaults to `ICMediaPresentationConvertedAssets`.
+In that mode the device exposes **JPEG transcoded from HEIC originals, and H.264
+transcoded from HEVC**. An integration that never sets this property backs up
+transcodes while believing it has originals, and every hash and verification step
+passes, because the transcode is what it was given.
+
+This is the same failure shape as the iCloud proxy hazard and is entirely separate
+from it. A library with Optimize Storage off is still exposed to it.
+
+**Settled:** `mediaPresentation` is set to `.originalAssets` immediately on session
+open, the value actually in effect is read back and recorded, and a mismatch is a
+hard error rather than a warning. The spike's `--compare-presentations` flag
+measures the size difference on the real library so the hazard has a number
+attached to it. Documented in `docs/SAFETY.md`.
 
 ### 8. Python baseline **[settled]**
 `requires-python = ">=3.12"`. The local interpreter is 3.14 and `pillow-heif` has
@@ -445,6 +491,7 @@ it does not unblock them.
 | Removal runs against the user's primary iPhone | No second chance if it goes wrong | Default limit of 50, filtered batches shown in full before confirmation, recycle bin entry written first, Recently Deleted as the phone-side undo |
 | Reverse geocoding leaks location data to a third party | Privacy violation in a privacy-first tool | Offline bundled dataset, no network call at all |
 | A bug unlinks archive files instead of trashing them | User media gone with no Finder undo | Single choke point for media deletion, asserted by test, direct `unlink` of archive paths banned by a lint rule |
+| `mediaPresentation` left at its default, so the archive is full of transcodes | Years of backups are silently lossy, and every check passes | Set on session open, read back, mismatch is fatal. Measured in P0. |
 
 ---
 

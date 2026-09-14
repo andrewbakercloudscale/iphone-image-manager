@@ -60,6 +60,24 @@ negative destroys an irreplaceable original.
 
 ---
 
+## 2b. ImageCaptureCore transcodes by default
+
+A second way to back up something that is not your photograph, entirely separate
+from iCloud and present even when Optimize Storage is off.
+
+`ICCameraDevice.mediaPresentation` defaults to `ICMediaPresentationConvertedAssets`.
+In that mode the device hands out **JPEG transcoded from your HEIC originals, and
+H.264 transcoded from your HEVC video**. The transcode is what gets copied, hashed,
+verified and uploaded. Every check passes, because the transcode is the only thing
+the tool ever saw.
+
+**What the tool does.** `mediaPresentation` is set to `.originalAssets` as soon as
+the session opens, the value actually in effect is read back, and a mismatch is a
+hard error that stops the run. The value in effect is recorded on every scan, so the
+database can prove which presentation each asset was captured under.
+
+---
+
 ## 3. iCloud Photos sync propagation
 
 If iCloud Photos is enabled, the on-device library is not a local copy. It is one

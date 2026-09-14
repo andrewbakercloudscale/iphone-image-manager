@@ -36,3 +36,6 @@ spikes/output/
 # macOS
 .DS_Store
 .omc/
+
+# Swift spike build products
+spikes/iimhelper/.build/
