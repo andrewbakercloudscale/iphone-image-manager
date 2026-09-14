@@ -19,6 +19,19 @@ final class Probe: NSObject {
     private var lastCatalogPercent = -1
     private let startedAt = Date()
 
+    /// A session that opened cleanly. A locked phone fails the open, and every
+    /// number read afterwards is meaningless, so this gates the whole dump.
+    private var sessionOpenOK = false
+    private var retryAfter: Date?
+    private var openAttempts = 0
+    private var lockWarned = false
+    private var lastHeartbeat = Date.distantPast
+    private var dumped = false
+    private var lastMediaCount = -1
+    private var stableTicks = 0
+    private var lastProgressEmit = Date.distantPast
+    private var itemsSeen = 0
+
     init(presentation: ICMediaPresentation, timeout: TimeInterval, metadataSample: Int) {
         self.presentation = presentation
         self.metadataSample = metadataSample
@@ -41,9 +54,32 @@ final class Probe: NSObject {
 
         while !finished && Date() < deadline {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.25))
+
+            // A locked iPhone refuses the session. Wait for the user to unlock
+            // it rather than reporting an empty library, which is the same
+            // silent-failure shape this project exists to avoid.
+            if let due = retryAfter, Date() >= due, let cam = camera, !sessionOpenOK {
+                retryAfter = Date().addingTimeInterval(3)
+                openAttempts += 1
+                cam.requestOpenSession()
+            }
+
+            heartbeat()
         }
 
         if !finished {
+            if camera != nil && !sessionOpenOK {
+                Out.emit([
+                    "event": "error",
+                    "code": "LOCKED",
+                    "message": "The iPhone stayed locked for the whole run. Unlock it and keep it unlocked.",
+                    "openAttempts": openAttempts,
+                ])
+                exitCode = 5
+                camera?.requestCloseSession()
+                browser.stop()
+                return exitCode
+            }
             if camera == nil {
                 Out.emit([
                     "event": "error",
@@ -64,6 +100,87 @@ final class Probe: NSObject {
         camera?.requestCloseSession()
         browser.stop()
         return exitCode
+    }
+
+    /// Polled state, so silence from the framework is still visible as progress
+    /// or the lack of it. Delegate callbacks cannot report their own absence.
+    private func heartbeat() {
+        guard Date().timeIntervalSince(lastHeartbeat) >= 2 else { return }
+        lastHeartbeat = Date()
+        let elapsed = Date().timeIntervalSince(startedAt)
+
+        guard let cam = camera else {
+            Out.emit([
+                "event": "heartbeat",
+                "state": "waitingForDevice",
+                "elapsedSeconds": Int(elapsed),
+            ])
+            return
+        }
+        let mediaCount = cam.mediaFiles?.count ?? -1
+        let percent = cam.contentCatalogPercentCompleted
+
+        Out.emit([
+            "event": "heartbeat",
+            "state": sessionOpenOK ? "cataloguing" : "waitingForUnlock",
+            "elapsedSeconds": Int(elapsed),
+            "isLocked": cam.isLocked,
+            "catalogPercent": percent,
+            "mediaFiles": mediaCount,
+            "contents": cam.contents?.count ?? -1,
+            "itemsAdded": itemsSeen,
+            "stableTicks": stableTicks,
+            "openAttempts": openAttempts,
+        ])
+
+        // deviceDidBecomeReadyWithCompleteContentCatalog is NOT reliable: on an
+        // iPhone 15 Pro Max running iOS 26.6.2 the catalog reached 100% and the
+        // callback never arrived, leaving the probe waiting indefinitely. So
+        // decide from polled state instead, once the count has stopped moving.
+        guard sessionOpenOK, !dumped, percent >= 100, mediaCount > 0 else {
+            lastMediaCount = mediaCount
+            return
+        }
+        if mediaCount == lastMediaCount {
+            stableTicks += 1
+        } else {
+            stableTicks = 0
+        }
+        lastMediaCount = mediaCount
+
+        if stableTicks >= 3 {
+            Out.emit([
+                "event": "catalogSettled",
+                "message": "Catalog at 100% and the count stopped moving.",
+                "elapsedSeconds": Int(elapsed),
+                "mediaFiles": mediaCount,
+            ])
+            completeCatalog(cam)
+        }
+    }
+
+    /// Dump the device and everything it exposed, then stop.
+    private func completeCatalog(_ device: ICCameraDevice) {
+        guard !dumped else { return }
+        dumped = true
+        Out.emit(["event": "catalogComplete",
+                  "elapsedSeconds": Date().timeIntervalSince(startedAt)])
+        dumpDevice(device)
+        let count = dumpAssets(device)
+
+        if count == 0 {
+            Out.emit([
+                "event": "error",
+                "code": "EMPTY_CATALOG",
+                "message": "The device exposed zero media files. This almost always means it "
+                    + "is locked. Capability flags read in this state are not trustworthy.",
+                "isLocked": device.isLocked,
+                "capabilities": device.capabilities,
+            ])
+            finish(5)
+            return
+        }
+        finish(0)
     }
 
     private func finish(_ code: Int32) {
@@ -104,7 +221,8 @@ final class Probe: NSObject {
         Out.emit(rec)
     }
 
-    private func dumpAssets(_ camera: ICCameraDevice) {
+    @discardableResult
+    private func dumpAssets(_ camera: ICCameraDevice) -> Int {
         let items = camera.mediaFiles ?? []
         var files = 0
         var folders = 0
@@ -190,6 +308,7 @@ final class Probe: NSObject {
             "elapsedSeconds": Date().timeIntervalSince(startedAt),
             "metadataSampled": metadataDumped,
         ])
+        return files
     }
 }
 
@@ -227,13 +346,19 @@ extension Probe: ICDeviceDelegate {
 
     func device(_ device: ICDevice, didOpenSessionWithError error: Error?) {
         if let error {
-            Out.emit(["event": "error", "code": "OPEN_SESSION_FAILED",
-                      "message": error.localizedDescription])
-            finish(4)
+            // Do not give up: a locked phone is the normal case at this point.
+            if !lockWarned {
+                Out.emit(["event": "waitingForUnlock", "message": error.localizedDescription])
+                Out.log("the iPhone is locked. Unlock it and keep it unlocked; still waiting ...")
+                lockWarned = true
+            }
+            retryAfter = Date().addingTimeInterval(3)
             return
         }
         guard let cam = device as? ICCameraDevice else { return }
-        Out.emit(["event": "sessionOpened"])
+        sessionOpenOK = true
+        retryAfter = nil
+        Out.emit(["event": "sessionOpened", "afterAttempts": openAttempts])
 
         if cam.capabilities.contains(ICDeviceCapability.cameraDeviceSupportsHEIF.rawValue) {
             cam.mediaPresentation = presentation
@@ -262,19 +387,29 @@ extension Probe: ICDeviceDelegate {
 
 extension Probe: ICCameraDeviceDelegate {
     func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {
-        Out.emit(["event": "catalogComplete",
-                  "elapsedSeconds": Date().timeIntervalSince(startedAt)])
-        dumpDevice(device)
-        dumpAssets(device)
-        finish(0)
+        // A locked device still fires this, with an empty catalog and a stripped
+        // capability list. Reporting that as a result would be a lie.
+        guard sessionOpenOK else {
+            Out.emit(["event": "catalogIgnored",
+                      "message": "Catalog completed but no session was ever opened cleanly."])
+            return
+        }
+        Out.emit(["event": "catalogReadyCallback", "note": "the delegate did fire"])
+        completeCatalog(device)
     }
 
     func cameraDevice(_ camera: ICCameraDevice, didAdd items: [ICCameraItem]) {
-        let pct = camera.contentCatalogPercentCompleted
-        if Int(pct) / 10 != lastCatalogPercent / 10 {
-            lastCatalogPercent = Int(pct)
-            Out.emit(["event": "catalogProgress", "percent": pct])
-        }
+        itemsSeen += items.count
+        // Throttled: this can fire thousands of times on a large library.
+        guard Date().timeIntervalSince(lastProgressEmit) >= 1 else { return }
+        lastProgressEmit = Date()
+        lastCatalogPercent = Int(camera.contentCatalogPercentCompleted)
+        Out.emit([
+            "event": "catalogProgress",
+            "percent": camera.contentCatalogPercentCompleted,
+            "itemsAdded": itemsSeen,
+            "elapsedSeconds": Int(Date().timeIntervalSince(startedAt)),
+        ])
     }
 
     func cameraDevice(_ camera: ICCameraDevice, didRemove items: [ICCameraItem]) {}
@@ -288,10 +423,24 @@ extension Probe: ICCameraDeviceDelegate {
                       for item: ICCameraItem, error: Error?) {}
     func cameraDevice(_ camera: ICCameraDevice, didReceivePTPEvent eventData: Data) {}
     func cameraDeviceDidRemoveAccessRestriction(_ device: ICDevice) {
-        Out.emit(["event": "accessRestrictionRemoved"])
+        Out.emit(["event": "unlocked", "message": "Device unlocked, resuming."])
+        lockWarned = false
+        if !sessionOpenOK {
+            retryAfter = Date()  // retry on the next run-loop tick
+        }
     }
+
     func cameraDeviceDidEnableAccessRestriction(_ device: ICDevice) {
-        Out.emit(["event": "accessRestrictionEnabled",
-                  "message": "The device locked or trust was withdrawn."])
+        // Do not abort. Drop back to waiting and let the retry loop pick it up
+        // when the user unlocks. Losing an hour of cataloguing to a screen
+        // timeout is not acceptable behaviour.
+        Out.emit([
+            "event": "locked",
+            "message": "The device locked or trust was withdrawn. Waiting for unlock.",
+            "sessionWasOpen": sessionOpenOK,
+        ])
+        Out.log("the iPhone locked. Unlock it to continue; progress is not lost unless it times out.")
+        sessionOpenOK = false
+        retryAfter = Date().addingTimeInterval(2)
     }
 }

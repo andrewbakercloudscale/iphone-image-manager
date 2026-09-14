@@ -19,6 +19,30 @@ upload never imply deletion. The user has to change the policy in config AND run
 
 ---
 
+## 1b. The four-step removal sequence
+
+The strongest rule in the project. It has no exceptions.
+
+```
+1. fetch      the selected assets come down to the Mac
+2. review     the user inspects them and approves
+3. remove     they are deleted from the device
+4. recycle    the Mac copy moves to the recycle bin, with retention
+```
+
+**Nothing is ever deleted from the phone that is not already on the Mac.** A
+`--discard` flag that would have skipped step 1 for junk categories was proposed
+and rejected.
+
+Step 4 is why bulk categories do not pollute the archive. WhatsApp media removed
+from the phone lands in the recycle bin, not the archive, so it is never mirrored
+to cloud storage and it ages out after the retention window rather than being
+kept forever. An asset that should be both archived and removed is `sync`ed
+first, and its recycle bin entry then hardlinks the existing archive file instead
+of storing a second copy.
+
+---
+
 ## 2. iCloud "Optimize iPhone Storage" and proxy files
 
 This is the single largest risk in the whole product.
@@ -48,6 +72,10 @@ carries a `proxy_suspicion` value:
 | Video bitrate far below what the source format implies | moderate |
 | Missing RAW or `.AAE` companion where the asset is otherwise a full capture | weak |
 
+Measured on a real device: **487 of 1,796 assets, 27%**, fell below 0.12 bytes
+per pixel, including a 4000x3000 JPEG at 409 KB that cannot be a full-resolution
+original. This is not theoretical.
+
 Assets over the threshold are flagged `SUSPECTED_PROXY` and:
 
 - are still backed up locally and to the cloud, normally;
@@ -60,7 +88,7 @@ negative destroys an irreplaceable original.
 
 ---
 
-## 2b. ImageCaptureCore transcodes by default
+## 2b. The API hands out transcodes by default
 
 A second way to back up something that is not your photograph, entirely separate
 from iCloud and present even when Optimize Storage is off.
@@ -71,10 +99,18 @@ H.264 transcoded from your HEVC video**. The transcode is what gets copied, hash
 verified and uploaded. Every check passes, because the transcode is the only thing
 the tool ever saw.
 
-**What the tool does.** `mediaPresentation` is set to `.originalAssets` as soon as
-the session opens, the value actually in effect is read back, and a mismatch is a
-hard error that stops the run. The value in effect is recorded on every scan, so the
-database can prove which presentation each asset was captured under.
+Confirmed on the test device: `supportsHEIF` is true, `.originalAssets` was
+accepted, and the value read back as `original`. Left alone it would have read
+`converted`.
+
+**What the tool does.** The original variant is requested explicitly, the value
+actually in effect is read back, and a mismatch is a hard error that stops the
+run. It is recorded on every scan, so the ledger can prove which variant each
+asset was captured as, and a row captured as a derivative can never satisfy a
+verification requirement.
+
+The same hazard exists in PhotoKit, where the equivalent is requesting the
+original `PHAssetResource` rather than a derivative rendition.
 
 ---
 
@@ -87,7 +123,8 @@ larger action than "freeing space on one phone".
 
 **What the tool does.**
 
-- Detects whether iCloud Photos sync is active.
+- Detects whether iCloud Photos sync is active. Confirmed true on the test
+  device: `ICCameraDevice.iCloudPhotosEnabled` reported `true`.
 - States the consequence in plain language at the top of every removal plan.
 - Requires an explicit typed confirmation phrase for `--apply` while sync is on.
   A `--yes` style flag is not sufficient.
@@ -177,10 +214,17 @@ during the final scan, no plan is produced.
 
 Deleting files directly from the device filesystem over AFC removes the bytes but
 leaves the on-device Photos database referencing assets that no longer exist. That
-produces broken entries and unreclaimed space.
+produces broken entries and unreclaimed space. It is never done.
 
-Removal is therefore performed through ImageCaptureCore, the same framework Apple's
-own Image Capture application uses, so iOS maintains its own consistency.
+The original plan was to delete through ImageCaptureCore, the framework Apple's
+own Image Capture application uses. **The P0 spike proved that impossible**: the
+test iPhone reports `canDeleteOneFile: false` and `canDeleteAllFiles: false` from
+a valid session on an unlocked device. See `spikes/P0-transport.md`.
+
+Removal therefore goes through **PhotoKit**, `PHAssetChangeRequest.deleteAssets`,
+against the Mac's Photos library, which syncs the deletion to iCloud and to every
+device. Whether that is permitted is P0b question 2, and it is answered before
+any removal code is written.
 
 ---
 

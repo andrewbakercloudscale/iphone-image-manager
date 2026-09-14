@@ -65,7 +65,7 @@ class Reporter:
         self.lines: list[str] = []
 
     def __call__(self, text: str = "") -> None:
-        print(text)
+        print(text, flush=True)
         self.lines.append(text)
 
     def head(self, text: str) -> None:
@@ -124,7 +124,7 @@ def preflight(say: Reporter) -> dict:
         say("  libimobiledevice  not installed, skipping the independent identity check")
 
     facts["macfuse"] = Path("/Library/Filesystems/macfuse.fs").exists() and bool(shutil.which("ifuse"))
-    say(f"  ifuse cross-check {'available' if facts['macfuse'] else 'unavailable (macFUSE or ifuse missing)'}")
+    say("  ifuse cross-check off (pass --ifuse to enable; needs a macFUSE kernel extension)")
 
     if fatal:
         say("")
@@ -133,8 +133,11 @@ def preflight(say: Reporter) -> dict:
         sys.exit(1)
 
     say("")
-    say("  Keep the iPhone UNLOCKED for the whole run. A large library can take")
-    say("  many minutes to build its content catalog.")
+    say("  KEEP THE IPHONE UNLOCKED for the whole run. This is not advice.")
+    say("  A locked iPhone reports an empty library and false capability flags,")
+    say("  rather than reporting that it is locked. A large library can take many")
+    say("  minutes to build its content catalog, so disable auto-lock if you can:")
+    say("  Settings > Display & Brightness > Auto-Lock > Never.")
     return facts
 
 
@@ -146,8 +149,13 @@ def run_helper(presentation: str, timeout: int, say: Reporter) -> tuple[list[dic
     say(f"  running helper with presentation={presentation} ...")
     started = time.monotonic()
     records: list[dict] = []
+    # caffeinate: stop the Mac idling, sleeping its disk or dimming out from
+    # under a multi-hour device session. Spec section 40 lists Mac sleep as a
+    # failure to handle; preventing it is cheaper than recovering from it.
+    caffeinate = ["caffeinate", "-dimsu"] if shutil.which("caffeinate") else []
     proc = subprocess.Popen(
-        [str(HELPER_BIN), "probe", "--presentation", presentation, "--timeout", str(timeout)],
+        [*caffeinate, str(HELPER_BIN), "probe",
+         "--presentation", presentation, "--timeout", str(timeout)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
     )
     assert proc.stdout is not None
@@ -165,12 +173,25 @@ def run_helper(presentation: str, timeout: int, say: Reporter) -> tuple[list[dic
         ev = rec.get("event")
         if ev == "asset":
             assets += 1
-            if assets % 1000 == 0:
-                print(f"    {assets:,} assets ...", end="\r", flush=True)
+            if assets % 2000 == 0:
+                say(f"    dumped {assets:,} assets ...")
         elif ev == "catalogProgress":
-            print(f"    building catalog {rec.get('percent')}% ...", end="\r", flush=True)
+            say(f"    [{rec.get('elapsedSeconds', 0):>4}s] cataloguing: "
+                f"{rec.get('percent')}%, {rec.get('itemsAdded', 0):,} items")
+        elif ev == "heartbeat":
+            state = rec.get("state")
+            if state == "waitingForDevice":
+                say(f"    [{rec.get('elapsedSeconds', 0):>4}s] waiting for a device ...")
+            elif state == "waitingForUnlock":
+                say(f"    [{rec.get('elapsedSeconds', 0):>4}s] WAITING FOR UNLOCK "
+                    f"(attempt {rec.get('openAttempts')}) - unlock the iPhone")
+            else:
+                say(f"    [{rec.get('elapsedSeconds', 0):>4}s] catalogue "
+                    f"{rec.get('catalogPercent')}%, mediaFiles={rec.get('mediaFiles'):,}, "
+                    f"contents={rec.get('contents'):,}, added={rec.get('itemsAdded'):,}"
+                    + ("  [LOCKED]" if rec.get("isLocked") else ""))
         elif ev in ("deviceFound", "sessionOpened", "catalogComplete", "mediaPresentationSet",
-                    "mediaPresentationUnavailable", "accessRestrictionEnabled"):
+                    "mediaPresentationUnavailable", "locked", "unlocked"):
             say(f"    {ev}: {json.dumps({k: v for k, v in rec.items() if k != 'event'})}")
         elif ev == "error":
             say(f"    ERROR {rec.get('code','')}: {rec.get('message','')}")
@@ -215,7 +236,19 @@ def analyse(records: list[dict], say: Reporter, facts: dict) -> dict:
         say("  single most important finding in the spike.")
 
     if not assets:
-        say("  No assets enumerated.")
+        say("")
+        say("  NO ASSETS ENUMERATED.")
+        say("")
+        say("  The device exposed zero media files. On an iPhone this almost always")
+        say("  means it was locked. A locked device still reports a 'complete' catalog,")
+        say("  but it is empty and its capability flags are stripped, so canDeleteOneFile")
+        say("  and supportsHEIF read false whatever the truth is.")
+        say("")
+        say(f"  isLocked reported: {device.get('isLocked')}")
+        say(f"  capabilities:      {device.get('capabilities')}")
+        say("")
+        say("  Unlock the iPhone, keep it unlocked, and run this again.")
+        out["invalid"] = "EMPTY_CATALOG"
         return out
 
     # Q1: totals
@@ -414,7 +447,9 @@ def main() -> int:
                     help="seconds to wait for the content catalog (default 1800)")
     ap.add_argument("--compare-presentations", action="store_true",
                     help="also enumerate with converted assets, to measure the transcoding hazard")
-    ap.add_argument("--no-ifuse", action="store_true", help="skip the AFC cross-check")
+    ap.add_argument("--ifuse", action="store_true",
+                    help="also cross-check against AFC via ifuse. Needs macFUSE, which is a "
+                         "kernel extension requiring approval and a reboot. Optional.")
     args = ap.parse_args()
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -463,7 +498,7 @@ def main() -> int:
             "convertedAssets": len(ca), "convertedBytes": cb,
         }
 
-    if not args.no_ifuse and facts.get("macfuse") and rc == 0:
+    if args.ifuse and facts.get("macfuse") and rc == 0:
         findings["ifuse"] = ifuse_crosscheck(say, findings.get("assetCount", 0))
 
     say.head("Next")
@@ -471,6 +506,9 @@ def main() -> int:
     say("  2. Re-run twice more to answer Q7: once locking the phone mid-catalog,")
     say("     once unplugging the cable.")
     say("  3. Update docs/PLAN.md with what was observed, then P1 can start.")
+
+    if findings.get("invalid") and rc == 0:
+        rc = 5
 
     json_path = OUT_DIR / f"findings-{stamp}.json"
     md_path = OUT_DIR / f"findings-{stamp}.md"

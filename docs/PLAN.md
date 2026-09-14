@@ -2,482 +2,291 @@
 
 Plan of record for delivering `docs/SPEC.md`.
 
-**Status:** P0 written and waiting on a device. P1 complete. P2 onwards is
-uncommitted until P0 reports.
+**Status:** P0 complete and it changed the architecture. P1 foundation complete.
+P2 onwards is re-cut around PhotoKit.
 **Last updated:** 2026-09-14
+
+---
+
+## 1. What P0 decided
+
+The spike ran against a real iPhone 15 Pro Max on iOS 26.6.2. Full evidence in
+[`spikes/P0-transport.md`](../spikes/P0-transport.md). The short version:
+
+**The USB premise failed on two independent blockers.**
+
+| | |
+|---|---|
+| Photos reports | 94,180 items |
+| ImageCaptureCore over USB exposes | 1,796 assets, 7.5 GB, **1.9%** |
+| `canDeleteOneFile` | **false** |
+
+Everything else lives in iCloud and a cable cannot reach it, and the device
+refuses deletion outright. The removal feature as designed was unbuildable.
+
+**The replacement is PhotoKit against the Mac's Photos library**, which reaches
+the whole library and carries the metadata USB never had. Most importantly the
+source application:
+
+```
+net.whatsapp.WhatsApp    25,546   (57% of a 44,973-asset sample)
+com.google.chrome.ios       347
+com.toyopagroup.picaboo      86
+(no bundle id)           18,870   camera originals
+```
+
+This is not a heuristic. It is `ZIMPORTEDBYBUNDLEIDENTIFIER`, recorded by iOS.
 
 ### Decisions taken
 
 | # | Decision | Choice |
 |---|---|---|
-| 1 | iCloud optimized proxies | Back up, permanently block from removal, no override flag |
-| 2 | iCloud Photos sync propagation | Detect, state it in the plan, require a typed confirmation for `--apply` |
-| 3 | WhatsApp cleanup | Review-only with per-batch approval, not a confidence-gated policy |
-| 4 | Release cut | Four releases, v0.1 through v1.0, removal last |
-| 5 | Unobtainable metadata | Best-effort inference, never a removal precondition |
-| 6 | Reverse geocoding | Offline bundled dataset, no network |
-| 7 | Cloud transport | Shell out to rclone, the tool never holds a token |
-| 8 | Exact duplicate storage | One archive file per unique SHA256, N asset rows |
-| 9 | Python baseline | 3.12 floor, CI on 3.12 and 3.14 |
-| 10 | Distribution | Build the helper from source. No Apple Developer account. Signing is an optional P11 nicety if outside users appear. |
-| 11 | Deletion recoverability | Nothing is unlinked. See section 6. |
-| 12 | `local_objects` table | Dropped, `asset_resources` covers it |
-| 13 | Test device | The user's main iPhone. Mitigated by micro batches and filtering, see section 7. |
-| 14 | Removal granularity | Filtered micro batches with a low default limit, never a bulk sweep |
-| 15 | Media presentation | Always `.originalAssets`, read back and verified. See conflict 9. |
+| 1 | Transport | PhotoKit on the Mac, not USB. P0 killed the USB design. |
+| 2 | Library residency | Photos stays in Optimize Mac Storage. Originals are fetched **per asset on demand**, so the full 424 GB never has to be on disk. |
+| 3 | Work unit | Budgeted chunks, `--budget 50GB`, resumable between chunks. |
+| 4 | Ordering | Photos before video (video is 73% of bytes from 5% of items), oldest first within each. |
+| 5 | Selection | One selector across `list`, `sync` and `remove`. Channel, type, age, size, order, budget. |
+| 6 | Removal sequence | fetch to Mac, review, delete from device, move to recycle bin. **No exceptions**, `--discard` was proposed and rejected. |
+| 7 | Destinations | `sync` writes the archive and mirrors to cloud. `remove` writes the recycle bin and does not. |
+| 8 | iCloud proxies | Back up, permanently block from removal, no override flag. |
+| 9 | iCloud sync propagation | Detect, state it in the plan, typed confirmation for `--apply`. |
+| 10 | WhatsApp | HIGH confidence via source bundle id. Policy-driven cleanup works as spec section 2.2 wrote it. |
+| 11 | Media presentation | Always `.originalAssets`, read back and verified, mismatch fatal. |
+| 12 | Mac-side deletion | Never `unlink` user media. macOS Trash via `NSFileManager.trashItem`. |
+| 13 | Exact duplicates | One archive file per unique SHA256, N asset rows. Requires downloading, no device fingerprint exists. |
+| 14 | Cloud transport | rclone. The tool never holds a token. |
+| 15 | Reverse geocoding | Offline bundled dataset. No network. |
+| 16 | Python baseline | 3.12 floor, CI on 3.12, 3.13 and 3.14. |
+| 17 | Distribution | Helper built from source. No Apple Developer account, no signing. |
 
 ---
 
-## 1. The decision that shapes everything else
+## 2. The selector
 
-The spec leaves the transport open (section 39: "The project should evaluate
-libimobiledevice, ifuse, AFC, ImageCaptureCore"). That evaluation is not a detail.
-It determines which metadata exists, which classifications are possible, and whether
-deletion can be done safely at all. Nothing past P0 can be sized until it is settled.
+One vocabulary, three verbs. What you previewed is literally what acts.
 
-### The proposed architecture, to be confirmed or killed by P0
-
-```
-  iphone-image (Python CLI)
-        │
-        │  JSON Lines over stdout, one record per asset
-        ▼
-  iimhelper (Swift binary, ImageCaptureCore)      <- enumeration + download + DELETE
-        │
-        ├── libimobiledevice / AFC                <- device identity, iOS version, cross-check
-        └── exiftool / ffprobe                    <- metadata from downloaded bytes
+```bash
+iphone-image list   <selector>            # harmless, always available
+iphone-image sync   <selector> --budget   # fetch down, archive, mirror to cloud
+iphone-image remove <selector> --apply    # the four-step sequence in section 4
 ```
 
-**Why a Swift helper is not optional.** Deletion must go through
-`ICCameraDevice.requestDeleteFiles:`, the API Image Capture.app uses, so that iOS
-updates its own Photos database. Unlinking files over AFC removes bytes and leaves
-dangling database entries and unreclaimed space. There is no Python binding for
-ImageCaptureCore, so a small Swift binary is the price of doing removal correctly.
-
-**Why libimobiledevice still earns its place.** Stable UDID, device name, model and
-iOS version, plus an independent enumeration of `/DCIM` that can be diffed against
-what ImageCaptureCore reports. Two independent views of the device is cheap
-insurance for a tool that deletes things.
-
----
-
-## 2. P0: transport spike (blocking, 1 to 2 days)
-
-Runs against a real iPhone. Output is a written findings document in
-`spikes/P0-transport.md` plus throwaway code in `spikes/`. No production code is
-written in this phase.
-
-### Questions that must be answered
-
-| # | Question | Why it is blocking |
-|---|---|---|
-| 1 | What asset count and total bytes does ImageCaptureCore report vs `ifuse` + `find /DCIM`? | A discrepancy means one view is incomplete, and we need to know which before trusting either. |
-| 2 | Which of spec section 7.3's metadata fields are actually available? | Album membership, source bundle id and burst relationships live in `Photos.sqlite`, which is not readable over either transport. Confirm what survives. |
-| 3 | Are Live Photo `.HEIC` + `.MOV` pairs reliably pairable? By name, by `ICCameraItem` relationship, or not at all? | Asset group integrity is a removal safety precondition. |
-| 4 | Does `requestDeleteFiles:` work, and does it leave a consistent Photos database? Does it route through Recently Deleted? | The entire removal feature depends on this. |
-| 5 | Can iCloud "Optimize iPhone Storage" state be read, and do proxy assets look measurably different? | Drives the `SUSPECTED_PROXY` detector in `docs/SAFETY.md`. |
-| 6 | Can iCloud Photos sync state be detected? | Drives the typed-confirmation gate. |
-| 7 | What happens on lock, sleep and unplug mid-enumeration and mid-download? Which errors surface? | Determines the entire resume and error taxonomy. |
-| 8 | Sustained throughput and stability at 1, 2 and 4 concurrent downloads. | Sets the default for `performance.local_transfer_workers`. |
-| 9 | Does the helper need TCC / Full Disk Access? | Affects first-run experience. Signing is not in scope: the helper is built from source locally, so Gatekeeper quarantine does not apply. |
-
-### Already answered, from the SDK headers
-
-Reading `ImageCaptureCore.framework/Headers` before writing the spike settled more
-than expected, and moved two questions from "open" to "confirmed". Everything here
-is from the macOS 26.2 SDK, not from a device.
-
-| Finding | Consequence |
+| Dimension | Values |
 |---|---|
-| `ICCameraDevice.iCloudPhotosEnabled` is a first-class property | Q6 answered. No heuristic needed to detect a synced library. |
-| `ICCameraDevice.capabilities` contains `ICCameraDeviceCanDeleteOneFile` / `CanDeleteAllFiles` | Q4 can be answered by reading a list, without deleting anything on the user's phone. |
-| `requestDeleteFiles:deleteFailed:completion:` reports per-item failures | Exactly the shape resumable micro-batch removal needs. |
-| `requestReadDataFromFile:atOffset:length:` | Chunk-level resume is possible, not just asset-level. Spec section 10 listed it as "should be considered". |
-| `ICCameraFile.originatingAssetID` | A stable Photos library identifier per asset. This is the right primary key, not a filename. |
-| `ICCameraFile.fingerprint` | A device-computed content fingerprint. If it is stable, exact deduplication needs no download at all, which changes P6 entirely. To be validated in the spike. |
-| `burstUUID`, `burstPicked`, `burstFavorite`, `relatedUUID`, `groupUUID`, `pairedRawImage`, `sidecarFiles` | Asset grouping is natively supported. This partly reverses conflict 4 below. |
-| `ICCameraFile.gpsString` | GPS is readable without downloading the file. |
-| `width`, `height`, `fileSize`, `duration`, `exifCreationDate` all pre-download | Proxy scoring and classification can run before a single byte is transferred. |
-| `isAccessRestrictedAppleDevice` plus the `cameraDeviceDidEnableAccessRestriction` delegate | Device lock is an explicit signal, not an inferred timeout. |
-| **`ICMediaPresentation` defaults to `ConvertedAssets`** | **A second proxy hazard, unrelated to iCloud. See conflict 9.** |
+| `--source` | `camera`, `whatsapp`, `snapchat`, `safari`, `chrome`, `messages`, or a raw bundle id |
+| `--type` | `photo`, `video`, `live`, `screenshot`, `raw` |
+| age | `--older-than 1y`, `--newer-than 30d`, `--year 2019` |
+| size | `--min-size 10MB`, `--max-size 500KB` |
+| order | `--order oldest\|newest\|largest` |
+| budget | `--budget 50GB` for sync, `--limit 50` for remove |
+| protection | `--no-favourites`, `--no-proxy-suspect` |
+| layout | `--pattern "{year}"` or `"{year}/{month}"` |
 
-### Exit criteria
+Worked examples, from the requirements as stated:
 
-- `spikes/P0-transport.md` answers all nine with observed evidence, not inference.
-- A one page go / no-go on the Swift helper.
-- If ImageCaptureCore deletion turns out to be unusable, P0 ends with a written
-  recommendation on whether removal ships at all in v1, and the milestones below
-  are re-cut before any further work.
+```bash
+# 50 GB of camera photos, oldest first, deduplicated, in date buckets
+iphone-image sync --source camera --type photo \
+    --order oldest --budget 50GB --dedupe --pattern "{year}/{month}"
+
+# WhatsApp images over a year old
+iphone-image remove --source whatsapp --type photo --older-than 1y
+
+# WhatsApp videos over a year old and larger than 10 MB
+iphone-image remove --source whatsapp --type video --older-than 1y --min-size 10MB
+```
+
+**Filters narrow an already-eligible set.** No selector can make a blocked asset
+removable. Proxy suspects, unverified assets and incomplete groups stay blocked
+whatever the filter says.
 
 ---
 
-## 3. Milestones
+## 3. Chunking
 
-The spec's section 53 lists twenty items as "version 1". Shipping them as one
-release means the deletion code lands at the same time as everything it depends on,
-with no soak period. Cut into four releases instead, so removal is last and arrives
-on top of machinery that has already been proven on real libraries.
+The library is roughly 424 GB against 95 GB of free disk, so "download it all,
+then process" was never viable. Instead the Mac's Photos library stays in
+**Optimize Mac Storage** and originals are pulled one asset at a time via
+`PHAssetResourceManager` with `isNetworkAccessAllowed`.
+
+```yaml
+chunking:
+  enabled: true
+  chunk_bytes: 50GB
+  order: [photo, video]
+  within_type: oldest_first
+  free_space_floor: 20GB
+```
+
+A chunk is: select by the selector until the byte budget is reached, fetch each
+original, hash it, write it to its destination, verify, record it, release. The
+next chunk resumes from the ledger. `free_space_floor` refuses to start a chunk
+that would breach it, which replaces spec section 42's whole-library estimate.
+
+**Photos before video is not arbitrary.** In the device sample, videos were 73%
+of the bytes from 5% of the items. Photos-first completes ~95% of the item count
+for ~27% of the bytes, so the slow expensive part is isolated at the end where it
+can be decided on separately.
+
+**Oldest first within a type**, because if the job is ever abandoned half done,
+the oldest material is the least replaceable and the most likely to be an
+offloaded proxy.
+
+---
+
+## 4. Removal: the four-step sequence
+
+This is the strongest rule in the project and it has no exceptions.
+
+```
+1. fetch      the selected assets come down to the Mac
+2. review     the user inspects them and approves
+3. remove     they are deleted from the device
+4. recycle    the Mac copy moves to the recycle bin, with retention
+```
+
+Nothing is ever deleted from the phone that is not already on the Mac. A
+`--discard` flag that would have skipped step 1 for junk categories was proposed
+and **rejected**.
+
+This also solves where WhatsApp bulk goes. It lands in the recycle bin, not the
+archive, so ~70 GB of forwarded images never reaches Google Drive and ages out
+after the retention window instead of being kept forever.
+
+An asset that should be both archived and removed is `sync`ed first, and the
+remove step then hardlinks its recycle bin entry to the existing archive file
+rather than storing a second copy.
+
+---
+
+## 5. Milestones
 
 | Milestone | Contains | The promise it makes |
 |---|---|---|
-| **v0.1 Inventory** | P1, P2, P3, P4 | Tells you what is on your phone, and lets you filter it. Touches nothing. |
-| **v0.2 Archive** | P5, P6 | Gets it all onto your Mac, resumably, verified, organized. |
-| **v0.3 Cloud** | P7, P8, P9 | Gets it to Google Drive, reconciles all four views, campaigns. |
-| **v1.0 Offload** | P10, P11 | Removes from the phone, explicitly, resumably, provably. |
+| **v0.1 Inventory** | P1, P2, P3, P4 | Tells you what is in your library, and lets you filter it. Touches nothing. |
+| **v0.2 Archive** | P5, P6 | Fetches it down in budgeted chunks, verified, organized, deduplicated. |
+| **v0.3 Cloud** | P7, P8, P9 | Mirrors to Google Drive, reconciles every view, campaigns. |
+| **v1.0 Offload** | P10, P11 | The four-step removal sequence, resumable, provable. |
 
-Removal code is written last and is gated on its own test harness existing first.
+Removal is written last and is gated on its own test harness existing first.
 
 ---
 
-## 4. Phases
+## 6. Phases
 
-### P1. Foundation
-Repository scaffolding, config, database, journal.
+### P1. Foundation **[done]**
+Config, SQLite schema and migrations, operations journal, CLI skeleton, path
+builder, retention parsing, CI.
 
-- `config.py`: pydantic model of spec section 26, loader, `config show`, `config validate`.
-  Unknown keys are an error, not a warning.
-- `db/schema.sql` and a forward-only migration runner. Tables per spec section 27.
-  Indexes per section 47 from day one, not retrofitted.
-- `journal.py`: append-only operations log, spec section 33. Every phase writes to it.
-- `iphone-image` entrypoint with `--json` output mode alongside the rich human output.
-- CI: ruff, mypy, pytest on macOS.
-
-**Exit:** `config validate` and an empty `status` run green on a clean machine.
-**Done.** 111 tests, ruff and mypy clean, CI on macOS across Python 3.12 to 3.14.
-The example config that `config init` writes is itself validated in CI, so the
+111 tests, ruff and mypy clean, CI on macOS across Python 3.12 to 3.14. The
+example config that `config init` writes is itself validated in CI, so the
 documentation cannot drift from what the loader accepts.
 
-### P2. Device layer
-- `iimhelper` Swift package: `enumerate`, `download`, `delete`, `trash`, `info`
-  subcommands (`trash` wraps `NSFileManager.trashItem` for rule A in section 6),
-  JSON Lines on stdout, non-zero exit on every failure path.
-- Python `DeviceBackend` protocol with three implementations: `ImageCaptureBackend`,
-  `AfcBackend` (read only), `FakeDeviceBackend` (tests).
-- Discovery, pairing and trust detection with actionable messages.
-- Lock, disconnect and sleep handling: pause, checkpoint, resume. Spec section 41.
-- `device`, `device info`.
+### P0b. PhotoKit spike **[next, blocking]**
+Against the existing library, before any hardware is bought.
 
-**Exit:** unplugging the phone mid-enumeration loses no recorded work.
+| # | Question | Why it blocks |
+|---|---|---|
+| 1 | Does `PHAssetResourceManager` with `isNetworkAccessAllowed` actually fetch a non-local original, and at what sustained rate? | The entire chunking design depends on it. If Apple throttles it to a trickle, the schedule changes. |
+| 2 | Is `PHAssetChangeRequest.deleteAssets` permitted, read from authorisation rather than by deleting? | Removal, again. USB already said no once. |
+| 3 | Does `PHAssetMediaSubtype.photoScreenshot` classify screenshots reliably? | Screenshot cleanup. |
+| 4 | Does PhotoKit expose the source app, or must it come from `Photos.sqlite`? | The WhatsApp feature. The database has it; the public API may not. |
+| 5 | Album membership, favourites, burst, GPS coverage across the real library. | Selector dimensions and the never-remove-favourites rule. |
+| 6 | Does a CLI binary get Photos authorisation with an embedded `Info.plist`, or is an app bundle required? | Distribution. |
 
-### P3. Inventory and scan
-- `scan`: enumerate, upsert assets, maintain `first_seen_at` / `last_seen_at` /
-  `present_on_phone`. Read only with respect to the device, asserted in tests.
-- Metadata extraction via exiftool and ffprobe, with a no-shell argv boundary.
-- Asset group construction: Live Photo pairs, RAW+JPEG, `.AAE` sidecars, bursts.
-- Proxy suspicion scoring, per `docs/SAFETY.md` section 2.
+**Exit:** a findings document, and a go/no-go before the user spends money on an
+external drive and a week of downloading.
 
-**Exit:** two scans of an unchanged device produce zero row changes other than
-`last_seen_at`.
+### P2. Library layer
+`PhotoKitBackend` and `FakeLibraryBackend` behind one protocol. Authorisation,
+library change observation, and a read-only reader for the `Photos.sqlite` fields
+PhotoKit does not expose.
 
-### P4. Classification
-- `classifiers/`, each returning `(category, confidence, evidence[])`. The evidence
-  list is persisted, so any classification can be explained to the user.
-- Screenshot: PNG, no `Make`/`Model`, dimensions matching a known device screen size.
-  Realistically HIGH confidence.
-- Camera: `Make` = Apple plus lens and capture settings present. HIGH.
-- WhatsApp: see conflict 1 below. MEDIUM at best.
-- `SAVED_IMAGE`, `VIDEO`, `LIVE_PHOTO`, `BURST`, `RAW`, `EDITED`, `UNKNOWN`.
+### P3. Inventory
+`scan` populating the ledger from the whole library. Proxy suspicion scoring.
+Asset group construction. Two scans of an unchanged library must produce zero row
+changes other than `last_seen_at`.
 
-**Exit:** a labelled fixture set with measured precision and recall per category,
-committed as a test, so a classifier regression is visible.
+### P4. Classification and the selector
+Channel from the source bundle id, type, screenshot subtype, camera originals
+from "no bundle id plus `IMG_*`". `list` with the full selector, non-destructive,
+shipping in v0.1 so a filter is checked long before removal is typed.
 
-### P5. Local sync
-- Storage preflight, spec section 42. Refuses to start rather than filling the disk.
-- Worker pool, `.partial` suffix, atomic rename only after hash verification.
-- SHA256 on the downloaded bytes, compared against a re-read of the final file.
-- Path builder for date, location and custom modes, with `Unknown Date` /
-  `Unknown Location` fallbacks and path traversal rejection on every metadata
-  derived path segment.
-- Collision handling: `IMG_1234__A1B2C3D4.HEIC`, suffix from the content hash.
-- Metadata preservation, spec section 37, including file mtime from capture date.
-- Replacing a hash-mismatched archive file sends the old one to the Trash, never
-  unlinks it. Scratch `.partial` files are unlinked.
-- Reverse geocoding with an on-disk cache and an off switch.
-
-**Exit:** kill -9 at 50 percent, rerun, and the result is byte identical to an
-uninterrupted run. This is a test, not a manual check.
+### P5. Chunked fetch
+Budgeted chunks, on-demand original fetch, `.partial` staging, SHA256 verify,
+atomic rename, archive path building, collision handling, free-space floor.
+**Exit:** kill at 50% of a chunk, rerun, result byte-identical to an
+uninterrupted run.
 
 ### P6. Exact deduplication
-- `duplicate_groups`, canonical asset selection, `clean duplicates`.
-- One archive file per unique SHA256. Collapsed duplicates go to the Trash.
-- Distinct logical asset rows are preserved even when content is identical, per
-  spec section 35.
-
-**Exit:** N device assets with identical content produce one archive file and N
-asset rows.
+Hash after download, since no device-side fingerprint exists. One archive file
+per unique SHA256, N asset rows. Collapsed duplicates go to the macOS Trash.
 
 ### P7. Cloud
-- `CloudProvider` protocol, spec section 16. `RcloneProvider` as the first concrete
-  implementation, Google Drive as its first remote.
-- Credentials via the user's own rclone config. The tool never holds a token and
-  never logs one.
-- Incremental, resumable, verified against remote size and hash where the remote
-  exposes one.
-
-**Exit:** interrupted upload resumes without re-uploading verified objects.
+`CloudProvider` protocol, `RcloneProvider`, Google Drive first. Archive only;
+the recycle bin is never mirrored.
 
 ### P8. Verify and report
-- `verify` reconciles device, local archive, cloud and database, spec section 17.
-- `status`, spec section 25, plus `status --proxies` and `status --blocked`.
-- `list` with the full filter set from section 7. Non-destructive, and the place
-  the user builds and checks a filter before it is ever passed to removal.
-- Every blocked asset is individually listable with its reason.
+Reconcile library, archive, cloud and ledger. Every blocked asset individually
+listable with its reason.
 
-**Exit:** the "6 blocked" in the spec's example output can be enumerated with causes.
-
-### P9. Campaigns and cleanup planning
-- `campaign start|status|close`, membership frozen at start, spec section 6.
-- `clean screenshots|whatsapp|duplicates`, planning only, no device writes.
-
-**Exit:** assets created after campaign start are excluded from the default plan.
+### P9. Campaigns
+Membership frozen at start. Assets added later are excluded from the default plan.
 
 ### P10. Removal
-Gated: the harness in `tests/destructive/` must exist and pass before
-`remove-from-iphone --apply` is implemented.
-
-- Mandatory fresh scan, then eligibility recomputation, then plan.
-- Filtering and `--limit` micro batches, section 7. Shared filter implementation
-  with `list`, so what the user previewed is exactly what gets acted on.
-- Typed confirmation when iCloud Photos sync is active.
-- Per-asset journal write before and after each deletion, so a mid-run crash
-  leaves an accurate ledger.
-- Resume, idempotence, and "already gone" treated as success not error.
-- Group-aware deletion: all resources of a logical asset, or none.
-- Recycle bin entry written and fsynced **before** the device deletion call, so a
-  crash between the two leaves a record rather than a hole.
-- `recycle-bin list|restore|empty`.
-
-**Exit:** all eight destructive scenarios from spec section 52 pass against the fake
-backend, every removed asset has a recycle bin entry that `restore` can resolve to
-readable bytes, and a full cycle runs clean on a dedicated test iPhone.
+Gated: `tests/destructive/` must exist and pass first. The four-step sequence,
+fresh reconciliation, typed confirmation while iCloud sync is on, per-asset
+journal writes, resumable, group-aware.
 
 ### P11. Release
-Install docs, helper signing and notarisation, Homebrew tap, README with real output,
-CHANGELOG, issue templates.
+Install docs, Homebrew tap, README, CHANGELOG.
 
 ---
 
-## 5. Spec conflicts and proposed resolutions
+## 7. Spec conflicts and resolutions
 
-Found while reviewing the spec. Each needs a decision. Resolutions marked
-**[settled]** have been agreed already.
+### 1. WhatsApp cleanup **[resolved by P0, in the spec's favour]**
+Originally recorded as unresolvable: the source bundle id lives in
+`Photos.sqlite`, unreadable over USB, so WhatsApp classification would top out at
+MEDIUM and `clean whatsapp` would ship inert.
 
-### 1. WhatsApp cleanup cannot reach HIGH confidence **[settled]**
-Spec section 7.6 ranks source bundle identifier as the best evidence, and section
-7.4 says destructive policies default to HIGH confidence only. The source bundle id
-lives in `Photos.sqlite`, inside the device's protected app data, and is not
-readable over AFC or ImageCaptureCore. What remains is metadata signatures and
-filename heuristics, which the spec itself ranks fourth and fifth. On iOS, WhatsApp
-saves to the camera roll under ordinary `IMG_` names.
-
-Net effect: WhatsApp classification tops out at MEDIUM, so under the spec's own rule
-`clean whatsapp` would never produce a removable asset. The feature would ship
-inert.
-
-**Settled:** WhatsApp cleanup is review-only in v1. It presents candidates with
-per-asset evidence and requires explicit per-asset or per-batch approval, rather
-than running as a confidence-gated policy. Screenshot cleanup, which genuinely does
-reach HIGH, remains policy driven. Document the limitation in the README rather
-than implying parity between the two.
+PhotoKit removes the constraint. `ZIMPORTEDBYBUNDLEIDENTIFIER` is populated on
+58% of assets and names `net.whatsapp.WhatsApp` on 25,546 of them. Classification
+is HIGH confidence from the source application itself. **Spec section 2.2 works
+exactly as written** and the review-only demotion is withdrawn.
 
 ### 2. iCloud optimized proxies **[settled]**
-Detect by size and dimension heuristics, back up normally, block from removal
-permanently, and surface the list explicitly. No override flag in v1. See
-`docs/SAFETY.md` section 2.
+Detect by bytes-per-pixel and dimension heuristics, back up normally, block from
+removal permanently, surface the list explicitly. 27% of the device sample fell
+below the threshold, so this is not theoretical.
 
-### 3. iCloud sync deletion propagation **[settled]**
-Detect, state the consequence in the removal plan, require a typed confirmation
-phrase for `--apply`. See `docs/SAFETY.md` section 3.
+### 3. iCloud Photos sync propagation **[settled]**
+`iCloudPhotosEnabled` is true on this device. Deleting propagates to iCloud and
+every device. Typed confirmation required for `--apply`.
 
-### 4. Spec section 7.3 lists metadata that is not obtainable **[settled, and partly wrong]**
-Corrected after reading the SDK headers. My original claim was too pessimistic.
+### 4. Metadata availability **[resolved by P0]**
+Over USB, almost nothing: `originatingAssetID`, `fingerprint`, `gpsString`,
+`exifCreationDate`, `pairedRawImage` and `fileSystemPath` all read 0.0%, despite
+being declared in the SDK headers. Via PhotoKit and `Photos.sqlite`: source app,
+albums, favourites, burst, GPS on 30% of assets, original filename and size.
+**A header declaring a property is not evidence a device populates it.**
 
-**Actually available natively**, contrary to what this section first said: burst
-relationships (`burstUUID`, `burstPicked`, `burstFavorite`), Live Photo and edited
-relationships (`relatedUUID`, `groupUUID`), RAW pairing (`pairedRawImage`), sidecars
-(`sidecarFiles`), and a stable Photos asset identifier (`originatingAssetID`).
-Asset grouping is therefore a first-class feature, not an inference exercise.
+### 5. "Estimated storage recovered" **[settled]**
+Reworded. iOS holds deleted assets in Recently Deleted for up to 30 days, so
+space is not reclaimed at the moment of removal.
 
-**Genuinely absent**, still: album membership, and the source application bundle
-identifier. Both are `Photos.sqlite` residents. This is what keeps conflict 1 true.
+### 6. `local_objects` **[settled]** Dropped, `asset_resources` covers it.
 
-**Settled:** model the available relationships directly from the API. Mark album
-and source-app as absent rather than best-effort, because pretending to infer them
-would give a confidence number nothing justifies. Coverage percentages for every
-field are measured against the real library by `spikes/run_p0.py`.
+### 7. Twenty items as one release **[settled]** Four releases, removal last.
 
-### 5. "Estimated storage recovered" is misleading **[settled]**
-Spec section 21 shows `183.7 GB` as if removal frees it immediately. iOS holds
-deleted assets in Recently Deleted for up to 30 days.
+### 8. Python baseline **[settled]** 3.12 floor, CI on 3.12 to 3.14.
 
-**Settled:** reword to "storage reclaimed once Recently Deleted is emptied, up to
-30 days", and tell the user after a removal run that the window is their undo.
-
-### 6. Section 27 lists `local_objects` but sections 29 and 30 fold local state into
-`assets` and `asset_resources` **[settled]**
-Two representations of the same thing.
-
-**Settled:** drop `local_objects`. `asset_resources` already carries `local_path`,
-`local_status` and `sha256` at the right grain, and resource-level state is what
-group-aware removal actually needs.
-
-### 7. Section 53's twenty items as one release **[settled]**
-Covered in section 3 above. Cut into v0.1 through v1.0 so removal lands last.
-
-### 9. ImageCaptureCore hands out transcodes by default **[settled]**
-Found while writing the spike, and not in the specification at all.
-
-`ICCameraDevice.mediaPresentation` defaults to `ICMediaPresentationConvertedAssets`.
-In that mode the device exposes **JPEG transcoded from HEIC originals, and H.264
-transcoded from HEVC**. An integration that never sets this property backs up
-transcodes while believing it has originals, and every hash and verification step
-passes, because the transcode is what it was given.
-
-This is the same failure shape as the iCloud proxy hazard and is entirely separate
-from it. A library with Optimize Storage off is still exposed to it.
-
-**Settled:** `mediaPresentation` is set to `.originalAssets` immediately on session
-open, the value actually in effect is read back and recorded, and a mismatch is a
-hard error rather than a warning. The spike's `--compare-presentations` flag
-measures the size difference on the real library so the hazard has a number
-attached to it. Documented in `docs/SAFETY.md`.
-
-### 8. Python baseline **[settled]**
-`requires-python = ">=3.12"`. The local interpreter is 3.14 and `pillow-heif` has
-3.14 wheels, but 3.12 is the conservative floor for contributors and CI runs both.
-
----
-
-## 6. Deletion is always recoverable
-
-Added after the specification was written. It splits into two separate rules that
-are easy to conflate.
-
-### Rule A: the tool never unlinks user media on the Mac
-
-Any file containing user media that the tool removes from the Mac goes to the macOS
-Trash via `NSFileManager.trashItem`, never `unlink`. It is then restorable by the
-user from Finder in the ordinary way, and on an external archive volume it lands in
-that volume's `.Trashes`.
-
-This applies to:
-
-- a duplicate archive file collapsed by `clean duplicates`;
-- an archive file replaced because its hash no longer matches;
-- any archive pruning the user initiates.
-
-It deliberately does **not** apply to scratch files: `.partial` fragments, a failed
-download, or a corrupt temp file are not user media and are unlinked directly.
-Trashing them would bury the Trash in junk and make the feature useless when it
-actually matters.
-
-### Rule B: removal from the iPhone leaves a recycle bin record on the Mac
-
-When an asset is removed from the device, the tool writes a recycle bin entry at
-`<recycle_bin.path>/<campaign>/<date>/` holding:
-
-- a hard link to the verified archive file, so the entry costs no extra disk on the
-  same volume, and a copy when the archive is on a different volume;
-- a JSON manifest row with the asset id, device asset id, original device path,
-  SHA256, capture date, classification, the evidence that made it eligible, and the
-  removal timestamp.
-
-This gives a real answer to "what did I take off the phone in September, and where
-are those files now", which the archive alone cannot answer once the asset is gone
-from the device.
-
-`recycle-bin list` shows entries, `recycle-bin restore` copies files back out to a
-chosen folder, and `recycle-bin empty` clears entries past the retention window.
-Restore puts files on the Mac. It does **not** push media back onto the iPhone;
-that is out of scope and the command says so.
-
-### Configuration
-
-```yaml
-recycle_bin:
-  enabled: true
-  path: "~/.iphone-image/recycle-bin"
-  retention: 90d              # or: never
-  use_macos_trash: true       # Rule A. Turning this off is not recommended.
-```
-
-Both rules are on by default. Neither can be disabled by a command line flag, only
-by config, and `config validate` warns when either is off.
-
----
-
-## 7. Removal selection, filtering and micro batches
-
-Added after the specification was written, and it changes the shape of the removal
-feature. The spec assumed a campaign-wide sweep: compute eligibility, show one big
-plan, apply it. The actual workflow is the opposite. Removal runs against the user's
-primary iPhone, in small hand-inspected batches, chosen by filtering on attributes
-the user can see.
-
-This is a safety improvement, not a convenience one, and it is what makes running
-against a primary device defensible. A 40,000 asset sweep has one decision point. A
-25 asset batch has 1,600 of them, each with the previous batch's outcome already
-visible.
-
-### `iphone-image list`, the non-destructive twin
-
-Same filters, no removal, available from v0.1. The point is that the user browses
-and refines a filter against real numbers long before any deletion command is typed,
-and the filter that eventually gets passed to `remove-from-iphone` is one they have
-already looked at the output of.
-
-### Filters
-
-| Flag | Selects |
-|---|---|
-| `--type screenshot\|whatsapp\|camera\|saved\|video\|live\|burst\|raw\|edited\|unknown` | classification |
-| `--confidence high\|medium\|low` | minimum classification confidence |
-| `--older-than 60d`, `--newer-than 30d` | capture date |
-| `--year 2024`, `--month 2024-07` | capture period |
-| `--min-size 2MB`, `--max-size 500KB` | file size |
-| `--proxy-suspect`, `--no-proxy-suspect` | suspected iCloud proxies |
-| `--duplicates-only` | non-canonical members of exact duplicate groups |
-| `--verified local\|cloud` | backup state |
-| `--ids-from list.txt` | a hand-curated list |
-| `--limit N` | batch cap |
-| `--sort size\|date\|type` | ordering, size descending by default |
-
-Filters compose with AND. `--json` emits the same selection machine-readably.
-
-### Batch display
-
-Every row shows what the user said they need to see:
-
-```
-  #  FILENAME          DATE        TYPE        CONF  SIZE     PROXY?  LOCAL  CLOUD
-  1  IMG_4821.MOV      2024-03-11  VIDEO       HIGH  1.4 GB   no      ok     ok
-  2  IMG_4108.PNG      2024-02-02  SCREENSHOT  HIGH  4.2 MB   no      ok     ok
-  3  IMG_3390.JPG      2023-11-19  WHATSAPP    MED   88 KB    LIKELY  ok     ok
-
-  3 assets, 1.4 GB. 1 blocked: IMG_3390.JPG, suspected iCloud proxy.
-  2 eligible, 1.4 GB, reclaimed once Recently Deleted is emptied.
-```
-
-`PROXY?` is the "possibly offloaded to iCloud" column. A `LIKELY` row is shown but
-is never eligible, per `docs/SAFETY.md` section 2.
-
-### Micro batch limits
-
-- `--limit` defaults to **50**. A run with no `--limit` never touches more than 50
-  assets, whatever the filter matched.
-- Above 500 the command requires `--limit` to be passed explicitly and prints the
-  count it is about to act on before the confirmation.
-- The confirmation shows the batch, not a summary. If the batch is too long to show,
-  it is too long to apply.
-- Each batch is journaled as its own operation, so `recycle-bin list` and the
-  journal read back as a sequence of small reviewed decisions rather than one event.
-
-### Why this does not weaken the eligibility rules
-
-Filters **narrow** a set that eligibility has already computed. A filter can never
-make an ineligible asset removable. Proxy suspects stay blocked, unverified assets
-stay blocked, incomplete asset groups stay blocked. `--proxy-suspect` shows them,
-it does not unblock them.
+### 9. ImageCaptureCore transcodes by default **[settled]**
+`mediaPresentation` defaults to `ConvertedAssets`, handing out JPEG transcoded
+from HEIC and H.264 from HEVC. Confirmed on device: `supportsHEIF` true,
+`.originalAssets` accepted and read back. Must be set explicitly; a mismatch is
+fatal. Carried into the PhotoKit design, where the equivalent is requesting the
+original resource rather than a derivative.
 
 ---
 
@@ -485,32 +294,31 @@ it does not unblock them.
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Proxy detection false negative leads to deleting a full-res original | Irrecoverable data loss | Permanent removal block, no override, conservative threshold, plus the iCloud sync confirmation as a second gate |
-| ImageCaptureCore cannot delete reliably | Removal, the headline feature, is unshippable | P0 question 4 answers this before any removal code exists |
-| ImageCaptureCore enumeration is incomplete vs the real library | Silent partial backup presented as complete | Cross-check against AFC enumeration on every scan, report any delta as a blocking finding |
-| Multi-hour USB transfers destabilise or the device drops | Sync never completes on large libraries | Conservative default worker count, checkpoint after every asset, throughput measured in P0 question 8 |
-| Helper binary blocked by Gatekeeper on other Macs | Nobody outside this machine can run it | Signing and notarisation scoped into P11, distribution tested on a second Mac |
-| WhatsApp classification ships inert | Advertised feature does nothing | Conflict 1 resolution, and honest README wording |
-| Deletion bug found only on a real library | Catastrophic and public | Fake backend and full harness before the feature, P10 gate. No dedicated test device exists, so the first real runs are micro batches of 10 to 25 on already cloud-verified screenshots, the safest and most replaceable category. |
-| Removal runs against the user's primary iPhone | No second chance if it goes wrong | Default limit of 50, filtered batches shown in full before confirmation, recycle bin entry written first, Recently Deleted as the phone-side undo |
-| Reverse geocoding leaks location data to a third party | Privacy violation in a privacy-first tool | Offline bundled dataset, no network call at all |
-| A bug unlinks archive files instead of trashing them | User media gone with no Finder undo | Single choke point for media deletion, asserted by test, direct `unlink` of archive paths banned by a lint rule |
-| `mediaPresentation` left at its default, so the archive is full of transcodes | Years of backups are silently lossy, and every check passes | Set on session open, read back, mismatch is fatal. Measured in P0. |
+| On-demand iCloud fetch is throttled to a trickle | The whole chunking design is slow rather than practical | P0b question 1 measures it before any money is spent |
+| PhotoKit deletion is also refused | Removal is unbuildable by any route | P0b question 2, before P10 is scheduled |
+| Proxy detection false negative deletes a full-res original | Irrecoverable | Permanent removal block, no override, plus the four-step sequence and Recently Deleted |
+| The Mac's Photos library is stale or detached | We plan against the wrong inventory | Measured: 44,973 assets, zero videos, newest 2024-06-20, against 94,180 on the phone. Must be reconciled before P3 |
+| Disk exhaustion mid-chunk | Corrupt or partial archive | `free_space_floor`, refuse to start rather than fail midway |
+| A bug unlinks archive files instead of trashing them | User media gone with no Finder undo | Single choke point, asserted by test, direct `unlink` of archive paths banned by lint |
+| Removal runs against the user's only iPhone | No second chance | Four-step sequence, default limit 50, batches shown in full, recycle bin written first |
+| Reverse geocoding leaks location to a third party | Privacy violation in a privacy-first tool | Offline bundled dataset, no network call |
 
 ---
 
 ## 9. Testing
 
-- **Unit**, per spec section 51: hashing, path generation, retention arithmetic,
-  eligibility rules, campaign membership, collision suffixes.
-- **Fake device backend** implementing the same protocol as the real one, so every
-  resume, interruption and removal path is testable in CI with no hardware.
-- **Media fixtures**: JPEG, HEIC, MOV, MP4, RAW, Live Photo pair, screenshot,
-  edited image with `.AAE`, burst, WhatsApp import, exact duplicate, plus a
-  synthetic file over 1 GB generated at test time rather than committed.
+- **Unit:** hashing, path generation, retention arithmetic, selector compilation,
+  eligibility rules, campaign membership, collision suffixes, chunk budgeting.
+- **Fake library backend** implementing the same protocol as PhotoKit, so every
+  resume, interruption and removal path is testable in CI with no hardware and no
+  network.
+- **Media fixtures:** JPEG, HEIC, MOV, MP4, RAW, Live Photo pair, screenshot,
+  edited with `.AAE`, burst, WhatsApp import, exact duplicate, and a synthetic
+  file over 1 GB generated at test time rather than committed.
 - **Destructive harness** in `tests/destructive/`, covering all eight scenarios in
-  spec section 52. Refuses to run against any device not on an explicit allowlist.
-- **Property test:** interrupt local sync at a random point, resume, assert the
+  spec section 52 plus the four-step sequence, refusing to run against any
+  library not on an explicit allowlist.
+- **Property test:** interrupt a chunk at a random point, resume, assert the
   result is identical to an uninterrupted run.
 
 ---
@@ -520,5 +328,8 @@ it does not unblock them.
 - One logical change per commit. No pushes without explicit instruction.
 - Every gate fails loudly. A checker that cannot run exits non-zero and says why.
   It never passes by default and never reports success on absent output.
-- Every command supports `--json` so the tool is scriptable and testable.
-- Nothing touching the device is written without a corresponding journal entry.
+- Every command supports `--json`.
+- Nothing touching the library is written without a corresponding journal entry.
+- **Long-running work reports progress from a poll, not a callback.** A callback
+  cannot report its own absence, and P0 lost four minutes to a delegate that
+  never fired.

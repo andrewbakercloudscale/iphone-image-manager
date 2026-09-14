@@ -25,9 +25,14 @@ safe removal from the iPhone.
 | | |
 |---|---|
 | Documents | [`docs/SPEC.md`](docs/SPEC.md) the specification, [`docs/PLAN.md`](docs/PLAN.md) the plan, [`docs/SAFETY.md`](docs/SAFETY.md) the safety model |
-| P0 transport spike | Written, read-only, waiting on a device. See [`spikes/`](spikes/) |
+| P0 transport spike | **Complete, and it changed the architecture.** See [`spikes/P0-transport.md`](spikes/P0-transport.md) |
 | P1 foundation | Config, schema, migrations, journal, CLI, path builder, retention |
-| P2 device layer | Not started, gated on P0 |
+| P0b PhotoKit spike | Next, blocking |
+
+**What P0 found:** USB reaches 1.9% of a real 94,180-item library and the device
+refuses deletion outright. The tool now works through PhotoKit against the Mac's
+Photos library instead, which also supplies the source application per asset, so
+"clean up WhatsApp images" became exact rather than a filename guess.
 
 Read [`docs/SAFETY.md`](docs/SAFETY.md) first if you care about not losing
 photographs. It is the shortest document and the one that matters.
