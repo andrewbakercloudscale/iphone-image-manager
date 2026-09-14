@@ -119,9 +119,24 @@ def test_invalid_config_error_is_json_when_asked(tmp_path: Path) -> None:
     assert json.loads(result.output)["error"]
 
 
-def test_device_is_not_implemented_yet(run) -> None:
+def test_device_reports_the_photos_library_not_a_connected_phone(run) -> None:
+    """USB reached 1.9% of the library and refused deletion, so there is no device."""
+    from iphone_image.config import Config
+
+    result = run("--json", "device")
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["transport"] == "photokit"
+    # Derived from the config, so this cannot pass by matching a stale literal.
+    assert data["configuredLibrary"] == str(Config().photos.library_path)
+
+
+def test_device_says_so_when_nothing_has_been_scanned(run) -> None:
+    """An empty ledger must read as "not scanned yet", never as an empty library."""
     result = run("device")
-    assert result.exit_code == 3, "an unimplemented command must not look like success"
+    assert result.exit_code == 0
+    assert "never been scanned" in result.output
+    assert json.loads(run("--json", "device").output)["scanned"] is False
 
 
 def test_journal_is_empty_on_a_fresh_database(run) -> None:

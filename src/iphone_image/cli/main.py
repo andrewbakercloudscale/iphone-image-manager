@@ -2,7 +2,7 @@
 
 Safety shape, from docs/SPEC.md section 24: a command without --apply previews,
 a command with --apply executes. Nothing in this build can execute anything
-destructive yet; the device layer arrives in P2.
+destructive yet; removal arrives in P10, gated on its own test harness.
 """
 
 from __future__ import annotations
@@ -760,8 +760,9 @@ def status(ctx: Context) -> None:
         )
         if data["assetsOnPhone"] == 0:
             ctx.out.line()
-            ctx.out.line("  No assets known yet. Device scanning arrives in P2;", style="muted")
-            ctx.out.line("  run the transport spike first: python3 spikes/run_p0.py", style="muted")
+            ctx.out.line("  No assets known yet. Inventory the Photos library:", style="muted")
+            ctx.out.line("    iphone-image scan", style="muted")
+            ctx.out.line("  It reads only, and costs no bandwidth.", style="muted")
         if pending:
             ctx.out.line()
             ctx.out.warn(f"{len(pending)} operation(s) started and never finished:")
@@ -809,23 +810,104 @@ def journal_cmd(ctx: Context, limit: int, only_pending: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# device (P2)
+# device
 # ---------------------------------------------------------------------------
 
 
 @cli.command()
 @pass_context
 def device(ctx: Context) -> None:
-    """Show the connected iPhone. Not implemented until P2."""
-    message = (
-        "Device support arrives in P2. The transport spike answers the questions "
-        "it depends on first: python3 spikes/run_p0.py"
-    )
-    ctx.out.result(
-        {"implemented": False, "message": message},
-        lambda: ctx.out.line(f"  {message}", style="muted"),
-    )
-    sys.exit(3)
+    """Show the Photos library this ledger is bound to.
+
+    There is no connected iPhone to show, and there will not be one. P0
+    measured ImageCaptureCore over USB reaching 1.9% of the library with
+    deletion refused outright, so the tool works against the Mac's Photos
+    library through PhotoKit and iCloud is what carries the assets to it.
+    See spikes/P0-transport.md.
+
+    The ledger still calls a library a device, because that is the thing a
+    scan and an asset belong to.
+    """
+    db = ctx.database()
+    configured = str(ctx.config.photos.library_path)
+
+    rows = db.conn.execute(
+        "SELECT d.id, d.udid AS path, d.name, d.product_kind, "
+        "       d.first_seen_at, d.last_seen_at, "
+        "       (SELECT COUNT(*) FROM assets a "
+        "          WHERE a.device_id = d.id AND a.present_on_phone = 1) AS assets, "
+        "       (SELECT COALESCE(SUM(a.size_bytes), 0) FROM assets a "
+        "          WHERE a.device_id = d.id AND a.present_on_phone = 1) AS bytes "
+        "FROM devices d ORDER BY d.last_seen_at DESC"
+    ).fetchall()
+
+    libraries: list[dict[str, Any]] = []
+    for row in rows:
+        scan_row = db.conn.execute(
+            "SELECT id, started_at, finished_at, status, assets_seen "
+            "FROM scans WHERE device_id = ? ORDER BY id DESC LIMIT 1",
+            (row["id"],),
+        ).fetchone()
+        libraries.append(
+            {
+                "path": row["path"],
+                "name": row["name"],
+                "kind": row["product_kind"],
+                "configured": row["path"] == configured,
+                "firstSeen": row["first_seen_at"],
+                "lastSeen": row["last_seen_at"],
+                "assets": row["assets"],
+                "bytes": row["bytes"],
+                "lastScan": dict(scan_row) if scan_row else None,
+            }
+        )
+    db.close()
+
+    scanned = any(library["configured"] for library in libraries)
+    data: dict[str, Any] = {
+        "transport": "photokit",
+        "configuredLibrary": configured,
+        "scanned": scanned,
+        "libraries": libraries,
+    }
+
+    def render() -> None:
+        ctx.out.title("Photos library")
+        ctx.out.pairs(
+            [
+                ("transport", "PhotoKit, against this Mac's Photos library"),
+                ("configured library", configured),
+            ]
+        )
+        for library in libraries:
+            last_scan = library["lastScan"]
+            ctx.out.line()
+            ctx.out.line(
+                f"  {library['path']}" + ("" if library["configured"] else "  (not configured)"),
+                style="head" if library["configured"] else "muted",
+            )
+            ctx.out.pairs(
+                [
+                    ("  assets", f"{library['assets']:,}"),
+                    ("  size", human_bytes(library["bytes"])),
+                    ("  first scanned", library["firstSeen"]),
+                    ("  last seen", library["lastSeen"]),
+                    (
+                        "  last scan",
+                        f"{last_scan['status']} at "
+                        f"{last_scan['finished_at'] or last_scan['started_at']}, "
+                        f"{last_scan['assets_seen']:,} assets"
+                        if last_scan
+                        else "never",
+                    ),
+                ]
+            )
+        if not scanned:
+            ctx.out.line()
+            ctx.out.line("  This library has never been scanned. Inventory it:", style="muted")
+            ctx.out.line("    iphone-image scan", style="muted")
+
+    ctx.out.result(data, render)
 
 
 def main() -> None:
