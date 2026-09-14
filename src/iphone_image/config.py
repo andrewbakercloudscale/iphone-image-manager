@@ -26,6 +26,7 @@ from pydantic import (
 
 from .organize.paths import validate_pattern
 from .retention import format_duration, parse_duration
+from .selector import MEDIA_TYPES, SelectorError, parse_size
 
 DEFAULT_CONFIG_PATH = Path("~/.iphone-image/config.yaml").expanduser()
 
@@ -35,6 +36,22 @@ CONFIG_VERSION = 1
 def _expand(value: Any) -> Any:
     return Path(str(value)).expanduser() if value is not None else value
 
+
+def _to_bytes(value: Any) -> Any:
+    """Accept '15GB' as readily as a raw byte count."""
+    if value is None or isinstance(value, int):
+        return value
+    try:
+        return parse_size(str(value))
+    except SelectorError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+SizeBytes = Annotated[
+    int,
+    BeforeValidator(_to_bytes),
+    PlainSerializer(lambda n: f"{n // 1024**3}GB" if n % 1024**3 == 0 else str(n), return_type=str),
+]
 
 Duration = Annotated[
     timedelta | None,
@@ -189,6 +206,46 @@ class RecycleBinConfig(Strict):
     use_macos_trash: bool = True
 
 
+class ChunkingConfig(Strict):
+    """How much work one run does before stopping at a safe point."""
+
+    enabled: bool = True
+
+    #: 15 GB is roughly one overnight run at the measured iCloud fetch rate of
+    #: 0.45 to 1.0 MB/s. Sized by wall clock rather than by disk, because at that
+    #: rate 50 GB is well over a day and offers far fewer safe stopping points.
+    chunk_bytes: SizeBytes = 15 * 1024**3
+
+    #: Refuse to start a chunk that would take free space below this.
+    free_space_floor: SizeBytes = 20 * 1024**3
+
+    #: What `sync` fetches when no --type is given. Video is deliberately absent:
+    #: it is 83.5 GB from 3% of the items in the library this was built against,
+    #: so it must be asked for by name rather than arriving by default.
+    default_types: list[str] = Field(default_factory=lambda: ["photo"])
+
+    within_type: str = "oldest_first"
+
+    @field_validator("default_types")
+    @classmethod
+    def _known_types(cls, value: list[str]) -> list[str]:
+        unknown = [v for v in value if v not in MEDIA_TYPES]
+        if unknown:
+            raise ValueError(
+                f"unknown type(s) {', '.join(unknown)}. Known: {', '.join(sorted(MEDIA_TYPES))}"
+            )
+        if not value:
+            raise ValueError("chunking.default_types cannot be empty")
+        return value
+
+    @field_validator("within_type")
+    @classmethod
+    def _known_order(cls, value: str) -> str:
+        if value not in ("oldest_first", "newest_first"):
+            raise ValueError("chunking.within_type must be oldest_first or newest_first")
+        return value
+
+
 class DatabaseConfig(Strict):
     path: ExpandedPath = Path("~/.iphone-image/iphone-image.sqlite").expanduser()
 
@@ -215,6 +272,7 @@ class Config(Strict):
     cloud: CloudConfig = Field(default_factory=CloudConfig)
     remove_from_iphone: RemoveFromIphoneConfig = Field(default_factory=RemoveFromIphoneConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
+    chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
     recycle_bin: RecycleBinConfig = Field(default_factory=RecycleBinConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)

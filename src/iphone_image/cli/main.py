@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import sys
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import click
 
 from .. import __version__
+from .. import sync as sync_engine
 from ..config import (
     DEFAULT_CONFIG_PATH,
     Config,
@@ -71,6 +72,13 @@ remove_from_iphone:
   policy: never               # never | local_verified | cloud_verified
   include_new_campaign_assets: false
   default_batch_limit: 50
+
+chunking:
+  enabled: true
+  chunk_bytes: 15GB           # roughly one overnight run at the measured fetch rate
+  free_space_floor: 20GB      # refuse to start a chunk that would breach this
+  default_types: [photo]      # video must be asked for by name: it is most of the bytes
+  within_type: oldest_first   # oldest is least replaceable if you ever stop half way
 
 safety:
   require_final_scan: true            # cannot be disabled
@@ -421,6 +429,185 @@ def list_assets(ctx: Context, budget: str | None, show: int, **kwargs: Any) -> N
         ctx.out.line("  Nothing was changed. This command only ever reads.", style="muted")
 
     ctx.out.result(data, render)
+
+
+# ---------------------------------------------------------------------------
+# sync
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@selector_options
+@click.option("--budget", help="Override chunking.chunk_bytes for this run, e.g. 15GB.")
+@click.option(
+    "--apply",
+    "apply_",
+    is_flag=True,
+    help="Actually fetch. Without this, sync only shows the plan.",
+)
+@pass_context
+def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
+    """Fetch one chunk of originals into the archive.
+
+    Without --apply this prints the plan and fetches nothing.
+
+    Video is never fetched unless you ask for it with --type video. It is the
+    bulk of most libraries and is deliberately excluded from the default.
+    """
+    config = ctx.config
+    try:
+        selector = build_selector(**kwargs)
+    except SelectorError as exc:
+        _fail(ctx.out, str(exc))
+        return
+
+    # No --type means the configured default, which excludes video on purpose.
+    types = [selector.media_type] if selector.media_type else config.chunking.default_types
+    parsed_budget = parse_size(budget) if budget else None
+    budget_bytes: int = parsed_budget if parsed_budget is not None else config.chunking.chunk_bytes
+
+    plans: list[tuple[str, Any]] = []
+    remaining_budget = budget_bytes
+    for media_type in types:
+        scoped = replace(selector, media_type=media_type)
+        chunk, _ = sync_engine.plan(config, scoped, budget_bytes=remaining_budget)
+        plans.append((media_type, chunk))
+        remaining_budget -= chunk.total_bytes
+        if remaining_budget <= 0:
+            break
+
+    planned = sum(c.count for _, c in plans)
+    planned_bytes = sum(c.total_bytes for _, c in plans)
+    left_assets = sum(c.remaining_assets for _, c in plans)
+    left_bytes = sum(c.remaining_bytes for _, c in plans)
+    hours = planned_bytes / 1_048_576 / 0.45 / 3600 if planned_bytes else 0
+
+    data: dict[str, Any] = {
+        "applied": apply_,
+        "types": types,
+        "budget": budget_bytes,
+        "planned": planned,
+        "plannedBytes": planned_bytes,
+        "remainingAssets": left_assets,
+        "remainingBytes": left_bytes,
+        "estimatedHoursAt045": round(hours, 1),
+    }
+
+    if not apply_:
+
+        def render_plan() -> None:
+            ctx.out.title("Sync plan")
+            ctx.out.pairs(
+                [
+                    ("selector", selector.describe()),
+                    ("types", ", ".join(types)),
+                    ("budget", human_bytes(budget_bytes)),
+                ]
+            )
+            ctx.out.line()
+            for media_type, chunk in plans:
+                ctx.out.line(
+                    f"    {media_type:<10}{chunk.count:>8,} assets  "
+                    f"{human_bytes(chunk.total_bytes):>12}"
+                )
+            ctx.out.line()
+            ctx.out.pairs(
+                [
+                    ("this chunk", f"{planned:,} assets, {human_bytes(planned_bytes)}"),
+                    ("left for later", f"{left_assets:,} assets, {human_bytes(left_bytes)}"),
+                    ("estimated time", f"{hours:.1f} hours at 0.45 MB/s"),
+                ]
+            )
+            ctx.out.line()
+            if "video" not in types:
+                ctx.out.line("  Video is excluded. Ask for it with --type video.", style="muted")
+            ctx.out.line("  NOTHING HAS BEEN FETCHED. Add --apply to run it.", style="warn")
+
+        ctx.out.result(data, render_plan)
+        return
+
+    # -- apply -------------------------------------------------------------
+
+    total = sync_engine.SyncResult()
+    remaining_budget = budget_bytes
+    for media_type in types:
+        if remaining_budget <= 0:
+            break
+        scoped = replace(selector, media_type=media_type)
+
+        def tick(asset: dict[str, Any], result: Any) -> None:
+            done = result.fetched + result.failed
+            ctx.out.line(
+                f"  [{done:>5,}] {str(asset.get('filename') or '?')[:34]:<36}"
+                f"{human_bytes(result.bytes_fetched):>11}  {result.rate_text}",
+                style="muted",
+            )
+
+        try:
+            outcome = sync_engine.run(config, scoped, budget_bytes=remaining_budget, on_asset=tick)
+        except (sync_engine.SyncError, HelperError) as exc:
+            _fail(ctx.out, str(exc))
+            return
+
+        remaining_budget -= outcome.bytes_fetched
+        total.planned += outcome.planned
+        total.fetched += outcome.fetched
+        total.failed += outcome.failed
+        total.skipped_existing += outcome.skipped_existing
+        total.missing_recovered += outcome.missing_recovered
+        total.bytes_fetched += outcome.bytes_fetched
+        total.seconds += outcome.seconds
+        total.remaining_assets += outcome.remaining_assets
+        total.remaining_bytes += outcome.remaining_bytes
+        total.failures.extend(outcome.failures)
+        for key, value in outcome.by_type.items():
+            total.by_type[key] = total.by_type.get(key, 0) + value
+
+    data.update(
+        {
+            "fetched": total.fetched,
+            "failed": total.failed,
+            "skippedExisting": total.skipped_existing,
+            "bytesFetched": total.bytes_fetched,
+            "mbPerSecond": round(total.rate_mb_s, 2),
+            "remainingAssets": total.remaining_assets,
+            "remainingBytes": total.remaining_bytes,
+            "failures": total.failures[:20],
+        }
+    )
+
+    def render_result() -> None:
+        ctx.out.title("Sync")
+        ctx.out.pairs(
+            [
+                ("fetched", f"{total.fetched:,} assets, {human_bytes(total.bytes_fetched)}"),
+                ("already present", f"{total.skipped_existing:,}"),
+                ("re-fetched (file was missing)", f"{total.missing_recovered:,}"),
+                ("failed", f"{total.failed:,}"),
+                ("rate", total.rate_text),
+                (
+                    "left for later",
+                    f"{total.remaining_assets:,} assets, {human_bytes(total.remaining_bytes)}",
+                ),
+                ("archive", str(config.archive.local_path)),
+            ]
+        )
+        if total.failures:
+            ctx.out.line()
+            ctx.out.line("  Failures", style="head")
+            for failure in total.failures[:10]:
+                ctx.out.line(
+                    f"    {str(failure.get('filename'))[:30]:<32}{failure.get('error')}",
+                    style="warn",
+                )
+        ctx.out.line()
+        ctx.out.line(
+            "  Nothing was removed from the library. sync only ever copies.", style="muted"
+        )
+
+    ctx.out.result(data, render_result)
+    if total.failed:
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
