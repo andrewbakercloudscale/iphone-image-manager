@@ -426,6 +426,25 @@ def check_cloud(config: Config) -> Check:
     return Check("cloud remote", PASS, f"{config.cloud.remote} ({config.cloud.provider})")
 
 
+def check_logging(config: Config) -> Check:
+    """Logs are the only record of what happened outside the ledger."""
+    directory = config.logging.path
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        probe = directory / ".iim-log-probe"
+        probe.write_text("ok")
+        probe.unlink()
+    except OSError as exc:
+        return Check(
+            "logging",
+            WARN,
+            f"{directory} is not writable: {exc}",
+            "The tool still runs, but nothing is recorded. Fix the permissions "
+            "or point logging.path somewhere writable.",
+        )
+    return Check("logging", PASS, f"{config.logging.level} to {directory}")
+
+
 CHECKS: list[Callable[[Config], Check]] = [
     check_platform,
     check_tools,
@@ -435,6 +454,7 @@ CHECKS: list[Callable[[Config], Check]] = [
     check_sync,
     check_disk,
     check_archive_path,
+    check_logging,
     check_helper,
     check_photos_authorisation,
     check_cloud,

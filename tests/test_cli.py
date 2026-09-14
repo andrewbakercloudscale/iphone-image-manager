@@ -170,3 +170,46 @@ def test_doctor_states_its_own_coverage(tmp_path: Path) -> None:
     )
     result = CliRunner().invoke(cli, ["--config", str(path), "doctor", "--skip-slow"])
     assert "checks:" in result.output
+
+
+def test_unexpected_errors_do_not_dump_a_traceback(tmp_path: Path) -> None:
+    """A wall of traceback is not an error message."""
+    import subprocess
+    import sys
+
+    (tmp_path / "notadb").mkdir()
+    config = tmp_path / "c.yaml"
+    config.write_text(
+        f'database: {{path: "{tmp_path}/notadb"}}\nlogging: {{path: "{tmp_path}/logs"}}\n'
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "iphone_image", "--config", str(config), "status"],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parent.parent,
+        env={"PYTHONPATH": "src", "PATH": "/usr/bin:/bin"},
+    )
+    assert result.returncode == 70
+    assert "Traceback" not in result.stderr, "the raw traceback reached the user"
+    assert "error:" in result.stderr
+    log = tmp_path / "logs" / "iphone-image.log"
+    assert log.exists() and "Traceback" in log.read_text(), "the trace was not recorded"
+
+
+def test_the_error_is_stated_once(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    (tmp_path / "notadb").mkdir()
+    config = tmp_path / "c.yaml"
+    config.write_text(
+        f'database: {{path: "{tmp_path}/notadb"}}\nlogging: {{path: "{tmp_path}/logs"}}\n'
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "iphone_image", "--config", str(config), "status"],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parent.parent,
+        env={"PYTHONPATH": "src", "PATH": "/usr/bin:/bin"},
+    )
+    assert result.stderr.lower().count("unable to open database file") == 1

@@ -36,7 +36,7 @@ Homepage = "https://github.com/andrewbakercloudscale/iphone-image-manager"
 Issues = "https://github.com/andrewbakercloudscale/iphone-image-manager/issues"
 
 [project.scripts]
-iphone-image = "iphone_image.cli.main:cli"
+iphone-image = "iphone_image.cli.main:main"
 
 [build-system]
 requires = ["hatchling"]

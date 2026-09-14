@@ -26,6 +26,7 @@ from ..config import (
 from ..db.database import Database, DatabaseError
 from ..doctor import FAIL, PASS, WARN, run_all
 from ..journal import Journal
+from ..logs import get_logger, setup_logging
 from ..output import Output, human_bytes
 from ..retention import format_duration
 
@@ -99,6 +100,7 @@ class Context:
     config: Config
     out: Output
     config_path: Path | None
+    log_path: Path | None = None
 
     def database(self, *, create: bool = True) -> Database:
         db = Database(self.config.database.path).connect(create=create)
@@ -122,9 +124,10 @@ def _fail(out: Output, message: str, code: int = 1) -> None:
     help=f"Configuration file. Default: {DEFAULT_CONFIG_PATH}",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.option("-v", "--verbose", is_flag=True, help="Also log debug detail to the console.")
 @click.version_option(__version__, "-V", "--version", prog_name="iphone-image")
 @click.pass_context
-def cli(ctx: click.Context, config_path: Path | None, as_json: bool) -> None:
+def cli(ctx: click.Context, config_path: Path | None, as_json: bool, verbose: bool) -> None:
     """Inventory, back up, verify and safely offload iPhone media.
 
     The default behaviour is always to keep media on the iPhone.
@@ -135,7 +138,11 @@ def cli(ctx: click.Context, config_path: Path | None, as_json: bool) -> None:
     except ConfigError as exc:
         _fail(out, str(exc), code=2)
         return
-    ctx.obj = Context(config=config, out=out, config_path=config.source_path)
+
+    log_path = setup_logging(config, command=ctx.invoked_subcommand or "-", verbose=verbose)
+    get_logger().info("start: %s", " ".join(sys.argv[1:]) or "(no arguments)")
+
+    ctx.obj = Context(config=config, out=out, config_path=config.source_path, log_path=log_path)
 
 
 # ---------------------------------------------------------------------------
@@ -454,3 +461,41 @@ def device(ctx: Context) -> None:
         lambda: ctx.out.line(f"  {message}", style="muted"),
     )
     sys.exit(3)
+
+
+def main() -> None:
+    """Entry point with a last-resort handler.
+
+    Click reports usage errors itself. This catches everything else, so an
+    unexpected failure lands in the log with a stack trace and the user gets a
+    sentence plus the path to look at, rather than a wall of traceback.
+    """
+    try:
+        cli.main(standalone_mode=False)
+    except click.ClickException as exc:
+        exc.show()
+        sys.exit(exc.exit_code)
+    except click.Abort:
+        click.echo("Aborted.", err=True)
+        sys.exit(130)
+    except SystemExit:
+        raise
+    except KeyboardInterrupt:
+        click.echo(
+            "\nInterrupted. Every operation is journalled before it runs, "
+            "so nothing was left half-written.",
+            err=True,
+        )
+        sys.exit(130)
+    except Exception as exc:  # last resort, deliberately broad
+        logger = get_logger()
+        logger.exception("unhandled error: %s", exc, extra={"file_only": True})
+        click.echo(f"error: {type(exc).__name__}: {exc}", err=True)
+        for handler in logger.handlers:
+            target = getattr(handler, "baseFilename", None)
+            if target:
+                click.echo(f"A stack trace was written to {target}", err=True)
+                break
+        else:
+            click.echo("No log file was available, so nothing was recorded.", err=True)
+        sys.exit(70)
