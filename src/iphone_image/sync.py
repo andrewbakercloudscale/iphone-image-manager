@@ -38,6 +38,11 @@ log = get_logger("sync")
 
 HASH_BLOCK = 1024 * 1024
 
+#: Above this, a 'transfer' was a local disk read rather than an iCloud
+#: download. Real downloads measured 0.45 to 1.24 MB/s; local reads
+#: exceeded 4,000, and averaging the two understated every estimate.
+LOCAL_READ_MB_S = 25.0
+
 
 class SyncError(Exception):
     """Sync cannot safely proceed."""
@@ -73,18 +78,16 @@ class SyncResult:
         """
         if not self.fetched:
             return "-"
-        if self.seconds < 0.05:
-            return "local (no download)"
+        # The same threshold the estimator uses. A whole chunk of already
+        # resident assets reported "4696.44 MB/s", which is a disk read wearing
+        # a network rate's clothes and tells the user nothing useful.
+        if self.seconds < 0.05 or self.rate_mb_s > LOCAL_READ_MB_S:
+            return f"{self.fetched:,} from local disk, no download"
         return f"{self.rate_mb_s:.2f} MB/s"
 
 
 #: Used only until this installation has downloaded anything of its own.
 FALLBACK_MB_S = 1.0
-
-#: Above this, a 'transfer' was a local disk read rather than an iCloud
-#: download. Real downloads measured 0.45 to 1.24 MB/s; local reads
-#: exceeded 4,000, and averaging the two understated every estimate.
-LOCAL_READ_MB_S = 25.0
 
 
 def observed_rate(db: Database, *, minimum_bytes: int = 20 * 1024 * 1024) -> float | None:

@@ -341,3 +341,16 @@ def test_a_mixed_history_reports_only_the_download_rate(env) -> None:
         )
     rate = sync_engine.observed_rate(db)
     assert rate is not None and 0.9 < rate < 1.1
+
+
+def test_a_whole_chunk_of_local_reads_does_not_report_a_network_rate(env) -> None:
+    """A real run reported "4696.44 MB/s", which is a disk read wearing a
+    network rate's clothes."""
+    result = sync_engine.SyncResult(fetched=6170, bytes_fetched=15 * 1024**3, seconds=3.4)
+    assert "no download" in result.rate_text
+    assert "MB/s" not in result.rate_text
+
+
+def test_a_genuine_download_still_reports_its_rate() -> None:
+    result = sync_engine.SyncResult(fetched=61, bytes_fetched=198 * MB, seconds=160.0)
+    assert "MB/s" in result.rate_text
