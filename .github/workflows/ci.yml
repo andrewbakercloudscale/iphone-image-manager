@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    # macOS only: this tool talks to ImageCaptureCore and has no other target.
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check src tests
+
+      - name: Format
+        run: ruff format --check src tests
+
+      - name: Types
+        run: mypy src --ignore-missing-imports
+
+      - name: Tests
+        run: pytest tests -q
+
+      - name: The shipped example config must itself be valid
+        run: |
+          python -m iphone_image config init --path "$RUNNER_TEMP/config.yaml"
+          python -m iphone_image --config "$RUNNER_TEMP/config.yaml" config validate
+
+  helper:
+    # The spike helper compiling is a real gate: it is the only thing that
+    # proves our use of the ImageCaptureCore API still matches the SDK.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build iimhelper
+        working-directory: spikes/iimhelper
+        run: swift build -c release
+
+      - name: It must run and refuse cleanly with no device
+        working-directory: spikes/iimhelper
+        run: |
+          .build/release/iimhelper --help
+          set +e
+          .build/release/iimhelper probe --timeout 5
+          code=$?
+          set -e
+          if [ "$code" -ne 2 ]; then
+            echo "expected exit 2 (no device), got $code"
+            exit 1
+          fi
+          echo "no-device path exits 2 as intended"

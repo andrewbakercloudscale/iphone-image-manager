@@ -49,5 +49,13 @@ packages = ["src/iphone_image"]
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.lint]
+# Pinned explicitly: a default rule set that drifts between ruff versions makes
+# CI pass or fail for reasons nobody changed.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "PYI", "C4"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]        # conftest puts src on sys.path before importing
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

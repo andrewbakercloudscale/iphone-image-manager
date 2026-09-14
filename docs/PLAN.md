@@ -2,7 +2,8 @@
 
 Plan of record for delivering `docs/SPEC.md`.
 
-**Status:** P0 not started. Nothing below P0 is committed, because P0 decides it.
+**Status:** P0 written and waiting on a device. P1 complete. P2 onwards is
+uncommitted until P0 reports.
 **Last updated:** 2026-09-14
 
 ### Decisions taken
@@ -142,6 +143,9 @@ Repository scaffolding, config, database, journal.
 - CI: ruff, mypy, pytest on macOS.
 
 **Exit:** `config validate` and an empty `status` run green on a clean machine.
+**Done.** 111 tests, ruff and mypy clean, CI on macOS across Python 3.12 to 3.14.
+The example config that `config init` writes is itself validated in CI, so the
+documentation cannot drift from what the loader accepts.
 
 ### P2. Device layer
 - `iimhelper` Swift package: `enumerate`, `download`, `delete`, `trash`, `info`

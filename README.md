@@ -20,18 +20,26 @@ safe removal from the iPhone.
 
 ## Status
 
-**Pre-alpha. Not usable yet. There is no working code in this repository.**
+**Pre-alpha.** Nothing touches a device yet, and nothing can delete anything.
 
-What exists today is the specification and the plan:
+| | |
+|---|---|
+| Documents | [`docs/SPEC.md`](docs/SPEC.md) the specification, [`docs/PLAN.md`](docs/PLAN.md) the plan, [`docs/SAFETY.md`](docs/SAFETY.md) the safety model |
+| P0 transport spike | Written, read-only, waiting on a device. See [`spikes/`](spikes/) |
+| P1 foundation | Config, schema, migrations, journal, CLI, path builder, retention |
+| P2 device layer | Not started, gated on P0 |
 
-- [`docs/SPEC.md`](docs/SPEC.md) is the full product and technical specification.
-- [`docs/PLAN.md`](docs/PLAN.md) is the implementation plan, milestones, and the
-  list of places where the specification meets an awkward platform reality.
-- [`docs/SAFETY.md`](docs/SAFETY.md) is the safety model. Read this one first if you
-  care about not losing photographs.
+Read [`docs/SAFETY.md`](docs/SAFETY.md) first if you care about not losing
+photographs. It is the shortest document and the one that matters.
 
-The next step is a transport spike against a real device, described as P0 in the
-plan. Nothing past it is committed until it is done.
+### What works today
+
+```bash
+iphone-image config init        # write a commented example config
+iphone-image config validate    # check it, and say what it means in practice
+iphone-image status             # what the ledger knows
+iphone-image journal            # operations, including anything a crash left in flight
+```
 
 ---
 
@@ -127,7 +135,35 @@ And two undo paths, because deletion should never be a one way door:
 
 - macOS
 - Python 3.12 or newer
+- Xcode command line tools, to build the device helper
 - `libimobiledevice`, `exiftool`, `ffmpeg`, `rclone` (all via Homebrew)
+
+```bash
+brew install libimobiledevice exiftool ffmpeg rclone
+```
+
+---
+
+## Development
+
+```bash
+git clone https://github.com/andrewbakercloudscale/iphone-image-manager
+cd iphone-image-manager
+
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+ruff check src tests && ruff format --check src tests
+mypy src --ignore-missing-imports
+pytest tests -q
+```
+
+The device helper is a separate Swift package, compiled locally. No code signing
+and no Apple Developer account are involved:
+
+```bash
+cd spikes/iimhelper && swift build -c release
+```
 
 ---
 
