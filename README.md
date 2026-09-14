@@ -70,13 +70,18 @@ iphone-image sync              # incremental, resumable local backup
 iphone-image cloud-sync        # upload verified assets to Google Drive
 iphone-image verify            # reconcile device, archive, cloud and database
 iphone-image status            # where everything stands
+iphone-image list --type screenshot --older-than 60d --min-size 2MB
 
 iphone-image campaign start    # freeze a cleanup set
 iphone-image clean screenshots --older-than 60d
 iphone-image clean duplicates
 
 iphone-image remove-from-iphone           # shows a plan, removes nothing
+iphone-image remove-from-iphone --type screenshot --older-than 60d --limit 25
 iphone-image remove-from-iphone --apply   # the only command that deletes
+
+iphone-image recycle-bin list             # what came off the phone, and where it is
+iphone-image recycle-bin restore
 ```
 
 ---

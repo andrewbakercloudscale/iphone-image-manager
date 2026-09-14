@@ -18,9 +18,11 @@ Plan of record for delivering `docs/SPEC.md`.
 | 7 | Cloud transport | Shell out to rclone, the tool never holds a token |
 | 8 | Exact duplicate storage | One archive file per unique SHA256, N asset rows |
 | 9 | Python baseline | 3.12 floor, CI on 3.12 and 3.14 |
-| 10 | Distribution | Homebrew tap, signed and notarised helper |
+| 10 | Distribution | Build the helper from source. No Apple Developer account. Signing is an optional P11 nicety if outside users appear. |
 | 11 | Deletion recoverability | Nothing is unlinked. See section 6. |
 | 12 | `local_objects` table | Dropped, `asset_resources` covers it |
+| 13 | Test device | The user's main iPhone. Mitigated by micro batches and filtering, see section 7. |
+| 14 | Removal granularity | Filtered micro batches with a low default limit, never a bulk sweep |
 
 ---
 
@@ -75,7 +77,7 @@ written in this phase.
 | 6 | Can iCloud Photos sync state be detected? | Drives the typed-confirmation gate. |
 | 7 | What happens on lock, sleep and unplug mid-enumeration and mid-download? Which errors surface? | Determines the entire resume and error taxonomy. |
 | 8 | Sustained throughput and stability at 1, 2 and 4 concurrent downloads. | Sets the default for `performance.local_transfer_workers`. |
-| 9 | Does the helper need TCC / Full Disk Access, and does it need signing and notarisation to run on another Mac? | Distribution story. A tool users cannot install is not shipped. |
+| 9 | Does the helper need TCC / Full Disk Access? | Affects first-run experience. Signing is not in scope: the helper is built from source locally, so Gatekeeper quarantine does not apply. |
 
 ### Exit criteria
 
@@ -96,7 +98,7 @@ on top of machinery that has already been proven on real libraries.
 
 | Milestone | Contains | The promise it makes |
 |---|---|---|
-| **v0.1 Inventory** | P1, P2, P3, P4 | Tells you what is on your phone. Touches nothing. |
+| **v0.1 Inventory** | P1, P2, P3, P4 | Tells you what is on your phone, and lets you filter it. Touches nothing. |
 | **v0.2 Archive** | P5, P6 | Gets it all onto your Mac, resumably, verified, organized. |
 | **v0.3 Cloud** | P7, P8, P9 | Gets it to Google Drive, reconciles all four views, campaigns. |
 | **v1.0 Offload** | P10, P11 | Removes from the phone, explicitly, resumably, provably. |
@@ -192,6 +194,8 @@ asset rows.
 ### P8. Verify and report
 - `verify` reconciles device, local archive, cloud and database, spec section 17.
 - `status`, spec section 25, plus `status --proxies` and `status --blocked`.
+- `list` with the full filter set from section 7. Non-destructive, and the place
+  the user builds and checks a filter before it is ever passed to removal.
 - Every blocked asset is individually listable with its reason.
 
 **Exit:** the "6 blocked" in the spec's example output can be enumerated with causes.
@@ -207,6 +211,8 @@ Gated: the harness in `tests/destructive/` must exist and pass before
 `remove-from-iphone --apply` is implemented.
 
 - Mandatory fresh scan, then eligibility recomputation, then plan.
+- Filtering and `--limit` micro batches, section 7. Shared filter implementation
+  with `list`, so what the user previewed is exactly what gets acted on.
 - Typed confirmation when iCloud Photos sync is active.
 - Per-asset journal write before and after each deletion, so a mid-run crash
   leaves an accurate ledger.
@@ -350,7 +356,82 @@ by config, and `config validate` warns when either is off.
 
 ---
 
-## 7. Risk register
+## 7. Removal selection, filtering and micro batches
+
+Added after the specification was written, and it changes the shape of the removal
+feature. The spec assumed a campaign-wide sweep: compute eligibility, show one big
+plan, apply it. The actual workflow is the opposite. Removal runs against the user's
+primary iPhone, in small hand-inspected batches, chosen by filtering on attributes
+the user can see.
+
+This is a safety improvement, not a convenience one, and it is what makes running
+against a primary device defensible. A 40,000 asset sweep has one decision point. A
+25 asset batch has 1,600 of them, each with the previous batch's outcome already
+visible.
+
+### `iphone-image list`, the non-destructive twin
+
+Same filters, no removal, available from v0.1. The point is that the user browses
+and refines a filter against real numbers long before any deletion command is typed,
+and the filter that eventually gets passed to `remove-from-iphone` is one they have
+already looked at the output of.
+
+### Filters
+
+| Flag | Selects |
+|---|---|
+| `--type screenshot\|whatsapp\|camera\|saved\|video\|live\|burst\|raw\|edited\|unknown` | classification |
+| `--confidence high\|medium\|low` | minimum classification confidence |
+| `--older-than 60d`, `--newer-than 30d` | capture date |
+| `--year 2024`, `--month 2024-07` | capture period |
+| `--min-size 2MB`, `--max-size 500KB` | file size |
+| `--proxy-suspect`, `--no-proxy-suspect` | suspected iCloud proxies |
+| `--duplicates-only` | non-canonical members of exact duplicate groups |
+| `--verified local\|cloud` | backup state |
+| `--ids-from list.txt` | a hand-curated list |
+| `--limit N` | batch cap |
+| `--sort size\|date\|type` | ordering, size descending by default |
+
+Filters compose with AND. `--json` emits the same selection machine-readably.
+
+### Batch display
+
+Every row shows what the user said they need to see:
+
+```
+  #  FILENAME          DATE        TYPE        CONF  SIZE     PROXY?  LOCAL  CLOUD
+  1  IMG_4821.MOV      2024-03-11  VIDEO       HIGH  1.4 GB   no      ok     ok
+  2  IMG_4108.PNG      2024-02-02  SCREENSHOT  HIGH  4.2 MB   no      ok     ok
+  3  IMG_3390.JPG      2023-11-19  WHATSAPP    MED   88 KB    LIKELY  ok     ok
+
+  3 assets, 1.4 GB. 1 blocked: IMG_3390.JPG, suspected iCloud proxy.
+  2 eligible, 1.4 GB, reclaimed once Recently Deleted is emptied.
+```
+
+`PROXY?` is the "possibly offloaded to iCloud" column. A `LIKELY` row is shown but
+is never eligible, per `docs/SAFETY.md` section 2.
+
+### Micro batch limits
+
+- `--limit` defaults to **50**. A run with no `--limit` never touches more than 50
+  assets, whatever the filter matched.
+- Above 500 the command requires `--limit` to be passed explicitly and prints the
+  count it is about to act on before the confirmation.
+- The confirmation shows the batch, not a summary. If the batch is too long to show,
+  it is too long to apply.
+- Each batch is journaled as its own operation, so `recycle-bin list` and the
+  journal read back as a sequence of small reviewed decisions rather than one event.
+
+### Why this does not weaken the eligibility rules
+
+Filters **narrow** a set that eligibility has already computed. A filter can never
+make an ineligible asset removable. Proxy suspects stay blocked, unverified assets
+stay blocked, incomplete asset groups stay blocked. `--proxy-suspect` shows them,
+it does not unblock them.
+
+---
+
+## 8. Risk register
 
 | Risk | Impact | Mitigation |
 |---|---|---|
@@ -360,13 +441,14 @@ by config, and `config validate` warns when either is off.
 | Multi-hour USB transfers destabilise or the device drops | Sync never completes on large libraries | Conservative default worker count, checkpoint after every asset, throughput measured in P0 question 8 |
 | Helper binary blocked by Gatekeeper on other Macs | Nobody outside this machine can run it | Signing and notarisation scoped into P11, distribution tested on a second Mac |
 | WhatsApp classification ships inert | Advertised feature does nothing | Conflict 1 resolution, and honest README wording |
-| Deletion bug found only on a real library | Catastrophic and public | Fake backend plus dedicated test iPhone, harness before feature, P10 gate |
+| Deletion bug found only on a real library | Catastrophic and public | Fake backend and full harness before the feature, P10 gate. No dedicated test device exists, so the first real runs are micro batches of 10 to 25 on already cloud-verified screenshots, the safest and most replaceable category. |
+| Removal runs against the user's primary iPhone | No second chance if it goes wrong | Default limit of 50, filtered batches shown in full before confirmation, recycle bin entry written first, Recently Deleted as the phone-side undo |
 | Reverse geocoding leaks location data to a third party | Privacy violation in a privacy-first tool | Offline bundled dataset, no network call at all |
 | A bug unlinks archive files instead of trashing them | User media gone with no Finder undo | Single choke point for media deletion, asserted by test, direct `unlink` of archive paths banned by a lint rule |
 
 ---
 
-## 8. Testing
+## 9. Testing
 
 - **Unit**, per spec section 51: hashing, path generation, retention arithmetic,
   eligibility rules, campaign membership, collision suffixes.
@@ -382,7 +464,7 @@ by config, and `config validate` warns when either is off.
 
 ---
 
-## 9. Conventions
+## 10. Conventions
 
 - One logical change per commit. No pushes without explicit instruction.
 - Every gate fails loudly. A checker that cannot run exits non-zero and says why.
