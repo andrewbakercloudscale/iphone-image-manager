@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Swift helper build output
+helper/.build/
+helper/*.xcodeproj
+*.dSYM/
+
+# Local state, never commit
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.iphone-image/
+logs/
+*.log
+
+# Real device data and credentials, never commit
+config.yaml
+config.local.yaml
+.env
+rclone.conf
+fixtures/private/
+spikes/output/
+
+# macOS
+.DS_Store
+.omc/
