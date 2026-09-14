@@ -12,9 +12,22 @@ USAGE
     iimphotos fetch [options]           Time on-demand original fetches. This is
                                         the measurement the chunking design
                                         depends on. Nothing is written to disk.
+    iimphotos scan [options]            Dump every asset as JSON Lines. Read-only
+                                        and costs no bandwidth: it emits only what
+                                        PhotoKit answers without downloading.
+    iimphotos export [options]          Write originals to disk. Reads work from
+                                        stdin as <localIdentifier>TAB<path>.
     iimphotos delete-roundtrip          Create a 1x1 test image OF ITS OWN, then
                                         delete it. Proves deletion works without
                                         touching any of your photographs.
+
+SCAN OPTIONS
+    --limit N        Stop after N assets. Default: 0, meaning all.
+
+EXPORT OPTIONS
+    --timeout S      Per-asset timeout in seconds. Default: 1800.
+    --no-network     Refuse iCloud downloads, so only already-local assets
+                     succeed. Useful for measuring what is resident.
 
 FETCH OPTIONS
     --count N        How many assets to sample. Default: 10.
@@ -108,6 +121,23 @@ case "fetch":
         Out.fail("--timeout must be a positive number of seconds", code: 64)
     }
     Fetch.run(count: count, timeout: timeout, onlyRemote: args.contains("--only-remote"))
+    exit(0)
+
+case "scan":
+    requireAuthorization()
+    guard let limit = Int(option("--limit", default: "0")), limit >= 0 else {
+        Out.fail("--limit must be zero or more", code: 64)
+    }
+    Scan.run(limit: limit, since: nil)
+    exit(0)
+
+case "export":
+    requireAuthorization()
+    guard let exportTimeout = Double(option("--timeout", default: "1800")),
+          exportTimeout > 0 else {
+        Out.fail("--timeout must be a positive number of seconds", code: 64)
+    }
+    Export.run(timeout: exportTimeout, allowNetwork: !args.contains("--no-network"))
     exit(0)
 
 case "delete-roundtrip":
