@@ -567,6 +567,7 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
         total.failed += outcome.failed
         total.skipped_existing += outcome.skipped_existing
         total.missing_recovered += outcome.missing_recovered
+        total.partials_swept += outcome.partials_swept
         total.bytes_fetched += outcome.bytes_fetched
         total.seconds += outcome.seconds
         total.remaining_assets += outcome.remaining_assets
@@ -595,6 +596,7 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
                 ("fetched", f"{total.fetched:,} assets, {human_bytes(total.bytes_fetched)}"),
                 ("already present", f"{total.skipped_existing:,}"),
                 ("re-fetched (file was missing)", f"{total.missing_recovered:,}"),
+                ("leftover partials swept", f"{total.partials_swept:,}"),
                 ("failed", f"{total.failed:,}"),
                 ("rate", total.rate_text),
                 (

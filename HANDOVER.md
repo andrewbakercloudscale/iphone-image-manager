@@ -120,8 +120,22 @@ The selector is one vocabulary shared by `list`, `sync` and later `remove`:
 
 ### The next chunk
 
+A chunk takes hours, and a process started from a terminal dies with SIGHUP when
+the window closes. Use the detached runner:
+
 ```bash
-iphone-image sync --source camera --apply     # 15 GB, ~3 hours
+./run-chunk.sh --source camera      # detached, survives closing the terminal
+./run-chunk.sh --status             # is it running, how far along, any errors
+./run-chunk.sh --stop               # clean stop; resume with another run
+tail -f ~/.iphone-image/chunk.log
+```
+
+It runs under `nohup caffeinate -dimsu`, so the Mac will not idle, sleep its
+disk or dim out mid-transfer, and the process reparents to launchd (verified:
+PPID 1). Or in the foreground if you prefer to watch:
+
+```bash
+iphone-image sync --source camera --apply     # 15 GB
 ```
 
 Chunk 1 ran in minutes because 2019-2021 were already resident on disk from the

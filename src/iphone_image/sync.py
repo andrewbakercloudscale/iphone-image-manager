@@ -52,6 +52,7 @@ class SyncError(Exception):
 class SyncResult:
     planned: int = 0
     missing_recovered: int = 0
+    partials_swept: int = 0
     fetched: int = 0
     skipped_existing: int = 0
     failed: int = 0
@@ -166,6 +167,30 @@ def archive_path_for(config: Config, asset: dict[str, Any]) -> Path:
     return config.archive.local_path / relative
 
 
+def sweep_partials(archive: Path) -> tuple[int, int]:
+    """Delete leftover .partial files. Returns (count, bytes reclaimed).
+
+    A .partial is by definition never a valid archive file: the rename only
+    happens after the hash and size are checked. A hard kill leaves one behind
+    for whatever was in flight, and left alone they accumulate one per
+    interruption and quietly consume disk.
+    """
+    count = 0
+    reclaimed = 0
+    if not archive.exists():
+        return 0, 0
+    for stale in archive.rglob("*.partial"):
+        try:
+            reclaimed += stale.stat().st_size
+            stale.unlink()
+            count += 1
+        except OSError as exc:
+            log.warning("could not remove %s: %s", stale, exc)
+    if count:
+        log.info("swept %d leftover partial file(s), %d bytes", count, reclaimed)
+    return count, reclaimed
+
+
 def free_bytes(path: Path) -> int:
     probe = path
     while not probe.exists() and probe != probe.parent:
@@ -254,6 +279,9 @@ def run(
     result = SyncResult()
 
     try:
+        # Anything left by a previous interruption. Doing this first means a
+        # kill never costs more than the asset that was in flight.
+        result.partials_swept, _ = sweep_partials(config.archive.local_path)
         result.missing_recovered = reconcile_missing(db, selector)
         chunk, _ = plan(config, selector, budget_bytes=budget_bytes, db=db)
         result.planned = chunk.count

@@ -354,3 +354,27 @@ def test_a_whole_chunk_of_local_reads_does_not_report_a_network_rate(env) -> Non
 def test_a_genuine_download_still_reports_its_rate() -> None:
     result = sync_engine.SyncResult(fetched=61, bytes_fetched=198 * MB, seconds=160.0)
     assert "MB/s" in result.rate_text
+
+
+def test_leftover_partials_from_a_kill_are_swept(env) -> None:
+    """A hard kill leaves the in-flight .partial behind. Left alone they
+    accumulate one per interruption and quietly consume disk."""
+    config, db = env
+    stale = config.archive.local_path / "2020" / "01" / "IMG_1.JPG.partial"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"x" * 4096)
+    add_asset(db, "a", size=MB)
+
+    result = sync_engine.run(config, Selector(), helper=FakeHelper(sizes={"a": MB}))
+    assert result.partials_swept == 1
+    assert not stale.exists()
+
+
+def test_sweeping_never_touches_a_real_archive_file(env) -> None:
+    config, _db = env
+    keeper = config.archive.local_path / "2020" / "01" / "IMG_1.JPG"
+    keeper.parent.mkdir(parents=True)
+    keeper.write_bytes(b"real")
+    count, _ = sync_engine.sweep_partials(config.archive.local_path)
+    assert count == 0
+    assert keeper.read_bytes() == b"real"
