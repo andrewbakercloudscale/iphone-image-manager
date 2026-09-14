@@ -33,7 +33,7 @@ from ..output import Output, human_bytes
 from ..photos.helper import HelperError
 from ..retention import format_duration
 from ..scanner import scan as run_scan
-from ..selector import SelectorError, parse_size, plan_chunk
+from ..selector import PROXY_SUSPICION_BLOCK, SelectorError, parse_size, plan_chunk
 from .selectors import build_selector, selector_options
 
 EXAMPLE_CONFIG = """\
@@ -484,6 +484,15 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
 
     planned = sum(c.count for _, c in plans)
     planned_bytes = sum(c.total_bytes for _, c in plans)
+    # Named, not merely counted: docs/SAFETY.md section 2 requires suspected
+    # proxies to be surfaced wherever they are acted on. They are backed up
+    # like anything else; the block on them applies to removal.
+    proxies = sum(
+        1
+        for _, chunk in plans
+        for asset in chunk.included
+        if float(asset.get("proxy_suspicion") or 0) >= PROXY_SUSPICION_BLOCK
+    )
     left_assets = sum(c.remaining_assets for _, c in plans)
     left_bytes = sum(c.remaining_bytes for _, c in plans)
     probe = ctx.database()
@@ -506,6 +515,7 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
         "remainingAssets": left_assets,
         "remainingBytes": left_bytes,
         "estimatedHours": round(hours, 1),
+        "suspectedProxies": proxies,
         "rateMbPerSecond": round(rate, 2) if rate else None,
         "rateIsMeasured": rate is not None,
     }
@@ -537,6 +547,13 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
                 ]
             )
             ctx.out.line()
+            if proxies:
+                ctx.out.line(
+                    f"  {proxies:,} of these look like iCloud proxies rather than "
+                    f"originals. They are backed up anyway, and can never be removed "
+                    f"from the phone.",
+                    style="muted",
+                )
             if "video" not in types:
                 ctx.out.line("  Video is excluded. Ask for it with --type video.", style="muted")
             ctx.out.line("  NOTHING HAS BEEN FETCHED. Add --apply to run it.", style="warn")

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from iphone_image.selector import (
+    PROXY_SUSPICION_BLOCK,
     Selector,
     SelectorError,
     channel_of,
@@ -105,9 +106,22 @@ def test_older_than_becomes_a_timestamp() -> None:
     assert "2025-09-14" in params[0]
 
 
-def test_proxy_suspects_are_excluded_by_default() -> None:
-    """docs/SAFETY.md section 2: suspected proxies are never acted on silently."""
+def test_proxy_suspects_are_not_excluded_by_default() -> None:
+    """This test used to assert the opposite, citing docs/SAFETY.md section 2.
+
+    That section says suspected proxies "are still backed up locally and to the
+    cloud, normally" and are blocked from *removal*. Excluding them from every
+    selector put the block on the wrong verb, and because sync uses the default
+    selector, none of the 4,224 in the real library were ever backed up. The
+    protection is in `for_removal` now, where no flag can waive it.
+    """
     sql, _ = Selector().where()
+    assert "proxy_suspicion" not in sql
+    assert "proxy_suspicion" in Selector().for_removal().where()[0]
+
+
+def test_proxy_suspects_can_still_be_excluded_on_request() -> None:
+    sql, _ = Selector(include_proxy_suspects=False).where()
     assert "proxy_suspicion" in sql
 
 
@@ -341,3 +355,75 @@ def test_the_folder_an_asset_is_filed_in_is_the_folder_its_selector_finds(db) ->
             f"--source {channel} selects {sorted(selected)} but channel_of files "
             f"{sorted(expected)} there"
         )
+
+
+# ---------------------------------------------------------------------------
+# Proxies are backed up; the block is on removal
+# ---------------------------------------------------------------------------
+
+
+def test_a_backup_selection_includes_suspected_proxies() -> None:
+    """docs/SAFETY.md section 2: they are archived normally.
+
+    A proxy is the copy most likely to be the only one left if the original is
+    ever lost, so leaving it out of the backup is the wrong way to protect it.
+    """
+    where, _ = Selector(source="camera").where()
+    assert "proxy_suspicion" not in where
+
+
+def test_removal_blocks_proxies_however_the_selector_was_built() -> None:
+    """No flag may waive it: detection is heuristic and a miss is irreversible."""
+    asked_for_them = Selector(source="camera", include_proxy_suspects=True)
+    where, _ = asked_for_them.for_removal().where()
+    assert f"a.proxy_suspicion < {PROXY_SUSPICION_BLOCK}" in where
+
+
+def test_removal_protects_favourites_however_the_selector_was_built() -> None:
+    where, _ = Selector(include_favourites=True).for_removal().where()
+    assert "a.is_favourite = 0" in where
+
+
+def test_for_removal_narrows_and_changes_nothing_else() -> None:
+    original = Selector(source="whatsapp", media_type="photo", older_than="1y", order="largest")
+    narrowed = original.for_removal()
+    assert (narrowed.source, narrowed.media_type, narrowed.older_than, narrowed.order) == (
+        "whatsapp",
+        "photo",
+        "1y",
+        "largest",
+    )
+    assert original.include_proxy_suspects is True, "for_removal must not mutate its caller"
+
+
+def test_the_scanner_flags_what_removal_blocks(db) -> None:
+    """One threshold. Two constants would make "flagged" and "blocked" drift."""
+    from iphone_image.db.database import utcnow
+    from iphone_image.scanner import proxy_suspicion
+
+    # A 4000x3000 JPEG at 409 KB, the real one from docs/SAFETY.md section 2.
+    score, evidence = proxy_suspicion({"width": 4000, "height": 3000, "sizeBytes": 409_000})
+    assert score >= PROXY_SUSPICION_BLOCK and evidence
+
+    db.conn.execute(
+        "INSERT INTO devices (id, udid, name, product_kind, first_seen_at, last_seen_at, "
+        "created_at, updated_at) VALUES (1, 'lib', 'lib', 'PhotosLibrary', ?, ?, ?, ?)",
+        (utcnow(), utcnow(), utcnow(), utcnow()),
+    )
+    db.conn.execute(
+        "INSERT INTO assets (device_id, identity_key, filename, media_type, size_bytes, "
+        "proxy_suspicion, present_on_phone, subtypes, first_seen_at, last_seen_at, "
+        "created_at, updated_at) VALUES (1, 'p', 'IMG_1.JPG', 'PHOTO', 409000, ?, 1, '[]', "
+        "?, ?, ?, ?)",
+        (score, utcnow(), utcnow(), utcnow(), utcnow()),
+    )
+
+    backup, params = Selector(source="camera").where()
+    assert (
+        db.conn.execute(f"SELECT COUNT(*) FROM assets a WHERE {backup}", params).fetchone()[0] == 1
+    )
+
+    removal, params = Selector(source="camera").for_removal().where()
+    assert (
+        db.conn.execute(f"SELECT COUNT(*) FROM assets a WHERE {removal}", params).fetchone()[0] == 0
+    )

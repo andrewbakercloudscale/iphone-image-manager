@@ -12,7 +12,7 @@ photos" a plan you can read rather than a thing you discover afterwards.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -94,6 +94,11 @@ def channel_of(asset: dict[str, Any]) -> str:
     return "unattributed"
 
 
+#: At or above this proxy_suspicion an asset is treated as SUSPECTED_PROXY.
+#: The scanner scores against the same constant, so "what the scan flagged" and
+#: "what removal blocks" cannot drift into being two different sets.
+PROXY_SUSPICION_BLOCK = 0.5
+
 MEDIA_TYPES = {"photo", "video", "live", "screenshot", "raw", "burst", "favourite"}
 
 ORDERS = {"oldest", "newest", "largest", "smallest"}
@@ -161,7 +166,13 @@ class Selector:
     max_size: str | int | None = None
     order: str = "oldest"
     include_favourites: bool = True
-    include_proxy_suspects: bool = False
+    #: Suspected iCloud proxies are *backed up* like anything else: a proxy is
+    #: the copy most likely to be the only one left if the original is ever
+    #: lost, and docs/SAFETY.md section 2 promises they are archived normally.
+    #: The block on them is a removal rule and lives in `for_removal`, which no
+    #: flag can waive. Defaulting this to false put the block on the wrong verb
+    #: and quietly left 4,224 of the user's photographs out of every backup.
+    include_proxy_suspects: bool = True
     limit: int | None = None
 
     def __post_init__(self) -> None:
@@ -229,7 +240,7 @@ class Selector:
         if not self.include_favourites:
             clauses.append("a.is_favourite = 0")
         if not self.include_proxy_suspects:
-            clauses.append("a.proxy_suspicion < 0.5")
+            clauses.append(f"a.proxy_suspicion < {PROXY_SUSPICION_BLOCK}")
 
         return " AND ".join(clauses), params
 
@@ -261,6 +272,24 @@ class Selector:
         if bundle is None:
             return f"(a.source_bundle_id IS NULL AND NOT ({CAMERA_BY_FILENAME}))", []
         return "a.source_bundle_id = ?", [bundle]
+
+    def for_removal(self) -> Selector:
+        """The same selection, with the protections removal cannot waive.
+
+        Every verb shares one selector, so a protection expressed as a default
+        is a protection any caller can turn off by passing a flag. This is the
+        narrow set that removal applies regardless of what the user asked for:
+        a suspected proxy is permanently ineligible, with no override, because
+        detection is heuristic and a false negative destroys an irreplaceable
+        original. See docs/SAFETY.md sections 2 and 6.
+
+        **This is not the whole eligibility rule.** SAFETY.md section 6 lists
+        conditions this cannot express as a selector at all, among them a fresh
+        scan, a verified local copy and a complete asset group. P10 owns those.
+        What this guarantees is only that no route into removal can reach an
+        asset the scan flagged as a proxy.
+        """
+        return replace(self, include_proxy_suspects=False, include_favourites=False)
 
     def order_by(self) -> str:
         return {

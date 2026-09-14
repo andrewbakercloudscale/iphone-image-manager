@@ -45,8 +45,8 @@ does not expose. Evidence: `spikes/P0b-photokit.md`.
 | P5 scan / list / sync | **Complete and run against the real library.** |
 | P6 dedupe, P7 cloud, P8 verify, P9 campaigns, P10 removal | Not started. |
 
-224 tests, ruff and mypy clean, CI green on macOS across Python 3.12 to 3.14.
-23 commits. Nothing uncommitted.
+230 tests, ruff and mypy clean, CI green on macOS across Python 3.12 to 3.14.
+24 commits. Nothing uncommitted.
 
 ### What has actually been fetched
 
@@ -86,7 +86,7 @@ Do not replace these with estimates; they were expensive to get.
 | Local disk read rate | > 4,000 MB/s, which is why the two must never be averaged |
 | Scan time | ~2 minutes for the whole library, zero bandwidth |
 | WhatsApp | 43,967 assets but only **15.4 GB** |
-| Camera | 20,613 assets, **124 GB** |
+| Camera | 20,713 assets, **124 GB** (20,613 excluding suspected proxies, which is what the pre-2026-09-14 selector counted) |
 | Screenshots | 7,681 assets, 6.7 GB |
 | Suspected iCloud proxies | 4,224, excluded from selection by default |
 
@@ -122,7 +122,7 @@ The selector is one vocabulary shared by `list`, `sync` and later `remove`:
 --older-than 1y   --newer-than 30d   --year 2019
 --min-size 10MB   --max-size 500KB
 --order    oldest|newest|largest|smallest
---budget   15GB   --limit N   --no-favourites
+--budget   15GB   --limit N   --no-favourites   --no-proxy-suspects
 ```
 
 ### The next chunk
@@ -162,7 +162,7 @@ years that exist only in iCloud. Interrupt freely: resume is tested.
 | Ordering | photos before video; oldest first within a type |
 | Removal sequence | fetch to Mac, review, delete from device, move to recycle bin. **No exceptions.** A `--discard` flag was proposed and rejected. |
 | Destinations | `sync` writes the archive and will mirror to cloud; `remove` writes the recycle bin and never mirrors |
-| Proxies | backed up, **permanently blocked from removal**, no override |
+| Proxies | backed up like anything else, **permanently blocked from removal**, no override. The block is applied by `Selector.for_removal()`, never by a selector default: as a default it silently removed them from backup too. |
 | iCloud sync propagation | detected; removal will need a typed confirmation |
 | Mac-side deletion | never `unlink` user media; macOS Trash via `NSFileManager.trashItem` |
 | Cloud | rclone; the tool never holds a token |
@@ -217,17 +217,13 @@ Kept because the pattern matters more than the individual bugs.
   false stall report.
 - **Proxy threshold (0.12 bytes per pixel) is calibrated from a sample**, not
   proven. 4,224 assets are currently excluded by it. Worth eyeballing some.
-- **Proxy suspects are not being backed up at all, and `docs/SAFETY.md` says
-  they should be.** Section 2 of that document promises they "are still backed
-  up locally and to the cloud, normally" and are blocked only from *removal*.
-  But `Selector.include_proxy_suspects` defaults to false and `sync` uses the
-  default, so all 4,224 are excluded from selection: **0 of them are archived**.
-  Found 2026-09-14 while verifying the channel classifier against the real
-  library. Either the default is wrong for `sync` (most likely: the protection
-  belongs on `remove`, where it is absolute) or the safety document overpromises.
-  Decide which, because at present the tool is quietly not backing up 4,224 of
-  the user's photographs — and a proxy is the copy most likely to be the only
-  one left if the original is ever lost.
+- ~~Proxy suspects are not being backed up at all.~~ **Settled 2026-09-14: the
+  protection belongs on `remove`, where it is absolute.** It had been a selector
+  default, and because `sync` uses the default selector, all 4,224 were left out
+  of every backup while `docs/SAFETY.md` section 2 promised they were archived
+  normally. Backup now reaches all 78,806 assets; `Selector.for_removal()`
+  blocks the 4,224 and no flag can waive it. Found while verifying the channel
+  classifier against the real library, not by reading the code.
 - **The 18,932 unattributed assets** are assumed to be mostly camera. The
   `IMG_*` heuristic covers 13,787 of them; the other 5,111 are uuid-named and
   currently unattributed to any channel.

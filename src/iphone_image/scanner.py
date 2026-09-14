@@ -22,6 +22,7 @@ from .journal import Journal, Op
 from .logs import get_logger
 from .photos.helper import Helper
 from .photos.library_db import LibraryDbError, SourceApps, read_source_apps
+from .selector import PROXY_SUSPICION_BLOCK
 
 log = get_logger("scanner")
 
@@ -183,7 +184,7 @@ def _upsert(
 
     result.seen += 1
     result.total_bytes += size
-    if suspicion >= 0.5:
+    if suspicion >= PROXY_SUSPICION_BLOCK:
         result.proxy_suspects += 1
     channel = bundle_id or "(unattributed)"
     result.by_channel[channel] = result.by_channel.get(channel, 0) + 1

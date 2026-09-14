@@ -42,10 +42,11 @@ def selector_options(func: F) -> F:
             "that listing shows everything; removal protects them.",
         ),
         click.option(
-            "--include-proxy-suspects",
+            "--no-proxy-suspects",
             is_flag=True,
-            help="Include assets that look like iCloud proxies. They are "
-            "excluded by default and can never be removed.",
+            help="Exclude assets that look like iCloud proxies. They are "
+            "backed up like anything else by default; what they can never be "
+            "is removed from the phone.",
         ),
         click.option("--limit", type=int, help="Stop after this many assets."),
     ]
@@ -66,6 +67,6 @@ def build_selector(**kwargs: Any) -> Selector:
         max_size=kwargs.get("max_size"),
         order=kwargs.get("order") or "oldest",
         include_favourites=not kwargs.get("no_favourites"),
-        include_proxy_suspects=bool(kwargs.get("include_proxy_suspects")),
+        include_proxy_suspects=not kwargs.get("no_proxy_suspects"),
         limit=kwargs.get("limit"),
     )
