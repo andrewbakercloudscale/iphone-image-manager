@@ -5,6 +5,23 @@ Plan of record for delivering `docs/SPEC.md`.
 **Status:** P0 not started. Nothing below P0 is committed, because P0 decides it.
 **Last updated:** 2026-09-14
 
+### Decisions taken
+
+| # | Decision | Choice |
+|---|---|---|
+| 1 | iCloud optimized proxies | Back up, permanently block from removal, no override flag |
+| 2 | iCloud Photos sync propagation | Detect, state it in the plan, require a typed confirmation for `--apply` |
+| 3 | WhatsApp cleanup | Review-only with per-batch approval, not a confidence-gated policy |
+| 4 | Release cut | Four releases, v0.1 through v1.0, removal last |
+| 5 | Unobtainable metadata | Best-effort inference, never a removal precondition |
+| 6 | Reverse geocoding | Offline bundled dataset, no network |
+| 7 | Cloud transport | Shell out to rclone, the tool never holds a token |
+| 8 | Exact duplicate storage | One archive file per unique SHA256, N asset rows |
+| 9 | Python baseline | 3.12 floor, CI on 3.12 and 3.14 |
+| 10 | Distribution | Homebrew tap, signed and notarised helper |
+| 11 | Deletion recoverability | Nothing is unlinked. See section 6. |
+| 12 | `local_objects` table | Dropped, `asset_resources` covers it |
+
 ---
 
 ## 1. The decision that shapes everything else
@@ -104,7 +121,8 @@ Repository scaffolding, config, database, journal.
 **Exit:** `config validate` and an empty `status` run green on a clean machine.
 
 ### P2. Device layer
-- `iimhelper` Swift package: `enumerate`, `download`, `delete`, `info` subcommands,
+- `iimhelper` Swift package: `enumerate`, `download`, `delete`, `trash`, `info`
+  subcommands (`trash` wraps `NSFileManager.trashItem` for rule A in section 6),
   JSON Lines on stdout, non-zero exit on every failure path.
 - Python `DeviceBackend` protocol with three implementations: `ImageCaptureBackend`,
   `AfcBackend` (read only), `FakeDeviceBackend` (tests).
@@ -145,6 +163,8 @@ committed as a test, so a classifier regression is visible.
   derived path segment.
 - Collision handling: `IMG_1234__A1B2C3D4.HEIC`, suffix from the content hash.
 - Metadata preservation, spec section 37, including file mtime from capture date.
+- Replacing a hash-mismatched archive file sends the old one to the Trash, never
+  unlinks it. Scratch `.partial` files are unlinked.
 - Reverse geocoding with an on-disk cache and an off switch.
 
 **Exit:** kill -9 at 50 percent, rerun, and the result is byte identical to an
@@ -152,6 +172,7 @@ uninterrupted run. This is a test, not a manual check.
 
 ### P6. Exact deduplication
 - `duplicate_groups`, canonical asset selection, `clean duplicates`.
+- One archive file per unique SHA256. Collapsed duplicates go to the Trash.
 - Distinct logical asset rows are preserved even when content is identical, per
   spec section 35.
 
@@ -191,9 +212,13 @@ Gated: the harness in `tests/destructive/` must exist and pass before
   leaves an accurate ledger.
 - Resume, idempotence, and "already gone" treated as success not error.
 - Group-aware deletion: all resources of a logical asset, or none.
+- Recycle bin entry written and fsynced **before** the device deletion call, so a
+  crash between the two leaves a record rather than a hole.
+- `recycle-bin list|restore|empty`.
 
 **Exit:** all eight destructive scenarios from spec section 52 pass against the fake
-backend, and a full cycle runs clean on a dedicated test iPhone.
+backend, every removed asset has a recycle bin entry that `restore` can resolve to
+readable bytes, and a full cycle runs clean on a dedicated test iPhone.
 
 ### P11. Release
 Install docs, helper signing and notarisation, Homebrew tap, README with real output,
@@ -206,7 +231,7 @@ CHANGELOG, issue templates.
 Found while reviewing the spec. Each needs a decision. Resolutions marked
 **[settled]** have been agreed already.
 
-### 1. WhatsApp cleanup cannot reach HIGH confidence
+### 1. WhatsApp cleanup cannot reach HIGH confidence **[settled]**
 Spec section 7.6 ranks source bundle identifier as the best evidence, and section
 7.4 says destructive policies default to HIGH confidence only. The source bundle id
 lives in `Photos.sqlite`, inside the device's protected app data, and is not
@@ -218,7 +243,7 @@ Net effect: WhatsApp classification tops out at MEDIUM, so under the spec's own 
 `clean whatsapp` would never produce a removable asset. The feature would ship
 inert.
 
-**Proposed:** WhatsApp cleanup is review-only in v1. It presents candidates with
+**Settled:** WhatsApp cleanup is review-only in v1. It presents candidates with
 per-asset evidence and requires explicit per-asset or per-batch approval, rather
 than running as a confidence-gated policy. Screenshot cleanup, which genuinely does
 reach HIGH, remains policy driven. Document the limitation in the README rather
@@ -233,41 +258,99 @@ permanently, and surface the list explicitly. No override flag in v1. See
 Detect, state the consequence in the removal plan, require a typed confirmation
 phrase for `--apply`. See `docs/SAFETY.md` section 3.
 
-### 4. Spec section 7.3 lists metadata that is not obtainable
+### 4. Spec section 7.3 lists metadata that is not obtainable **[settled]**
 Album metadata, source application metadata and burst relationships are
 `Photos.sqlite` residents. Edited-version relationships are partially inferable from
 `.AAE` sidecars. Burst membership is partially inferable from filename and
 sub-second capture time.
 
-**Proposed:** mark these as best-effort in the schema, populate from inference where
+**Settled:** mark these as best-effort in the schema, populate from inference where
 possible with recorded evidence, and never let a removal precondition depend on
 them. Confirm the exact list in P0 question 2.
 
-### 5. "Estimated storage recovered" is misleading
+### 5. "Estimated storage recovered" is misleading **[settled]**
 Spec section 21 shows `183.7 GB` as if removal frees it immediately. iOS holds
 deleted assets in Recently Deleted for up to 30 days.
 
-**Proposed:** reword to "storage reclaimed once Recently Deleted is emptied, up to
+**Settled:** reword to "storage reclaimed once Recently Deleted is emptied, up to
 30 days", and tell the user after a removal run that the window is their undo.
 
 ### 6. Section 27 lists `local_objects` but sections 29 and 30 fold local state into
-`assets` and `asset_resources`
+`assets` and `asset_resources` **[settled]**
 Two representations of the same thing.
 
-**Proposed:** drop `local_objects`. `asset_resources` already carries `local_path`,
+**Settled:** drop `local_objects`. `asset_resources` already carries `local_path`,
 `local_status` and `sha256` at the right grain, and resource-level state is what
 group-aware removal actually needs.
 
-### 7. Section 53's twenty items as one release
+### 7. Section 53's twenty items as one release **[settled]**
 Covered in section 3 above. Cut into v0.1 through v1.0 so removal lands last.
 
-### 8. Python baseline
+### 8. Python baseline **[settled]**
 `requires-python = ">=3.12"`. The local interpreter is 3.14 and `pillow-heif` has
 3.14 wheels, but 3.12 is the conservative floor for contributors and CI runs both.
 
 ---
 
-## 6. Risk register
+## 6. Deletion is always recoverable
+
+Added after the specification was written. It splits into two separate rules that
+are easy to conflate.
+
+### Rule A: the tool never unlinks user media on the Mac
+
+Any file containing user media that the tool removes from the Mac goes to the macOS
+Trash via `NSFileManager.trashItem`, never `unlink`. It is then restorable by the
+user from Finder in the ordinary way, and on an external archive volume it lands in
+that volume's `.Trashes`.
+
+This applies to:
+
+- a duplicate archive file collapsed by `clean duplicates`;
+- an archive file replaced because its hash no longer matches;
+- any archive pruning the user initiates.
+
+It deliberately does **not** apply to scratch files: `.partial` fragments, a failed
+download, or a corrupt temp file are not user media and are unlinked directly.
+Trashing them would bury the Trash in junk and make the feature useless when it
+actually matters.
+
+### Rule B: removal from the iPhone leaves a recycle bin record on the Mac
+
+When an asset is removed from the device, the tool writes a recycle bin entry at
+`<recycle_bin.path>/<campaign>/<date>/` holding:
+
+- a hard link to the verified archive file, so the entry costs no extra disk on the
+  same volume, and a copy when the archive is on a different volume;
+- a JSON manifest row with the asset id, device asset id, original device path,
+  SHA256, capture date, classification, the evidence that made it eligible, and the
+  removal timestamp.
+
+This gives a real answer to "what did I take off the phone in September, and where
+are those files now", which the archive alone cannot answer once the asset is gone
+from the device.
+
+`recycle-bin list` shows entries, `recycle-bin restore` copies files back out to a
+chosen folder, and `recycle-bin empty` clears entries past the retention window.
+Restore puts files on the Mac. It does **not** push media back onto the iPhone;
+that is out of scope and the command says so.
+
+### Configuration
+
+```yaml
+recycle_bin:
+  enabled: true
+  path: "~/.iphone-image/recycle-bin"
+  retention: 90d              # or: never
+  use_macos_trash: true       # Rule A. Turning this off is not recommended.
+```
+
+Both rules are on by default. Neither can be disabled by a command line flag, only
+by config, and `config validate` warns when either is off.
+
+---
+
+## 7. Risk register
 
 | Risk | Impact | Mitigation |
 |---|---|---|
@@ -278,11 +361,12 @@ Covered in section 3 above. Cut into v0.1 through v1.0 so removal lands last.
 | Helper binary blocked by Gatekeeper on other Macs | Nobody outside this machine can run it | Signing and notarisation scoped into P11, distribution tested on a second Mac |
 | WhatsApp classification ships inert | Advertised feature does nothing | Conflict 1 resolution, and honest README wording |
 | Deletion bug found only on a real library | Catastrophic and public | Fake backend plus dedicated test iPhone, harness before feature, P10 gate |
-| Reverse geocoding leaks location data to a third party | Privacy violation in a privacy-first tool | Off by default for the first run, cached locally, provider named explicitly in config |
+| Reverse geocoding leaks location data to a third party | Privacy violation in a privacy-first tool | Offline bundled dataset, no network call at all |
+| A bug unlinks archive files instead of trashing them | User media gone with no Finder undo | Single choke point for media deletion, asserted by test, direct `unlink` of archive paths banned by a lint rule |
 
 ---
 
-## 7. Testing
+## 8. Testing
 
 - **Unit**, per spec section 51: hashing, path generation, retention arithmetic,
   eligibility rules, campaign membership, collision suffixes.
@@ -298,7 +382,7 @@ Covered in section 3 above. Cut into v0.1 through v1.0 so removal lands last.
 
 ---
 
-## 8. Conventions
+## 9. Conventions
 
 - One logical change per commit. No pushes without explicit instruction.
 - Every gate fails loudly. A checker that cannot run exits non-zero and says why.

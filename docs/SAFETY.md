@@ -86,11 +86,45 @@ Two consequences:
   an immediate figure.
 - There is a 30 day window in which a mistaken removal can be undone from the
   phone. The tool tells the user this after a removal run, because it is the single
-  most useful piece of recovery information at that moment.
+  most useful piece of recovery information at that moment. It is not the only one:
+  see section 5 for the Mac side.
 
 ---
 
-## 5. Evidence based eligibility
+## 5. Nothing is unlinked, on either side
+
+There are two separate undo paths and they are easy to confuse.
+
+**On the phone**, iOS gives you Recently Deleted, covered in section 4 above.
+
+**On the Mac**, two rules apply:
+
+- The tool never `unlink`s a file containing user media. Anything it removes from
+  the Mac goes to the macOS Trash, restorable from Finder. That covers duplicate
+  archive files collapsed by `clean duplicates`, an archive file replaced because
+  its hash stopped matching, and any archive pruning you ask for. Scratch files,
+  meaning `.partial` fragments and failed downloads, are unlinked directly, because
+  filling the Trash with junk is how a safety feature stops being used.
+- Every asset removed from the iPhone leaves a recycle bin entry on the Mac, under
+  `~/.iphone-image/recycle-bin/<campaign>/<date>/`. The entry hard links the
+  verified archive file, so it costs no extra disk, and records a manifest row with
+  the asset id, original device path, SHA256, capture date, classification, the
+  evidence that made it eligible, and when it was removed.
+
+The recycle bin entry is written and flushed to disk **before** the deletion call
+reaches the device. A crash between the two leaves a spare record, never a hole.
+
+`iphone-image recycle-bin list | restore | empty`. Restore puts files back on the
+Mac. It does not push media back onto the iPhone, and the command says so rather
+than implying otherwise.
+
+Retention defaults to 90 days and can be set to `never` to keep entries forever.
+Both rules are configured in `recycle_bin:` and neither has a command line
+override.
+
+---
+
+## 6. Evidence based eligibility
 
 An asset is only eligible for removal when the database holds positive evidence for
 every condition the configured policy requires. Never a filename, never a path,
@@ -113,7 +147,7 @@ acceptable output.
 
 ---
 
-## 6. Mandatory final reconciliation
+## 7. Mandatory final reconciliation
 
 A removal plan is always computed against a scan taken in that same invocation.
 Stale database state is never used to authorize deletion. If the device disconnects
@@ -121,7 +155,7 @@ during the final scan, no plan is produced.
 
 ---
 
-## 7. Removal happens through Apple's API, not by unlinking files
+## 8. Removal happens through Apple's API, not by unlinking files
 
 Deleting files directly from the device filesystem over AFC removes the bytes but
 leaves the on-device Photos database referencing assets that no longer exist. That
@@ -132,7 +166,7 @@ own Image Capture application uses, so iOS maintains its own consistency.
 
 ---
 
-## 8. Never tested first on a real library
+## 9. Never tested first on a real library
 
 Removal code is developed against a fake device backend and a dedicated test iPhone.
 The destructive test harness is a prerequisite for the removal feature, not a

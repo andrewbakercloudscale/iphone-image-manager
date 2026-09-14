@@ -96,6 +96,14 @@ Two specific hazards it is built around, both documented in
 2. **iCloud Photos sync.** Deleting on the phone deletes from iCloud and every other
    device. Removal requires a typed confirmation while sync is active.
 
+And two undo paths, because deletion should never be a one way door:
+
+- Anything removed from the phone leaves a **recycle bin entry on your Mac**, with
+  the file and a record of why it was eligible. `iphone-image recycle-bin restore`
+  brings it back.
+- The tool never unlinks archive files. They go to the macOS **Trash**, restorable
+  from Finder.
+
 ---
 
 ## Design goals
