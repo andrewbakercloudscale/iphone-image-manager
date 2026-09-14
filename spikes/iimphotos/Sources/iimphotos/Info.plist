@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>consulting.cloudscale.iimphotos</string>
+  <key>CFBundleName</key>
+  <string>iimphotos</string>
+  <key>CFBundleExecutable</key>
+  <string>iimphotos</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.0.1</string>
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>iPhone Image Manager reads your Photos library to inventory, back up and verify your media. This spike is read-only unless you explicitly pass --test-delete-roundtrip, which creates and then deletes a 1x1 test image of its own.</string>
+</dict>
+</plist>
