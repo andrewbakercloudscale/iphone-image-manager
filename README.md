@@ -34,6 +34,9 @@ refuses deletion outright. The tool now works through PhotoKit against the Mac's
 Photos library instead, which also supplies the source application per asset, so
 "clean up WhatsApp images" became exact rather than a filename guess.
 
+**Picking this up mid-project?** Start with [`HANDOVER.md`](HANDOVER.md): current
+state, measured numbers, decisions already taken, and the mistakes that shaped them.
+
 Read [`docs/SAFETY.md`](docs/SAFETY.md) first if you care about not losing
 photographs. It is the shortest document and the one that matters.
 
