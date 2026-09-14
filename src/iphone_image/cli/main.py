@@ -16,6 +16,7 @@ from typing import Any
 import click
 
 from .. import __version__
+from .. import relocate as relocate_engine
 from .. import sync as sync_engine
 from ..config import (
     DEFAULT_CONFIG_PATH,
@@ -46,6 +47,11 @@ archive:
 organization:
   mode: date                  # date | location | custom
   pattern: "{year}/{month}"
+  # Tokens: {source} {year} {month} {day} {type} {device}
+  #         {country} {region} {city} {suburb} {camera_make} {camera_model}
+  # {source} is the channel as --source names it: camera, whatsapp, screenshot.
+  # Changing this only changes where new assets land. Run `iphone-image relocate`
+  # to move what is already archived.
 
 geolocation:
   enabled: true
@@ -621,6 +627,131 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
 
     ctx.out.result(data, render_result)
     if total.failed:
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# relocate
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option(
+    "--apply",
+    "apply_",
+    is_flag=True,
+    help="Actually move the files. Without this, relocate only shows the plan.",
+)
+@click.option("--show", type=int, default=10, show_default=True, help="How many moves to print.")
+@pass_context
+def relocate(ctx: Context, apply_: bool, show: int) -> None:
+    """Re-file the archive to match the configured root and pattern.
+
+    Change `archive.local_path` or `organization.pattern` first, then run this:
+    it moves what is already archived to where the tool would put it now, and
+    rewrites the ledger to match.
+
+    Files are renamed, never copied and deleted, so this is instant on one
+    volume and refused across two. Interrupting is safe: the ledger is updated
+    per file, so re-running finishes the job.
+    """
+    config = ctx.config
+    db = ctx.database()
+    try:
+        moves, preview = relocate_engine.plan(config, db)
+    finally:
+        db.close()
+
+    data: dict[str, Any] = {
+        "applied": apply_,
+        "root": str(config.archive.local_path),
+        "pattern": config.organization.pattern,
+        "examined": preview.examined,
+        "alreadyInPlace": preview.already_in_place,
+        "planned": preview.planned,
+        "missing": preview.missing,
+        "bytes": sum(m.size_bytes for m in moves),
+        "sample": [{"from": str(m.source), "to": str(m.destination)} for m in moves[:show]],
+    }
+
+    def render_common() -> None:
+        ctx.out.pairs(
+            [
+                ("archive root", str(config.archive.local_path)),
+                ("pattern", config.organization.pattern),
+            ]
+        )
+        ctx.out.line()
+        for move in moves[:show]:
+            ctx.out.line(f"    {move.source}", style="muted")
+            ctx.out.line(f"      -> {move.destination}")
+        if preview.planned > show:
+            ctx.out.line(f"    ... and {preview.planned - show:,} more", style="muted")
+
+    if not apply_:
+
+        def render_plan() -> None:
+            ctx.out.title("Relocation plan")
+            render_common()
+            ctx.out.line()
+            ctx.out.pairs(
+                [
+                    ("archived files", f"{preview.examined:,}"),
+                    ("already in place", f"{preview.already_in_place:,}"),
+                    ("to move", f"{preview.planned:,}, {human_bytes(data['bytes'])}"),
+                    ("recorded but not on disk", f"{preview.missing:,}"),
+                ]
+            )
+            ctx.out.line()
+            if preview.missing:
+                ctx.out.warn(
+                    f"{preview.missing:,} asset(s) are recorded as archived but their file "
+                    f"is gone. relocate leaves them alone; the next sync fetches them again."
+                )
+            if not preview.planned:
+                ctx.out.ok("nothing to move, the archive already matches the configuration")
+                return
+            ctx.out.line("  NOTHING HAS MOVED. Add --apply to run it.", style="warn")
+
+        ctx.out.result(data, render_plan)
+        return
+
+    result = relocate_engine.run(config)
+    data.update(
+        {
+            "moved": result.moved,
+            "failed": result.failed,
+            "missing": result.missing,
+            "bytesMoved": result.bytes_moved,
+            "directoriesRemoved": result.directories_removed,
+            "failures": result.failures[:20],
+        }
+    )
+
+    def render_result() -> None:
+        ctx.out.title("Relocation")
+        render_common()
+        ctx.out.line()
+        ctx.out.pairs(
+            [
+                ("moved", f"{result.moved:,} files, {human_bytes(result.bytes_moved)}"),
+                ("already in place", f"{result.already_in_place:,}"),
+                ("recorded but not on disk", f"{result.missing:,}"),
+                ("failed", f"{result.failed:,}"),
+                ("empty folders removed", f"{result.directories_removed:,}"),
+            ]
+        )
+        if result.failures:
+            ctx.out.line()
+            ctx.out.line("  Failures", style="head")
+            for failure in result.failures[:10]:
+                ctx.out.line(f"    {failure['file']}", style="warn")
+                ctx.out.line(f"      {failure['error']}", style="warn")
+        ctx.out.line()
+        ctx.out.line("  Files were renamed, not copied. Nothing was deleted.", style="muted")
+
+    ctx.out.result(data, render_result)
+    if result.failed:
         sys.exit(1)
 
 

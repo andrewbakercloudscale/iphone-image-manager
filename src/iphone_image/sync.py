@@ -32,7 +32,7 @@ from .journal import Journal, Op
 from .logs import get_logger
 from .organize.paths import render_pattern, unique_filename
 from .photos.helper import Helper
-from .selector import ChunkPlan, Selector, plan_chunk
+from .selector import ChunkPlan, Selector, channel_of, plan_chunk
 
 log = get_logger("sync")
 
@@ -151,6 +151,7 @@ def archive_path_for(config: Config, asset: dict[str, Any]) -> Path:
     """Where this asset belongs in the archive, per the configured pattern."""
     created = asset.get("created_at_device") or ""
     values: dict[str, str | None] = {
+        "source": channel_of(asset),
         "year": created[:4] or None,
         "month": created[5:7] or None,
         "day": created[8:10] or None,

@@ -45,6 +45,55 @@ CHANNELS: dict[str, str | None] = {
     "unattributed": None,
 }
 
+#: The camera rule for an asset with no source app, written once because two
+#: clauses depend on it being the same rule: `--source camera` claims what it
+#: matches and `--source unattributed` claims exactly what it does not.
+#:
+#: COALESCE on both columns is load-bearing. Without it a NULL filename makes
+#: the comparison NULL, NOT NULL is NULL, and the asset falls out of *both*
+#: channels: filed in a folder no selector returns.
+CAMERA_BY_FILENAME = (
+    "COALESCE(a.filename, '') LIKE 'IMG\\_%' ESCAPE '\\' "
+    "AND COALESCE(a.subtypes, '') NOT LIKE '%screenshot%'"
+)
+
+#: Bundle id back to the friendly name. Derived from CHANNELS rather than
+#: written out again, so the two directions cannot drift apart.
+BY_BUNDLE_ID: dict[str, str] = {
+    bundle: name for name, bundle in CHANNELS.items() if bundle is not None
+}
+
+
+def channel_of(asset: dict[str, Any]) -> str:
+    """Which channel an asset belongs to, named as `--source` names it.
+
+    This is the reading direction of the rule `Selector._source_clause`
+    compiles to SQL, and the two have to agree. An asset filed under
+    `camera/` that `--source camera` does not select would be an archive
+    laid out by one rule and searched by another, and the disagreement
+    would only ever show up as photographs apparently missing.
+
+    `tests/test_selector.py` asserts the agreement against the real schema
+    rather than trusting this comment.
+    """
+    bundle = asset.get("source_bundle_id")
+    if bundle:
+        # An app we have no friendly name for keeps its bundle id, which is
+        # still a working selector: `--source com.example.app`.
+        return BY_BUNDLE_ID.get(bundle, str(bundle))
+
+    # No source app recorded. iOS only began attributing the camera around
+    # 2024-08, so the older originals arrive here and the filename is the only
+    # evidence left. SQLite's LIKE is case-insensitive over ASCII, so match
+    # that: filing IMG_1.JPG and img_1.jpg in two different folders while one
+    # selector returned both would be the same disagreement in miniature.
+    filename = str(asset.get("filename") or "")
+    subtypes = str(asset.get("subtypes") or "")
+    if filename.upper().startswith("IMG_") and "screenshot" not in subtypes.lower():
+        return "camera"
+    return "unattributed"
+
+
 MEDIA_TYPES = {"photo", "video", "live", "screenshot", "raw", "burst", "favourite"}
 
 ORDERS = {"oldest", "newest", "largest", "smallest"}
@@ -193,18 +242,24 @@ class Selector:
         carried no source app at all. Matching the bundle id alone would have
         missed 39 GB of someone's own photographs, which is the worst possible
         way for a backup filter to be wrong.
+
+        `unattributed` is then the exact complement of that rule, not simply
+        "no source app". Both readings are defensible in a filter, but only one
+        is defensible in a folder: the archive files each asset under one
+        channel, so asking for unattributed and being handed 13,787 camera
+        originals that `--source camera` also returns would put the same
+        photograph in two places. Channels partition the library.
         """
         assert self.source is not None
         if self.source.strip().lower() == "camera":
             return (
-                "(a.source_bundle_id = ? OR (a.source_bundle_id IS NULL "
-                "AND a.filename LIKE 'IMG\\_%' ESCAPE '\\' "
-                "AND COALESCE(a.subtypes, '') NOT LIKE '%screenshot%'))",
+                f"(a.source_bundle_id = ? OR (a.source_bundle_id IS NULL "
+                f"AND {CAMERA_BY_FILENAME}))",
                 ["com.apple.camera"],
             )
         bundle = resolve_channel(self.source)
         if bundle is None:
-            return "a.source_bundle_id IS NULL", []
+            return f"(a.source_bundle_id IS NULL AND NOT ({CAMERA_BY_FILENAME}))", []
         return "a.source_bundle_id = ?", [bundle]
 
     def order_by(self) -> str:

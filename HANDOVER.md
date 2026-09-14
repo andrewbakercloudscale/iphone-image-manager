@@ -45,24 +45,31 @@ does not expose. Evidence: `spikes/P0b-photokit.md`.
 | P5 scan / list / sync | **Complete and run against the real library.** |
 | P6 dedupe, P7 cloud, P8 verify, P9 campaigns, P10 removal | Not started. |
 
-208 tests, ruff and mypy clean, CI green on macOS across Python 3.12 to 3.14.
-20 commits. Nothing uncommitted.
+224 tests, ruff and mypy clean, CI green on macOS across Python 3.12 to 3.14.
+23 commits. Nothing uncommitted.
 
 ### What has actually been fetched
 
 ```
-archive   ~/Pictures/iPhoneArchive   16 GB, 6,371 files, {year}/{month}
-ledger    ~/.iphone-image/iphone-image.sqlite
+archive   ~/Desktop/iphone           31 GB, 11,395 files, {source}/{year}/{month}
+ledger    ~/Desktop/iphone/iphone-image.sqlite
 config    ~/.iphone-image/config.yaml
 logs      ~/.iphone-image/logs/iphone-image.log
 
-PHOTO  LOCAL_VERIFIED    6,371    15.7 GB     done
-PHOTO  DISCOVERED       70,132    58.5 GB     to do
+PHOTO  LOCAL_VERIFIED   11,395    30.9 GB     done, all camera
+PHOTO  DISCOVERED       65,108    43.3 GB     to do
 VIDEO  DISCOVERED        2,303    83.5 GB     untouched, needs --type video
 ```
 
-All 6,371 archived files were re-hashed from disk and matched their recorded
-SHA256 exactly. Zero partials, zero failures.
+All 11,395 archived files were re-hashed from disk after the move and matched
+their recorded SHA256 exactly. Zero partials, zero failures.
+
+The archive moved out of `~/Pictures/iPhoneArchive` and the ledger out of
+`~/.iphone-image/` on 2026-09-14, and the layout gained a channel level, so
+each source lands in its own folder: `camera/2019/03/`, `whatsapp/2024/11/`.
+`iphone-image relocate` is what performs that move; it renames rather than
+copies, so it is instant on one volume and refused across two. Logs and the
+run-chunk state file stayed in `~/.iphone-image/`.
 
 ---
 
@@ -210,6 +217,17 @@ Kept because the pattern matters more than the individual bugs.
   false stall report.
 - **Proxy threshold (0.12 bytes per pixel) is calibrated from a sample**, not
   proven. 4,224 assets are currently excluded by it. Worth eyeballing some.
+- **Proxy suspects are not being backed up at all, and `docs/SAFETY.md` says
+  they should be.** Section 2 of that document promises they "are still backed
+  up locally and to the cloud, normally" and are blocked only from *removal*.
+  But `Selector.include_proxy_suspects` defaults to false and `sync` uses the
+  default, so all 4,224 are excluded from selection: **0 of them are archived**.
+  Found 2026-09-14 while verifying the channel classifier against the real
+  library. Either the default is wrong for `sync` (most likely: the protection
+  belongs on `remove`, where it is absolute) or the safety document overpromises.
+  Decide which, because at present the tool is quietly not backing up 4,224 of
+  the user's photographs — and a proxy is the copy most likely to be the only
+  one left if the original is ever lost.
 - **The 18,932 unattributed assets** are assumed to be mostly camera. The
   `IMG_*` heuristic covers 13,787 of them; the other 5,111 are uuid-named and
   currently unattributed to any channel.

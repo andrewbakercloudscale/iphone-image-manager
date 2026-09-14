@@ -7,6 +7,7 @@ import pytest
 from iphone_image.selector import (
     Selector,
     SelectorError,
+    channel_of,
     parse_size,
     plan_chunk,
     resolve_channel,
@@ -230,3 +231,113 @@ def test_other_channels_stay_exact() -> None:
     sql, params = Selector(source="whatsapp").where()
     assert "OR" not in sql.split("source_bundle_id")[1][:40]
     assert params == ["net.whatsapp.WhatsApp"]
+
+
+# ---------------------------------------------------------------------------
+# channel_of, and its agreement with what --source actually selects
+# ---------------------------------------------------------------------------
+
+
+def test_channel_of_names_the_importing_app() -> None:
+    assert channel_of({"source_bundle_id": "net.whatsapp.WhatsApp"}) == "whatsapp"
+    assert channel_of({"source_bundle_id": "com.apple.camera"}) == "camera"
+    assert channel_of({"source_bundle_id": "com.apple.springboard"}) == "screenshot"
+
+
+def test_channel_of_keeps_an_unknown_bundle_id_because_it_is_still_a_selector() -> None:
+    assert channel_of({"source_bundle_id": "com.example.app"}) == "com.example.app"
+
+
+def test_channel_of_reads_the_camera_heuristic_the_same_way_the_sql_writes_it() -> None:
+    """iOS only attributed the camera from ~2024-08; older originals have no app."""
+    assert channel_of({"source_bundle_id": None, "filename": "IMG_1234.JPG"}) == "camera"
+    # SQLite's LIKE is case-insensitive over ASCII, so this must be too.
+    assert channel_of({"source_bundle_id": None, "filename": "img_1234.jpg"}) == "camera"
+    # A screenshot with no source app is not a camera original.
+    assert (
+        channel_of(
+            {"source_bundle_id": None, "filename": "IMG_1234.PNG", "subtypes": '["screenshot"]'}
+        )
+        == "unattributed"
+    )
+    assert channel_of({"source_bundle_id": None, "filename": "9F2C-8821.HEIC"}) == "unattributed"
+
+
+CHANNEL_CASES = [
+    {"identity_key": "a", "filename": "IMG_1.JPG", "source_bundle_id": "com.apple.camera"},
+    {"identity_key": "b", "filename": "IMG_2.JPG", "source_bundle_id": None},
+    {"identity_key": "c", "filename": "img_3.jpg", "source_bundle_id": None},
+    {"identity_key": "d", "filename": "9F2C-8821.HEIC", "source_bundle_id": None},
+    {
+        "identity_key": "e",
+        "filename": "IMG_5.PNG",
+        "source_bundle_id": None,
+        "subtypes": '["screenshot"]',
+    },
+    {"identity_key": "f", "filename": "WA0007.jpg", "source_bundle_id": "net.whatsapp.WhatsApp"},
+    {"identity_key": "g", "filename": "IMG_7.PNG", "source_bundle_id": "com.apple.springboard"},
+    {"identity_key": "h", "filename": "IMG_8.JPG", "source_bundle_id": "com.example.app"},
+    # No filename and no source app. Without COALESCE in the SQL this asset
+    # falls out of every channel and is filed where nothing can find it.
+    {"identity_key": "i", "filename": None, "source_bundle_id": None},
+]
+
+
+def test_the_folder_an_asset_is_filed_in_is_the_folder_its_selector_finds(db) -> None:
+    """The archive is laid out by channel_of and searched by --source.
+
+    If those two ever disagree, an asset sits in camera/ that `--source camera`
+    does not return, and the only symptom is photographs that appear to be
+    missing. So this asserts the agreement against the real schema rather than
+    against a second copy of the rule.
+    """
+    from iphone_image.db.database import utcnow
+
+    db.conn.execute(
+        "INSERT INTO devices (id, udid, name, product_kind, first_seen_at, last_seen_at, "
+        "created_at, updated_at) VALUES (1, 'lib', 'lib', 'PhotosLibrary', ?, ?, ?, ?)",
+        (utcnow(), utcnow(), utcnow(), utcnow()),
+    )
+    for case in CHANNEL_CASES:
+        values = {
+            "device_id": 1,
+            "media_type": "PHOTO",
+            "created_at_device": "2019-03-04T10:00:00+00:00",
+            "size_bytes": 16,
+            "subtypes": "[]",
+            "present_on_phone": 1,
+            "first_seen_at": utcnow(),
+            "last_seen_at": utcnow(),
+            "created_at": utcnow(),
+            "updated_at": utcnow(),
+            **case,
+        }
+        columns = ", ".join(values)
+        db.conn.execute(
+            f"INSERT INTO assets ({columns}) VALUES ({', '.join('?' for _ in values)})",
+            list(values.values()),
+        )
+
+    rows = [dict(r) for r in db.conn.execute("SELECT * FROM assets").fetchall()]
+    filed = {row["identity_key"]: channel_of(row) for row in rows}
+    assert set(filed.values()) == {
+        "camera",
+        "unattributed",
+        "whatsapp",
+        "screenshot",
+        "com.example.app",
+    }
+
+    for channel in sorted(set(filed.values())):
+        where, params = Selector(source=channel).where()
+        selected = {
+            r["identity_key"]
+            for r in db.conn.execute(
+                f"SELECT identity_key FROM assets a WHERE {where}", params
+            ).fetchall()
+        }
+        expected = {key for key, value in filed.items() if value == channel}
+        assert selected == expected, (
+            f"--source {channel} selects {sorted(selected)} but channel_of files "
+            f"{sorted(expected)} there"
+        )

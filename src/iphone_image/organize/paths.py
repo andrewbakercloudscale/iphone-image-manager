@@ -9,11 +9,13 @@ result is always a relative path.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
 #: Tokens a user may write in an organization pattern.
 PATTERN_TOKENS: frozenset[str] = frozenset(
     {
+        "source",
         "year",
         "month",
         "day",
@@ -31,6 +33,7 @@ PATTERN_TOKENS: frozenset[str] = frozenset(
 #: What to use when the metadata for a token is missing. The specification names
 #: "Unknown Date", "Unknown Location" and "Unknown City" explicitly.
 FALLBACKS: dict[str, str] = {
+    "source": "Unknown Source",
     "year": "Unknown Date",
     "month": "Unknown Date",
     "day": "Unknown Date",
@@ -136,7 +139,13 @@ def render_pattern(pattern: str, values: dict[str, str | None]) -> PurePosixPath
     return PurePosixPath(*collapsed)
 
 
-def unique_filename(directory: Path, filename: str, content_hash: str) -> str:
+def unique_filename(
+    directory: Path,
+    filename: str,
+    content_hash: str,
+    *,
+    taken: Callable[[Path], bool] | None = None,
+) -> str:
     """A filename that does not collide with an unrelated file in `directory`.
 
     The suffix comes from the content hash, so two different assets that happen
@@ -147,9 +156,17 @@ def unique_filename(directory: Path, filename: str, content_hash: str) -> str:
     recorded yet. An asset already in the database uses its stored path, so a
     resumed sync overwrites nothing and creates no second copy. Assets with
     identical content share one archive file and never reach this function.
+
+    `taken` decides whether a name is unavailable, and defaults to "a file is
+    already there". A caller planning several moves at once has to answer that
+    differently: a name is also taken when an earlier move in the same plan has
+    claimed it, and *not* taken when the file sitting there is itself about to
+    move away. Planning against the filesystem alone would hand the same
+    destination to two assets.
     """
+    is_taken = taken if taken is not None else (lambda path: path.exists())
     candidate = sanitize_segment(filename, fallback="unnamed")
-    if not (directory / candidate).exists():
+    if not is_taken(directory / candidate):
         return candidate
 
     stem, dot, ext = candidate.rpartition(".")
@@ -162,7 +179,7 @@ def unique_filename(directory: Path, filename: str, content_hash: str) -> str:
         if length == 0:
             break
         probe = f"{stem}__{digest[:length]}{suffix}"
-        if not (directory / probe).exists():
+        if not is_taken(directory / probe):
             return probe
 
     # Content hash exhausted, which means a genuinely different file is already
@@ -170,6 +187,6 @@ def unique_filename(directory: Path, filename: str, content_hash: str) -> str:
     counter = 1
     while True:
         probe = f"{stem}__{digest[:8]}-{counter}{suffix}"
-        if not (directory / probe).exists():
+        if not is_taken(directory / probe):
             return probe
         counter += 1

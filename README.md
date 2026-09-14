@@ -186,9 +186,13 @@ the full-resolution originals in iCloud, where iPhone Image Manager fetches them
 **one asset at a time, on demand**, in budgeted chunks:
 
 ```bash
-iphone-image sync --source camera --type photo \
-    --order oldest --budget 50GB --pattern "{year}/{month}"
+iphone-image sync --source camera --type photo --order oldest --budget 50GB
 ```
+
+The layout comes from `organization.pattern` in the config, not a flag:
+`"{source}/{year}/{month}"` files the example above under
+`<archive>/camera/2019/03/`. Change the pattern or the archive root later and
+`iphone-image relocate` moves what is already archived to match.
 
 So you never need the whole library on disk. You need room for one chunk, plus
 wherever your archive lives.
