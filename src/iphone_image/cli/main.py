@@ -8,6 +8,7 @@ destructive yet; the device layer arrives in P2.
 from __future__ import annotations
 
 import sys
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from ..config import (
     load_config,
 )
 from ..db.database import Database, DatabaseError
+from ..doctor import FAIL, PASS, WARN, run_all
 from ..journal import Journal
 from ..output import Output, human_bytes
 from ..retention import format_duration
@@ -248,6 +250,80 @@ def config_init(ctx: Context, path: Path | None, force: bool) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(EXAMPLE_CONFIG)
     ctx.out.result({"written": str(target)}, lambda: ctx.out.ok(f"wrote {target}"))
+
+
+# ---------------------------------------------------------------------------
+# doctor
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option(
+    "--skip-slow",
+    is_flag=True,
+    help="Skip checks that may prompt or take time, such as Photos authorisation.",
+)
+@pass_context
+def doctor(ctx: Context, skip_slow: bool) -> None:
+    """Check the machine, not just the config, and say what to change."""
+    results = run_all(ctx.config, skip_slow=skip_slow)
+    failures = [c for c in results if c.status == FAIL]
+    warnings = [c for c in results if c.status == WARN]
+
+    data = {
+        "checks": len(results),
+        "passed": sum(1 for c in results if c.status == PASS),
+        "warnings": len(warnings),
+        "failures": len(failures),
+        "ready": not failures,
+        "results": [
+            {
+                "name": c.name,
+                "status": c.status,
+                "detail": c.detail,
+                "remedy": c.remedy,
+                "data": c.data,
+            }
+            for c in results
+        ],
+    }
+
+    def render() -> None:
+        ctx.out.title("Setup check")
+        mark = {PASS: "[ok]", WARN: "[--]", FAIL: "[XX]"}
+        style = {PASS: "ok", WARN: "warn", FAIL: "bad"}
+        for check in results:
+            ctx.out.line(
+                f"  {mark[check.status]} {check.name:<24}{check.detail}", style=style[check.status]
+            )
+        ctx.out.line()
+
+        if failures or warnings:
+            ctx.out.line("  What to change", style="head")
+            ctx.out.line()
+            for check in failures + warnings:
+                if not check.remedy:
+                    continue
+                ctx.out.line(f"  {check.name}:", style=style[check.status])
+                for line in textwrap.wrap(check.remedy, width=72):
+                    ctx.out.line(f"      {line}")
+                ctx.out.line()
+
+        # State the coverage, so a check set that has stopped covering anything
+        # is visible rather than reassuring.
+        summary = (
+            f"{data['checks']} checks: {data['passed']} passed, "
+            f"{len(warnings)} warning(s), {len(failures)} failure(s)"
+        )
+        if failures:
+            ctx.out.line(f"  NOT READY. {summary}", style="bad")
+        elif warnings:
+            ctx.out.line(f"  Usable, with caveats. {summary}", style="warn")
+        else:
+            ctx.out.ok(f"Ready. {summary}")
+
+    ctx.out.result(data, render)
+    sys.exit(1 if failures else 0)
 
 
 # ---------------------------------------------------------------------------

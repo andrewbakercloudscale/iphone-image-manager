@@ -131,3 +131,42 @@ def test_no_command_is_a_usage_error_with_help(run) -> None:
     result = run()
     assert result.exit_code == 2
     assert "Missing command" in result.output
+
+
+def test_doctor_reports_and_exits_nonzero_on_failure(tmp_path: Path) -> None:
+    """A setup that cannot work must not exit 0."""
+    path = tmp_path / "bad.yaml"
+    path.write_text(
+        f'database: {{path: "{tmp_path}/db.sqlite"}}\n'
+        f'photos: {{library_path: "{tmp_path}/missing.photoslibrary"}}\n'
+        f'archive: {{local_path: "{tmp_path}/archive"}}\n'
+    )
+    result = CliRunner().invoke(cli, ["--config", str(path), "doctor", "--skip-slow"])
+    assert result.exit_code == 1
+    assert "NOT READY" in result.output
+
+
+def test_doctor_json_is_parseable(tmp_path: Path) -> None:
+    path = tmp_path / "c.yaml"
+    path.write_text(
+        f'database: {{path: "{tmp_path}/db.sqlite"}}\n'
+        f'photos: {{library_path: "{tmp_path}/missing.photoslibrary"}}\n'
+        f'archive: {{local_path: "{tmp_path}/archive"}}\n'
+    )
+    result = CliRunner().invoke(cli, ["--json", "--config", str(path), "doctor", "--skip-slow"])
+    data = json.loads(result.output)
+    assert data["checks"] == len(data["results"])
+    assert data["ready"] is False
+    assert any(r["status"] == "FAIL" and r["remedy"] for r in data["results"])
+
+
+def test_doctor_states_its_own_coverage(tmp_path: Path) -> None:
+    """A gate that has stopped covering anything must be visible, not reassuring."""
+    path = tmp_path / "c.yaml"
+    path.write_text(
+        f'database: {{path: "{tmp_path}/db.sqlite"}}\n'
+        f'photos: {{library_path: "{tmp_path}/missing.photoslibrary"}}\n'
+        f'archive: {{local_path: "{tmp_path}/archive"}}\n'
+    )
+    result = CliRunner().invoke(cli, ["--config", str(path), "doctor", "--skip-slow"])
+    assert "checks:" in result.output

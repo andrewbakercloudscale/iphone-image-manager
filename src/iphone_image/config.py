@@ -80,6 +80,15 @@ class ArchiveConfig(Strict):
     local_path: ExpandedPath = Path("~/Pictures/iPhoneArchive").expanduser()
 
 
+class PhotosConfig(Strict):
+    """The macOS Photos library this tool reads."""
+
+    library_path: ExpandedPath = Path("~/Pictures/Photos Library.photoslibrary").expanduser()
+    #: Expected final asset count, from the Photos app on the phone. Used by
+    #: `doctor` to tell a half-finished iCloud sync from a finished one.
+    expected_assets: int = Field(default=0, ge=0)
+
+
 class OrganizationConfig(Strict):
     mode: OrganizationMode = OrganizationMode.DATE
     pattern: str = "{year}/{month}"
@@ -198,6 +207,7 @@ class PerformanceConfig(Strict):
 class Config(Strict):
     version: int = CONFIG_VERSION
     archive: ArchiveConfig = Field(default_factory=ArchiveConfig)
+    photos: PhotosConfig = Field(default_factory=PhotosConfig)
     organization: OrganizationConfig = Field(default_factory=OrganizationConfig)
     geolocation: GeolocationConfig = Field(default_factory=GeolocationConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)

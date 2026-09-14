@@ -40,11 +40,31 @@ photographs. It is the shortest document and the one that matters.
 ### What works today
 
 ```bash
+iphone-image doctor             # check the MACHINE and say exactly what to change
 iphone-image config init        # write a commented example config
-iphone-image config validate    # check it, and say what it means in practice
+iphone-image config validate    # check the CONFIG, and say what it means in practice
 iphone-image status             # what the ledger knows
 iphone-image journal            # operations, including anything a crash left in flight
 ```
+
+`doctor` is the one to run first. It checks the things outside this tool's
+control and, for anything wrong, prints the fix rather than the symptom:
+
+```
+  [ok] platform                macOS, Python 3.14.4
+  [ok] external tools          all present: exiftool, ffprobe
+  [ok] Apple Account           you@example.com
+  [ok] Photos library          ~/Pictures/Photos Library.photoslibrary
+  [ok] iCloud storage mode     Optimise Mac Storage (0 of 77,213 targeted local)
+  [--] iCloud sync             44,973 assets but zero videos
+  [ok] disk headroom           88.0 GB free
+  ...
+  Usable, with caveats. 11 checks: 10 passed, 1 warning(s), 0 failure(s)
+```
+
+It catches the expensive mistake the Photos UI does not warn about: if
+**Download Originals** got selected instead of **Optimise Mac Storage**, it fails
+and tells you, before your disk fills.
 
 ---
 

@@ -33,8 +33,14 @@ class Output:
         self.quiet = quiet
         # soft_wrap keeps long filesystem paths on one line so they stay
         # selectable and copy-pasteable instead of being broken mid-path.
-        self.console = Console(theme=THEME, stderr=False, highlight=False, soft_wrap=True)
-        self.err = Console(theme=THEME, stderr=True, highlight=False, soft_wrap=True)
+        #
+        # markup=False because everything we print may contain user data. A file
+        # called "IMG[1].jpg" or a marker like "[ok]" would otherwise be eaten as
+        # a style tag, silently dropping text.
+        self.console = Console(
+            theme=THEME, stderr=False, highlight=False, soft_wrap=True, markup=False
+        )
+        self.err = Console(theme=THEME, stderr=True, highlight=False, soft_wrap=True, markup=False)
 
     # -- structured --------------------------------------------------------
 
