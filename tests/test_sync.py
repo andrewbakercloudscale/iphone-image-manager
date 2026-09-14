@@ -279,3 +279,65 @@ def test_the_run_is_journalled(env) -> None:
     ).fetchone()
     assert row["status"] == "COMPLETED"
     assert json.loads(row["detail"])["fetched"] == 1
+
+
+# -- estimates ---------------------------------------------------------------
+
+
+def test_the_rate_estimate_uses_this_installs_own_history(env) -> None:
+    """A hardcoded constant was wrong by nearly three times within a day."""
+    _config, db = env
+    db.conn.execute(
+        "INSERT INTO operations (operation, status, started_at, duration_ms, detail) "
+        "VALUES ('DOWNLOAD', 'COMPLETED', ?, 10000, ?)",
+        (utcnow(), json.dumps({"bytes": 50 * MB, "transferSeconds": 10.0})),
+    )
+    rate = sync_engine.observed_rate(db)
+    assert rate is not None
+    assert 4.9 < rate < 5.1, "50 MB in 10 s is 5 MB/s"
+
+
+def test_tiny_runs_do_not_pollute_the_estimate(env) -> None:
+    """Three small local files say nothing about network throughput."""
+    _config, db = env
+    db.conn.execute(
+        "INSERT INTO operations (operation, status, started_at, duration_ms, detail) "
+        "VALUES ('DOWNLOAD', 'COMPLETED', ?, 10, ?)",
+        (utcnow(), json.dumps({"bytes": 1024, "transferSeconds": 0.01})),
+    )
+    assert sync_engine.observed_rate(db) is None
+
+
+def test_with_no_history_the_estimate_falls_back(env) -> None:
+    _config, db = env
+    assert sync_engine.observed_rate(db) is None
+    hours = sync_engine.estimate_hours(int(3600 * 1_048_576 * sync_engine.FALLBACK_MB_S), None)
+    assert 0.99 < hours < 1.01
+
+
+def test_local_disk_reads_are_excluded_from_the_rate(env) -> None:
+    """A 500 MB chunk of already-resident assets read in seconds produced
+    3.77 MB/s where the real network rate was 1.24, understating every
+    estimate that used it."""
+    _config, db = env
+    db.conn.execute(
+        "INSERT INTO operations (operation, status, started_at, duration_ms, detail) "
+        "VALUES ('DOWNLOAD', 'COMPLETED', ?, 2000, ?)",
+        (utcnow(), json.dumps({"bytes": 500 * MB, "transferSeconds": 0.5})),
+    )
+    assert sync_engine.observed_rate(db) is None, "a disk read was counted as a download"
+
+
+def test_a_mixed_history_reports_only_the_download_rate(env) -> None:
+    _config, db = env
+    for detail in (
+        {"bytes": 500 * MB, "transferSeconds": 0.5},  # local read, 1000 MB/s
+        {"bytes": 200 * MB, "transferSeconds": 200.0},  # real download, 1 MB/s
+    ):
+        db.conn.execute(
+            "INSERT INTO operations (operation, status, started_at, duration_ms, detail) "
+            "VALUES ('DOWNLOAD', 'COMPLETED', ?, 1000, ?)",
+            (utcnow(), json.dumps(detail)),
+        )
+    rate = sync_engine.observed_rate(db)
+    assert rate is not None and 0.9 < rate < 1.1

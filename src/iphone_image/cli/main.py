@@ -480,7 +480,16 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
     planned_bytes = sum(c.total_bytes for _, c in plans)
     left_assets = sum(c.remaining_assets for _, c in plans)
     left_bytes = sum(c.remaining_bytes for _, c in plans)
-    hours = planned_bytes / 1_048_576 / 0.45 / 3600 if planned_bytes else 0
+    probe = ctx.database()
+    rate = sync_engine.observed_rate(probe)
+    probe.close()
+    hours = sync_engine.estimate_hours(planned_bytes, rate) if planned_bytes else 0.0
+    rate_note = (
+        f"{rate:.2f} MB/s, measured here"
+        if rate
+        else f"{sync_engine.FALLBACK_MB_S:.2f} MB/s, assumed until "
+        "this install has fetched something"
+    )
 
     data: dict[str, Any] = {
         "applied": apply_,
@@ -490,7 +499,9 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
         "plannedBytes": planned_bytes,
         "remainingAssets": left_assets,
         "remainingBytes": left_bytes,
-        "estimatedHoursAt045": round(hours, 1),
+        "estimatedHours": round(hours, 1),
+        "rateMbPerSecond": round(rate, 2) if rate else None,
+        "rateIsMeasured": rate is not None,
     }
 
     if not apply_:
@@ -515,7 +526,8 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
                 [
                     ("this chunk", f"{planned:,} assets, {human_bytes(planned_bytes)}"),
                     ("left for later", f"{left_assets:,} assets, {human_bytes(left_bytes)}"),
-                    ("estimated time", f"{hours:.1f} hours at 0.45 MB/s"),
+                    ("rate", rate_note),
+                    ("estimated time", f"{hours:.1f} hours"),
                 ]
             )
             ctx.out.line()

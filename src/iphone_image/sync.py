@@ -18,6 +18,7 @@ Three rules this module exists to enforce:
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -75,6 +76,63 @@ class SyncResult:
         if self.seconds < 0.05:
             return "local (no download)"
         return f"{self.rate_mb_s:.2f} MB/s"
+
+
+#: Used only until this installation has downloaded anything of its own.
+FALLBACK_MB_S = 1.0
+
+#: Above this, a 'transfer' was a local disk read rather than an iCloud
+#: download. Real downloads measured 0.45 to 1.24 MB/s; local reads
+#: exceeded 4,000, and averaging the two understated every estimate.
+LOCAL_READ_MB_S = 25.0
+
+
+def observed_rate(db: Database, *, minimum_bytes: int = 20 * 1024 * 1024) -> float | None:
+    """Download rate in MB/s from this installation's own history.
+
+    A hardcoded constant was wrong by nearly three times within a day: the first
+    measurement was taken while Apple's metadata sync competed for bandwidth. An
+    estimate that learns from what actually happened here beats one encoding a
+    number from somebody else's afternoon.
+
+    Two exclusions, the first of which cost a wrong answer before it existed:
+
+    - Assets already resident are read from local disk at hundreds of MB/s.
+      Mixed into the average they produced 3.77 MB/s where the real network rate
+      was 1.24, which would have understated every estimate.
+    - Runs that moved almost nothing, because a handful of small files says
+      nothing about throughput.
+    """
+    rows = db.conn.execute(
+        "SELECT detail FROM operations "
+        "WHERE operation = ? AND status = 'COMPLETED' ORDER BY id DESC LIMIT 20",
+        (Op.DOWNLOAD,),
+    ).fetchall()
+
+    total_bytes = 0
+    total_seconds = 0.0
+    for row in rows:
+        try:
+            detail = json.loads(row["detail"] or "{}")
+        except json.JSONDecodeError:
+            continue
+        moved = int(detail.get("bytes") or 0)
+        seconds = float(detail.get("transferSeconds") or 0)
+        if moved < minimum_bytes or seconds <= 0:
+            continue
+        if moved / seconds / 1_048_576 > LOCAL_READ_MB_S:
+            continue  # a disk read, not a download
+        total_bytes += moved
+        total_seconds += seconds
+
+    if total_bytes < minimum_bytes or total_seconds <= 0:
+        return None
+    return total_bytes / total_seconds / 1_048_576
+
+
+def estimate_hours(byte_count: int, rate_mb_s: float | None) -> float:
+    rate = rate_mb_s or FALLBACK_MB_S
+    return byte_count / 1_048_576 / rate / 3600
 
 
 def sha256_file(path: Path) -> str:
@@ -232,7 +290,12 @@ def run(
                         }
                     )
                     break
-            operation.note(fetched=result.fetched, failed=result.failed, bytes=result.bytes_fetched)
+            operation.note(
+                fetched=result.fetched,
+                failed=result.failed,
+                bytes=result.bytes_fetched,
+                transferSeconds=round(result.seconds, 3),
+            )
     finally:
         db.close()
 

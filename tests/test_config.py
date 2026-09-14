@@ -29,7 +29,10 @@ def test_defaults_are_safe() -> None:
     assert c.cloud.enabled is False
 
 
-def test_missing_file_falls_back_to_defaults() -> None:
+def test_missing_file_falls_back_to_defaults(tmp_path: Path, monkeypatch) -> None:
+    """Isolated: this passed or failed depending on whether the developer
+    happened to have a config file in their own home directory."""
+    monkeypatch.setattr("iphone_image.config.DEFAULT_CONFIG_PATH", tmp_path / "absent.yaml")
     assert load_config().source_path is None
 
 
