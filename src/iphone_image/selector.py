@@ -20,7 +20,12 @@ from .retention import DurationError, parse_duration
 
 #: Friendly channel names to the bundle identifiers iOS records.
 CHANNELS: dict[str, str | None] = {
-    "camera": None,  # no importing app: the camera wrote it
+    # Measured against a real 79,024-asset library rather than assumed. An
+    # earlier version mapped "camera" to "no importing app", which was wrong:
+    # the camera identifies itself like any other app.
+    "camera": "com.apple.camera",
+    "screenshot": "com.apple.springboard",
+    "screenrecording": "com.apple.replayd",
     "whatsapp": "net.whatsapp.WhatsApp",
     "snapchat": "com.toyopagroup.picaboo",
     "safari": "com.apple.mobilesafari",
@@ -33,6 +38,11 @@ CHANNELS: dict[str, str | None] = {
     "airdrop": "com.apple.sharingd",
     "gmail": "com.google.Gmail",
     "drive": "com.google.Drive",
+    "chatgpt": "com.openai.chat",
+    "grok": "ai.x.GrokApp",
+    # Assets old enough to predate the field: 18,932 of 79,024 in the library
+    # this was measured against. Selectable, but not attributable to any app.
+    "unattributed": None,
 }
 
 MEDIA_TYPES = {"photo", "video", "live", "screenshot", "raw", "burst", "favourite"}
@@ -133,12 +143,9 @@ class Selector:
         params: list[Any] = []
 
         if self.source is not None:
-            bundle = resolve_channel(self.source)
-            if bundle is None:
-                clauses.append("a.source_bundle_id IS NULL")
-            else:
-                clauses.append("a.source_bundle_id = ?")
-                params.append(bundle)
+            clause, extra = self._source_clause()
+            clauses.append(clause)
+            params.extend(extra)
 
         if self.media_type == "photo":
             clauses.append("a.media_type = 'PHOTO'")
@@ -176,6 +183,29 @@ class Selector:
             clauses.append("a.proxy_suspicion < 0.5")
 
         return " AND ".join(clauses), params
+
+    def _source_clause(self) -> tuple[str, list[Any]]:
+        """Compile the channel filter.
+
+        `camera` is not a simple equality. iOS only began recording
+        com.apple.camera relatively recently: on a real 78,806-asset library it
+        covered assets from 2024-08 onwards, while 13,787 older camera photos
+        carried no source app at all. Matching the bundle id alone would have
+        missed 39 GB of someone's own photographs, which is the worst possible
+        way for a backup filter to be wrong.
+        """
+        assert self.source is not None
+        if self.source.strip().lower() == "camera":
+            return (
+                "(a.source_bundle_id = ? OR (a.source_bundle_id IS NULL "
+                "AND a.filename LIKE 'IMG\\_%' ESCAPE '\\' "
+                "AND COALESCE(a.subtypes, '') NOT LIKE '%screenshot%'))",
+                ["com.apple.camera"],
+            )
+        bundle = resolve_channel(self.source)
+        if bundle is None:
+            return "a.source_bundle_id IS NULL", []
+        return "a.source_bundle_id = ?", [bundle]
 
     def order_by(self) -> str:
         return {

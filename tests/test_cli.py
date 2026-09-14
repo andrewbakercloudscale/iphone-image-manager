@@ -42,7 +42,11 @@ def test_status_json_is_parseable(run) -> None:
     result = run("--json", "status")
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert data["schemaVersion"] == 1
+    # Derived, not hardcoded: a literal here breaks on every migration and
+    # teaches you to edit the test rather than read it.
+    from iphone_image.db.database import discover_migrations
+
+    assert data["schemaVersion"] == len(discover_migrations())
     assert data["assetsOnPhone"] == 0
     assert data["removalPolicy"] == "never"
 

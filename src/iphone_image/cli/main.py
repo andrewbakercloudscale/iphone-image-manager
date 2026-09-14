@@ -28,7 +28,11 @@ from ..doctor import FAIL, PASS, WARN, run_all
 from ..journal import Journal
 from ..logs import get_logger, setup_logging
 from ..output import Output, human_bytes
+from ..photos.helper import HelperError
 from ..retention import format_duration
+from ..scanner import scan as run_scan
+from ..selector import SelectorError, parse_size, plan_chunk
+from .selectors import build_selector, selector_options
 
 EXAMPLE_CONFIG = """\
 # iPhone Image Manager configuration.
@@ -257,6 +261,166 @@ def config_init(ctx: Context, path: Path | None, force: bool) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(EXAMPLE_CONFIG)
     ctx.out.result({"written": str(target)}, lambda: ctx.out.ok(f"wrote {target}"))
+
+
+# ---------------------------------------------------------------------------
+# scan
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option("--limit", type=int, default=0, help="Stop after this many assets. For a quick look.")
+@pass_context
+def scan(ctx: Context, limit: int) -> None:
+    """Inventory the Photos library. Read-only, and costs no bandwidth."""
+    try:
+
+        def tick(result: Any) -> None:
+            ctx.out.line(f"  {result.seen:,} assets ...", style="muted")
+
+        result = run_scan(ctx.config, limit=limit, progress=tick)
+    except HelperError as exc:
+        _fail(ctx.out, str(exc))
+        return
+
+    top = sorted(result.by_channel.items(), key=lambda kv: -kv[1])[:8]
+    data = {
+        "scanId": result.scan_id,
+        "seen": result.seen,
+        "inserted": result.inserted,
+        "updated": result.updated,
+        "disappeared": result.disappeared,
+        "totalBytes": result.total_bytes,
+        "proxySuspects": result.proxy_suspects,
+        "sourceCoverage": round(result.source_coverage, 4),
+        "degraded": result.degraded,
+        "byChannel": result.by_channel,
+    }
+
+    def render() -> None:
+        ctx.out.title("Scan")
+        ctx.out.pairs(
+            [
+                ("assets seen", f"{result.seen:,}"),
+                ("new", f"{result.inserted:,}"),
+                ("updated", f"{result.updated:,}"),
+                ("gone from the library", f"{result.disappeared:,}"),
+                ("total size", human_bytes(result.total_bytes)),
+                ("suspected iCloud proxies", f"{result.proxy_suspects:,}"),
+                ("source app known for", f"{result.source_coverage * 100:.0f}% of assets"),
+            ]
+        )
+        if result.degraded:
+            ctx.out.line()
+            ctx.out.warn(result.degraded)
+        ctx.out.line()
+        ctx.out.line("  Channels", style="head")
+        for channel, count in top:
+            ctx.out.line(f"    {channel:<36}{count:>9,}")
+
+    ctx.out.result(data, render)
+
+
+# ---------------------------------------------------------------------------
+# list
+# ---------------------------------------------------------------------------
+
+
+@cli.command("list")
+@selector_options
+@click.option("--budget", help="Show what a chunk of this size would take, e.g. 50GB.")
+@click.option("--show", type=int, default=15, show_default=True, help="How many rows to print.")
+@pass_context
+def list_assets(ctx: Context, budget: str | None, show: int, **kwargs: Any) -> None:
+    """Preview what a selector matches. Never changes anything."""
+    try:
+        selector = build_selector(**kwargs)
+    except SelectorError as exc:
+        _fail(ctx.out, str(exc))
+        return
+
+    db = ctx.database()
+    where, params = selector.where()
+    rows = db.conn.execute(
+        f"SELECT a.* FROM assets a WHERE {where} ORDER BY {selector.order_by()}",
+        params,
+    ).fetchall()
+    db.close()
+
+    candidates = [dict(r) for r in rows]
+    budget_bytes = parse_size(budget) if budget else None
+    plan = plan_chunk(candidates, budget_bytes=budget_bytes, limit=selector.limit)
+
+    total_bytes = sum(int(c.get("size_bytes") or 0) for c in candidates)
+    data = {
+        "selector": selector.describe(),
+        "matched": len(candidates),
+        "matchedBytes": total_bytes,
+        "chunk": {
+            "budget": budget,
+            "count": plan.count,
+            "bytes": plan.total_bytes,
+            "remainingAssets": plan.remaining_assets,
+            "remainingBytes": plan.remaining_bytes,
+            "skippedTooLarge": len(plan.skipped_too_large),
+        },
+        "sample": [
+            {
+                "filename": c.get("filename"),
+                "created": c.get("created_at_device"),
+                "bytes": c.get("size_bytes"),
+                "source": c.get("source_bundle_id"),
+                "type": c.get("media_type"),
+            }
+            for c in plan.included[:show]
+        ],
+    }
+
+    def render() -> None:
+        ctx.out.title("Matching assets")
+        ctx.out.pairs([("selector", selector.describe())])
+        ctx.out.line()
+        ctx.out.table(
+            ["FILENAME", "DATE", "TYPE", "SOURCE", "SIZE"],
+            [
+                (
+                    str(c.get("filename") or "?")[:28],
+                    str(c.get("created_at_device") or "")[:10],
+                    c.get("media_type") or "",
+                    (c.get("source_bundle_id") or "(unattributed)").split(".")[-1],
+                    human_bytes(c.get("size_bytes")),
+                )
+                for c in plan.included[:show]
+            ],
+        )
+        if plan.count > show:
+            ctx.out.line(f"    ... and {plan.count - show:,} more", style="muted")
+        ctx.out.line()
+        ctx.out.pairs(
+            [
+                ("matched", f"{len(candidates):,} assets, {human_bytes(total_bytes)}"),
+            ]
+        )
+        if budget_bytes is not None:
+            ctx.out.pairs(
+                [
+                    ("this chunk", f"{plan.count:,} assets, {human_bytes(plan.total_bytes)}"),
+                    (
+                        "left for later",
+                        f"{plan.remaining_assets:,} assets, {human_bytes(plan.remaining_bytes)}",
+                    ),
+                ]
+            )
+            if plan.skipped_too_large:
+                ctx.out.line()
+                ctx.out.warn(
+                    f"{len(plan.skipped_too_large)} asset(s) are larger than the whole "
+                    f"budget and were not selected. Raise --budget to include them."
+                )
+        ctx.out.line()
+        ctx.out.line("  Nothing was changed. This command only ever reads.", style="muted")
+
+    ctx.out.result(data, render)
 
 
 # ---------------------------------------------------------------------------

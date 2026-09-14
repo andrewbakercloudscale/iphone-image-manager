@@ -47,9 +47,18 @@ def test_rejects_bad_sizes(text: str) -> None:
 # -- channels ----------------------------------------------------------------
 
 
-def test_camera_means_no_importing_app() -> None:
-    """The camera writes directly, so it leaves no source bundle id."""
-    assert resolve_channel("camera") is None
+def test_camera_has_its_own_bundle_id() -> None:
+    """Measured, not assumed: the camera identifies itself like any other app."""
+    assert resolve_channel("camera") == "com.apple.camera"
+
+
+def test_screenshots_have_a_channel_of_their_own() -> None:
+    """Screenshots come from springboard, which cross-checks the subtype flag."""
+    assert resolve_channel("screenshot") == "com.apple.springboard"
+
+
+def test_unattributed_selects_assets_with_no_source_app() -> None:
+    assert resolve_channel("unattributed") is None
 
 
 def test_whatsapp_resolves_to_its_bundle_id() -> None:
@@ -77,10 +86,16 @@ def test_filters_compile_to_bound_parameters() -> None:
     assert "net.whatsapp.WhatsApp" not in sql
 
 
-def test_camera_compiles_to_a_null_check() -> None:
-    sql, params = Selector(source="camera").where()
+def test_unattributed_compiles_to_a_null_check() -> None:
+    sql, params = Selector(source="unattributed").where()
     assert "source_bundle_id IS NULL" in sql
     assert params == []
+
+
+def test_camera_compiles_to_a_bound_bundle_id() -> None:
+    sql, params = Selector(source="camera").where()
+    assert "source_bundle_id = ?" in sql
+    assert params == ["com.apple.camera"]
 
 
 def test_older_than_becomes_a_timestamp() -> None:
@@ -195,3 +210,23 @@ def test_assets_with_unknown_size_do_not_break_the_budget() -> None:
     candidates = [{"id": 1}, asset(2, 1 * GB)]
     plan = plan_chunk(candidates, budget_bytes=2 * GB)
     assert plan.count == 2
+
+
+def test_camera_also_matches_older_untagged_photos() -> None:
+    """iOS only began recording com.apple.camera recently.
+
+    On a real library the bundle id covered 2024-08 onwards while 13,787 older
+    camera photos carried no source app. Matching the bundle id alone would miss
+    39 GB of the user's own photographs.
+    """
+    sql, params = Selector(source="camera").where()
+    assert "com.apple.camera" in params
+    assert "source_bundle_id IS NULL" in sql, "older untagged photos must be included"
+    assert "IMG" in sql, "untagged assets are narrowed by filename"
+    assert "screenshot" in sql, "untagged screenshots must not count as camera"
+
+
+def test_other_channels_stay_exact() -> None:
+    sql, params = Selector(source="whatsapp").where()
+    assert "OR" not in sql.split("source_bundle_id")[1][:40]
+    assert params == ["net.whatsapp.WhatsApp"]
