@@ -136,6 +136,51 @@ And two undo paths, because deletion should never be a one way door:
 
 ---
 
+## Setup: point Photos at iCloud, but keep the originals there
+
+This is the one setting the whole design depends on, and the wrong choice will
+fill your disk.
+
+<img src="docs/images/icloud-photos-optimise-mac-storage.png"
+     alt="Photos settings, iCloud tab: iCloud Photos ticked, Optimise Mac Storage selected"
+     width="700">
+
+**Photos → Settings (⌘,) → iCloud → tick iCloud Photos → select Optimise Mac Storage.**
+
+### Why not "Download Originals to this Mac"
+
+Because a real library does not fit. Measured on the library this tool was built
+against:
+
+| | |
+|---|---|
+| Library | 94,180 items, roughly **424 GB** |
+| Free disk on the Mac | **95 GB** |
+
+"Download Originals" would try to pull all 424 GB down before you could do
+anything. "Optimise Mac Storage" keeps metadata and thumbnails locally and leaves
+the full-resolution originals in iCloud, where iPhone Image Manager fetches them
+**one asset at a time, on demand**, in budgeted chunks:
+
+```bash
+iphone-image sync --source camera --type photo \
+    --order oldest --budget 50GB --pattern "{year}/{month}"
+```
+
+So you never need the whole library on disk. You need room for one chunk, plus
+wherever your archive lives.
+
+### Two things worth checking first
+
+1. **The Mac and the iPhone must be on the same Apple Account.** Enabling sync
+   against a different one would try to upload your Mac's library to the wrong
+   place. System Settings → your name → scroll to Devices, and look for your
+   iPhone in the list.
+2. **The first sync takes hours.** It is pulling metadata and thumbnails for
+   every item in the library. Nothing else works properly until it settles.
+
+---
+
 ## Requirements
 
 - macOS
