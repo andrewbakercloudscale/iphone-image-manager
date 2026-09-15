@@ -36,6 +36,15 @@ running() {
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
+# The log accumulates across runs, so anything measured over the whole file
+# reports previous runs as this one. --status claimed "5390 assets" for a run
+# that had done 488, and it would have reported a long-finished run's error as
+# a current one. Everything below reads only the slice since the last banner.
+current_run() {
+    [ -f "$LOG" ] || return 0
+    awk '/^started /{slice = ""} {slice = slice $0 ORS} END {printf "%s", slice}' "$LOG"
+}
+
 case "${1:-}" in
 --status)
     if running; then
@@ -44,13 +53,19 @@ case "${1:-}" in
         echo "  not running"
     fi
     if [ -f "$LOG" ]; then
+        slice="$(current_run)"
         echo "  log: $LOG"
-        printf '  assets so far: %s\n' "$(grep -cE '^\s+\[' "$LOG" 2>/dev/null || echo 0)"
+        # awk counts rather than `grep -c`, which exits 1 on no matches and
+        # would take the whole status block down under `set -e`.
+        printf '  started:         %s\n' \
+            "$(printf '%s\n' "$slice" | awk 'NR==1 {sub(/^started /, ""); print}')"
+        printf '  assets this run: %s\n' \
+            "$(printf '%s\n' "$slice" | awk '/^[[:space:]]+\[/ {n++} END {print n+0}')"
         echo "  last line:"
-        tail -1 "$LOG" | sed 's/^/    /'
-        if grep -qiE '^error:|Traceback' "$LOG" 2>/dev/null; then
+        printf '%s\n' "$slice" | tail -1 | sed 's/^/    /'
+        if printf '%s\n' "$slice" | grep -qiE '^error:|Traceback'; then
             echo "  ERRORS PRESENT:"
-            grep -iE '^error:|Traceback' "$LOG" | tail -3 | sed 's/^/    /'
+            printf '%s\n' "$slice" | grep -iE '^error:|Traceback' | tail -3 | sed 's/^/    /'
         fi
     fi
     exit 0
