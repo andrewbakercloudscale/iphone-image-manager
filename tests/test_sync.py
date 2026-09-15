@@ -290,11 +290,11 @@ def test_the_rate_estimate_uses_this_installs_own_history(env) -> None:
     db.conn.execute(
         "INSERT INTO operations (operation, status, started_at, duration_ms, detail) "
         "VALUES ('DOWNLOAD', 'COMPLETED', ?, 10000, ?)",
-        (utcnow(), json.dumps({"bytes": 50 * MB, "transferSeconds": 10.0})),
+        (utcnow(), json.dumps({"networkBytes": 50 * MB, "networkSeconds": 10.0})),
     )
     rate = sync_engine.observed_rate(db)
     assert rate is not None
-    assert 4.9 < rate < 5.1, "50 MB in 10 s is 5 MB/s"
+    assert 4.9 < rate < 5.1, "50 MB downloaded in 10 s is 5 MB/s"
 
 
 def test_tiny_runs_do_not_pollute_the_estimate(env) -> None:
@@ -303,7 +303,7 @@ def test_tiny_runs_do_not_pollute_the_estimate(env) -> None:
     db.conn.execute(
         "INSERT INTO operations (operation, status, started_at, duration_ms, detail) "
         "VALUES ('DOWNLOAD', 'COMPLETED', ?, 10, ?)",
-        (utcnow(), json.dumps({"bytes": 1024, "transferSeconds": 0.01})),
+        (utcnow(), json.dumps({"networkBytes": 1024, "networkSeconds": 0.01})),
     )
     assert sync_engine.observed_rate(db) is None
 
@@ -323,7 +323,18 @@ def test_local_disk_reads_are_excluded_from_the_rate(env) -> None:
     db.conn.execute(
         "INSERT INTO operations (operation, status, started_at, duration_ms, detail) "
         "VALUES ('DOWNLOAD', 'COMPLETED', ?, 2000, ?)",
-        (utcnow(), json.dumps({"bytes": 500 * MB, "transferSeconds": 0.5})),
+        (
+            utcnow(),
+            json.dumps(
+                {
+                    "bytes": 500 * MB,
+                    "transferSeconds": 0.5,
+                    "networkBytes": 0,
+                    "networkSeconds": 0.0,
+                    "localCount": 6170,
+                }
+            ),
+        ),
     )
     assert sync_engine.observed_rate(db) is None, "a disk read was counted as a download"
 
@@ -331,8 +342,10 @@ def test_local_disk_reads_are_excluded_from_the_rate(env) -> None:
 def test_a_mixed_history_reports_only_the_download_rate(env) -> None:
     _config, db = env
     for detail in (
-        {"bytes": 500 * MB, "transferSeconds": 0.5},  # local read, 1000 MB/s
-        {"bytes": 200 * MB, "transferSeconds": 200.0},  # real download, 1 MB/s
+        # a chunk that was entirely local
+        {"networkBytes": 0, "networkSeconds": 0.0, "localBytes": 500 * MB, "localCount": 900},
+        # a real download, 1 MB/s
+        {"networkBytes": 200 * MB, "networkSeconds": 200.0},
     ):
         db.conn.execute(
             "INSERT INTO operations (operation, status, started_at, duration_ms, detail) "
@@ -343,17 +356,88 @@ def test_a_mixed_history_reports_only_the_download_rate(env) -> None:
     assert rate is not None and 0.9 < rate < 1.1
 
 
+def test_one_chunk_that_mixed_both_reports_the_download_rate_not_the_blend(env) -> None:
+    """The failure this split exists for, and it was live when it was found.
+
+    A chunk fetched mostly-resident 2023 photos and then reached genuinely
+    remote ones. Its aggregate read 10.12 MB/s and was still falling, while the
+    instantaneous network rate was 2.6. The run-level threshold of 25 MB/s only
+    ever caught a chunk that was *entirely* local: a mixed one sails under it
+    and is recorded as though every byte came over the network, which would
+    have predicted the next all-iCloud chunk at 0.4 hours instead of 2.8.
+    """
+    _config, db = env
+    db.conn.execute(
+        "INSERT INTO operations (operation, status, started_at, duration_ms, detail) "
+        "VALUES ('DOWNLOAD', 'COMPLETED', ?, 1000, ?)",
+        (
+            utcnow(),
+            json.dumps(
+                {
+                    # The real shape, from the live run: 6.8 GB came off local
+                    # disk in about no time, 2.4 GB was downloaded over 930 s.
+                    # The blend is 9.2 GB / 930 s = 10.1 MB/s, which sits under
+                    # the old 25 MB/s rule and so was taken for a download rate.
+                    # The download rate was 2.6.
+                    "bytes": 9416 * MB,
+                    "transferSeconds": 930.0,
+                    "networkBytes": 2400 * MB,
+                    "networkSeconds": 930.0,
+                    "localBytes": 7016 * MB,
+                    "localCount": 2700,
+                }
+            ),
+        ),
+    )
+    rate = sync_engine.observed_rate(db)
+    assert rate is not None
+    assert 2.5 < rate < 2.7, f"the blend is 10.1 MB/s; the download rate is 2.6, got {rate}"
+
+
+def test_a_legacy_row_is_ignored_rather_than_approximated(env) -> None:
+    """Its bytes cover both kinds and the proportion cannot be recovered."""
+    _config, db = env
+    db.conn.execute(
+        "INSERT INTO operations (operation, status, started_at, duration_ms, detail) "
+        "VALUES ('DOWNLOAD', 'COMPLETED', ?, 1000, ?)",
+        (utcnow(), json.dumps({"bytes": 16 * 1024**3, "transferSeconds": 1600.0})),
+    )
+    assert sync_engine.observed_rate(db) is None
+
+
 def test_a_whole_chunk_of_local_reads_does_not_report_a_network_rate(env) -> None:
     """A real run reported "4696.44 MB/s", which is a disk read wearing a
     network rate's clothes."""
-    result = sync_engine.SyncResult(fetched=6170, bytes_fetched=15 * 1024**3, seconds=3.4)
+    result = sync_engine.SyncResult(
+        fetched=6170, bytes_fetched=15 * 1024**3, seconds=3.4, local_count=6170
+    )
     assert "no download" in result.rate_text
     assert "MB/s" not in result.rate_text
 
 
 def test_a_genuine_download_still_reports_its_rate() -> None:
-    result = sync_engine.SyncResult(fetched=61, bytes_fetched=198 * MB, seconds=160.0)
+    result = sync_engine.SyncResult(
+        fetched=61,
+        bytes_fetched=198 * MB,
+        seconds=160.0,
+        network_bytes=198 * MB,
+        network_seconds=160.0,
+    )
     assert "MB/s" in result.rate_text
+
+
+def test_a_mixed_chunk_shows_the_download_rate_and_says_how_many_were_local() -> None:
+    result = sync_engine.SyncResult(
+        fetched=2781,
+        bytes_fetched=9 * 1024**3 + 200 * MB,
+        seconds=203.0,
+        network_bytes=200 * MB,
+        network_seconds=200.0,
+        local_bytes=9 * 1024**3,
+        local_count=2700,
+    )
+    assert result.rate_text.startswith("1.00 MB/s")
+    assert "2,700 of 2,781 were already local" in result.rate_text
 
 
 def test_leftover_partials_from_a_kill_are_swept(env) -> None:

@@ -45,8 +45,8 @@ does not expose. Evidence: `spikes/P0b-photokit.md`.
 | P5 scan / list / sync | **Complete and run against the real library.** |
 | P6 dedupe, P7 cloud, P8 verify, P9 campaigns, P10 removal | Not started. |
 
-230 tests, ruff and mypy clean, CI green on macOS across Python 3.12 to 3.14.
-24 commits. Nothing uncommitted.
+233 tests, ruff and mypy clean, CI green on macOS across Python 3.12 to 3.14.
+26 commits. Nothing uncommitted.
 
 ### What has actually been fetched
 
@@ -188,7 +188,16 @@ Kept because the pattern matters more than the individual bugs.
    come from this installation's own journal.
 5. **Averaging disk reads into a network rate.** Produced 3.77 MB/s where the
    truth was 1.24, then later displayed "4696.44 MB/s" as a transfer rate. The
-   same threshold is now defined once and used in both places.
+   same threshold is now defined once and used in both places. **It came back
+   on 2026-09-15**, because that threshold was applied to the *run*: it catches
+   a chunk that was entirely local and cannot see a chunk that was half of
+   each. One was live at the time, reporting 10.12 MB/s while the instantaneous
+   network rate was 2.6, and it would have estimated the next all-iCloud chunk
+   at 0.4 hours instead of 1.7. Now each asset is classified as it lands and
+   only downloads feed the estimate. Rows written before the split are ignored
+   rather than approximated, because their bytes cover both kinds and the
+   proportion cannot be recovered afterwards. **A threshold is only as good as
+   the thing it is applied to.**
 6. **A channel mapping invented rather than measured.** `camera` was mapped
    first to "no source app", then to `com.apple.camera` alone, which matched
    6,181 assets and 20.7 GB. It should have been 20,613 and 124 GB, because iOS

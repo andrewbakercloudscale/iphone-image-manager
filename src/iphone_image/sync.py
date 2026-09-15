@@ -58,6 +58,14 @@ class SyncResult:
     failed: int = 0
     bytes_fetched: int = 0
     seconds: float = 0.0
+    #: Split at the asset, not at the run. A chunk that mixes resident assets
+    #: with genuinely remote ones averages to a number that is neither rate:
+    #: measured here at 10.12 MB/s while the instantaneous network rate was
+    #: 2.6. Only these two feed any estimate.
+    network_bytes: int = 0
+    network_seconds: float = 0.0
+    local_bytes: int = 0
+    local_count: int = 0
     remaining_assets: int = 0
     remaining_bytes: int = 0
     too_large: int = 0
@@ -66,25 +74,31 @@ class SyncResult:
 
     @property
     def rate_mb_s(self) -> float:
-        return (self.bytes_fetched / self.seconds / 1_048_576) if self.seconds else 0.0
+        """Download rate, from the downloads alone."""
+        if not self.network_seconds:
+            return 0.0
+        return self.network_bytes / self.network_seconds / 1_048_576
 
     @property
     def rate_text(self) -> str:
         """Readable rate.
 
-        Assets already resident read from disk in near-zero time, which made a
-        naive rate print "0.00 MB/s" for a transfer that in fact never touched
-        the network. Reporting a speed that low for work that was instant is
-        worse than reporting nothing.
+        Three things this has to tell apart, and the first two were once the
+        same bug at different scales. A chunk of already-resident assets is a
+        disk read, and reporting "4696.44 MB/s" or "0.00 MB/s" for work that
+        never touched the network is worse than reporting nothing. A chunk that
+        mixes the two is the subtler one: its aggregate sits comfortably under
+        any sane threshold and looks like a real measurement, while being an
+        average of 4,000 MB/s and 1.5 MB/s. Only actual downloads count here.
         """
         if not self.fetched:
             return "-"
-        # The same threshold the estimator uses. A whole chunk of already
-        # resident assets reported "4696.44 MB/s", which is a disk read wearing
-        # a network rate's clothes and tells the user nothing useful.
-        if self.seconds < 0.05 or self.rate_mb_s > LOCAL_READ_MB_S:
+        if not self.network_bytes:
             return f"{self.fetched:,} from local disk, no download"
-        return f"{self.rate_mb_s:.2f} MB/s"
+        text = f"{self.rate_mb_s:.2f} MB/s"
+        if self.local_count:
+            text += f" ({self.local_count:,} of {self.fetched:,} were already local)"
+        return text
 
 
 #: Used only until this installation has downloaded anything of its own.
@@ -99,13 +113,18 @@ def observed_rate(db: Database, *, minimum_bytes: int = 20 * 1024 * 1024) -> flo
     estimate that learns from what actually happened here beats one encoding a
     number from somebody else's afternoon.
 
-    Two exclusions, the first of which cost a wrong answer before it existed:
+    It reads `networkBytes` and `networkSeconds`, which count only assets this
+    installation actually downloaded. Rows without them predate that split and
+    are **ignored rather than approximated**: their `bytes` covers local reads
+    and downloads together, and there is no way to recover the proportion after
+    the fact. That is deliberate. An older row recorded a mixed chunk at
+    10 MB/s while the real rate was 1.5, and using it would have predicted the
+    next all-iCloud chunk at 0.4 hours instead of 2.8. Until a chunk completes
+    under the new measurement this returns None, and the caller says the rate is
+    assumed rather than measured, which is the true statement.
 
-    - Assets already resident are read from local disk at hundreds of MB/s.
-      Mixed into the average they produced 3.77 MB/s where the real network rate
-      was 1.24, which would have understated every estimate.
-    - Runs that moved almost nothing, because a handful of small files says
-      nothing about throughput.
+    Runs that downloaded almost nothing are still skipped, because a handful of
+    small files says nothing about throughput.
     """
     rows = db.conn.execute(
         "SELECT detail FROM operations "
@@ -120,12 +139,12 @@ def observed_rate(db: Database, *, minimum_bytes: int = 20 * 1024 * 1024) -> flo
             detail = json.loads(row["detail"] or "{}")
         except json.JSONDecodeError:
             continue
-        moved = int(detail.get("bytes") or 0)
-        seconds = float(detail.get("transferSeconds") or 0)
+        if "networkBytes" not in detail:
+            continue  # predates the split; its composition is unrecoverable
+        moved = int(detail.get("networkBytes") or 0)
+        seconds = float(detail.get("networkSeconds") or 0)
         if moved < minimum_bytes or seconds <= 0:
             continue
-        if moved / seconds / 1_048_576 > LOCAL_READ_MB_S:
-            continue  # a disk read, not a download
         total_bytes += moved
         total_seconds += seconds
 
@@ -327,6 +346,10 @@ def run(
                 failed=result.failed,
                 bytes=result.bytes_fetched,
                 transferSeconds=round(result.seconds, 3),
+                networkBytes=result.network_bytes,
+                networkSeconds=round(result.network_seconds, 3),
+                localBytes=result.local_bytes,
+                localCount=result.local_count,
             )
     finally:
         db.close()
@@ -412,6 +435,16 @@ def _fetch_one(
 
     result.fetched += 1
     result.bytes_fetched += actual
-    result.seconds += float(outcome.get("seconds") or 0)
+    seconds = float(outcome.get("seconds") or 0)
+    result.seconds += seconds
+    # The threshold applied to this asset rather than to the run. Applied to the
+    # run it only catches a chunk that was entirely local; a mixed chunk lands
+    # under it and is recorded as though every byte came over the network.
+    if seconds > 0 and actual / seconds / 1_048_576 <= LOCAL_READ_MB_S:
+        result.network_bytes += actual
+        result.network_seconds += seconds
+    else:
+        result.local_bytes += actual
+        result.local_count += 1
     media = asset.get("media_type") or "OTHER"
     result.by_type[media] = result.by_type.get(media, 0) + 1

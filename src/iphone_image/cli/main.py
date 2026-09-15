@@ -593,6 +593,10 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
         total.partials_swept += outcome.partials_swept
         total.bytes_fetched += outcome.bytes_fetched
         total.seconds += outcome.seconds
+        total.network_bytes += outcome.network_bytes
+        total.network_seconds += outcome.network_seconds
+        total.local_bytes += outcome.local_bytes
+        total.local_count += outcome.local_count
         total.remaining_assets += outcome.remaining_assets
         total.remaining_bytes += outcome.remaining_bytes
         total.failures.extend(outcome.failures)
@@ -605,7 +609,12 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
             "failed": total.failed,
             "skippedExisting": total.skipped_existing,
             "bytesFetched": total.bytes_fetched,
-            "mbPerSecond": round(total.rate_mb_s, 2),
+            # The download rate, from downloads alone. A run that was entirely
+            # local reports null here rather than a disk read in disguise.
+            "mbPerSecond": round(total.rate_mb_s, 2) or None,
+            "networkBytes": total.network_bytes,
+            "networkSeconds": round(total.network_seconds, 3),
+            "alreadyLocal": total.local_count,
             "remainingAssets": total.remaining_assets,
             "remainingBytes": total.remaining_bytes,
             "failures": total.failures[:20],
