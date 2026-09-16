@@ -45,8 +45,8 @@ does not expose. Evidence: `spikes/P0b-photokit.md`.
 | P5 scan / list / sync | **Complete and run against the real library.** |
 | P6 dedupe, P7 cloud, P8 verify, P9 campaigns, P10 removal | Not started. |
 
-233 tests, ruff and mypy clean, CI green on macOS across Python 3.12 to 3.14.
-26 commits. Nothing uncommitted.
+237 tests, ruff and mypy clean, CI green on macOS across Python 3.12 to 3.14.
+27 commits. Nothing uncommitted.
 
 ### What has actually been fetched
 
@@ -209,6 +209,14 @@ Kept because the pattern matters more than the individual bugs.
    names both possibilities rather than picking the pessimistic one.
 8. **`&& echo pushed` after a commit that was rejected**, reporting success for
    a no-op push. Pushes now compare the SHA before and after.
+9. **Treating an outage as N broken assets.** A chunk lost its network partway
+   and marked **1,435 assets FAILED**, one per remaining asset in the plan,
+   attempting every one of them after the cause was unmistakable. Nothing was
+   lost, because a FAILED row is re-queued by the next run, but the state read
+   as 1,435 individually broken photographs. `sync` now ends a chunk after
+   `CONSECUTIVE_FAILURE_LIMIT` failures in a row and says it stopped early. The
+   rule counts rather than diagnoses: matching Apple's error strings to spot
+   "offline" would be reading a message where a signal already exists.
 
 ---
 

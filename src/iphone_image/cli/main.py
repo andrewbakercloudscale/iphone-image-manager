@@ -603,6 +603,12 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
         for key, value in outcome.by_type.items():
             total.by_type[key] = total.by_type.get(key, 0) + value
 
+        if outcome.stopped_early:
+            # Whatever ended one type ends the run. Moving on to video after an
+            # outage stopped the photos would just fail 10 more times.
+            total.stopped_early = outcome.stopped_early
+            break
+
     data.update(
         {
             "fetched": total.fetched,
@@ -617,6 +623,7 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
             "alreadyLocal": total.local_count,
             "remainingAssets": total.remaining_assets,
             "remainingBytes": total.remaining_bytes,
+            "stoppedEarly": total.stopped_early,
             "failures": total.failures[:20],
         }
     )
@@ -627,7 +634,7 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
             [
                 ("fetched", f"{total.fetched:,} assets, {human_bytes(total.bytes_fetched)}"),
                 ("already present", f"{total.skipped_existing:,}"),
-                ("re-fetched (file was missing)", f"{total.missing_recovered:,}"),
+                ("re-fetched (was missing)", f"{total.missing_recovered:,}"),
                 ("leftover partials swept", f"{total.partials_swept:,}"),
                 ("failed", f"{total.failed:,}"),
                 ("rate", total.rate_text),
@@ -646,6 +653,11 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
                     f"    {str(failure.get('filename'))[:30]:<32}{failure.get('error')}",
                     style="warn",
                 )
+            if len(total.failures) > 10:
+                ctx.out.line(f"    ... and {len(total.failures) - 10:,} more", style="warn")
+        if total.stopped_early:
+            ctx.out.line()
+            ctx.out.warn(total.stopped_early)
         ctx.out.line()
         ctx.out.line(
             "  Nothing was removed from the library. sync only ever copies.", style="muted"

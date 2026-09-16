@@ -462,3 +462,89 @@ def test_sweeping_never_touches_a_real_archive_file(env) -> None:
     count, _ = sync_engine.sweep_partials(config.archive.local_path)
     assert count == 0
     assert keeper.read_bytes() == b"real"
+
+
+# ---------------------------------------------------------------------------
+# Stopping early: an outage is not N broken assets
+# ---------------------------------------------------------------------------
+
+
+def test_a_run_of_failures_stops_the_chunk(env) -> None:
+    """A real run lost its network and marked 1,435 assets FAILED one by one.
+
+    Attempting the 1,435th after 1,434 consecutive failures cannot succeed, and
+    the state it leaves reads as that many broken photographs rather than one
+    outage.
+    """
+    config, db = env
+    identifiers = [f"a{i}" for i in range(40)]
+    for key in identifiers:
+        add_asset(db, key, size=MB)
+    helper = FakeHelper(sizes=dict.fromkeys(identifiers, MB), fail=set(identifiers))
+
+    result = sync_engine.run(config, Selector(), budget_bytes=40 * MB, helper=helper)
+
+    assert result.stopped_early is not None
+    assert result.failed == sync_engine.CONSECUTIVE_FAILURE_LIMIT
+    assert len(helper.requested) == sync_engine.CONSECUTIVE_FAILURE_LIMIT, (
+        "it kept asking for assets after the outage was unmistakable"
+    )
+
+
+def test_assets_never_attempted_are_left_alone_for_the_next_run(env) -> None:
+    config, db = env
+    identifiers = [f"a{i}" for i in range(40)]
+    for key in identifiers:
+        add_asset(db, key, size=MB)
+
+    sync_engine.run(
+        config, Selector(), budget_bytes=40 * MB, helper=FakeHelper(fail=set(identifiers))
+    )
+
+    untouched = db.conn.execute(
+        "SELECT COUNT(*) AS n FROM assets WHERE local_status = 'DISCOVERED'"
+    ).fetchone()["n"]
+    assert untouched == 40 - sync_engine.CONSECUTIVE_FAILURE_LIMIT
+
+
+def test_the_next_run_picks_up_everything_the_outage_left(env) -> None:
+    """Nothing is lost: FAILED is not terminal, it is just not verified."""
+    config, db = env
+    identifiers = [f"a{i}" for i in range(40)]
+    for key in identifiers:
+        add_asset(db, key, size=MB)
+
+    sync_engine.run(
+        config, Selector(), budget_bytes=40 * MB, helper=FakeHelper(fail=set(identifiers))
+    )
+    recovered = sync_engine.run(
+        config,
+        Selector(),
+        budget_bytes=40 * MB,
+        helper=FakeHelper(sizes=dict.fromkeys(identifiers, MB)),
+    )
+
+    assert recovered.fetched == 40
+    assert recovered.stopped_early is None
+    verified = db.conn.execute(
+        "SELECT COUNT(*) AS n FROM assets WHERE local_status = 'LOCAL_VERIFIED'"
+    ).fetchone()["n"]
+    assert verified == 40
+
+
+def test_failures_scattered_among_successes_do_not_stop_the_chunk(env) -> None:
+    """The rule is *consecutive*. One bad asset every few is not an outage."""
+    config, db = env
+    identifiers = [f"a{i}" for i in range(40)]
+    for key in identifiers:
+        add_asset(db, key, size=MB)
+    # Every third fails: never CONSECUTIVE_FAILURE_LIMIT in a row.
+    doomed = {i for n, i in enumerate(identifiers) if n % 3 == 0}
+    helper = FakeHelper(sizes=dict.fromkeys(identifiers, MB), fail=doomed)
+
+    result = sync_engine.run(config, Selector(), budget_bytes=40 * MB, helper=helper)
+
+    assert result.stopped_early is None
+    assert result.failed == len(doomed)
+    assert result.fetched == 40 - len(doomed)
+    assert len(helper.requested) == 40, "the whole chunk should still have been attempted"

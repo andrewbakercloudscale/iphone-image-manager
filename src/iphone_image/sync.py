@@ -69,6 +69,10 @@ class SyncResult:
     remaining_assets: int = 0
     remaining_bytes: int = 0
     too_large: int = 0
+    #: Set when the chunk ended before its plan did, and why. A run that stopped
+    #: early is not a run that finished, and the difference must survive into
+    #: the report rather than looking like a smaller chunk than was planned.
+    stopped_early: str | None = None
     failures: list[dict[str, Any]] = field(default_factory=list)
     by_type: dict[str, int] = field(default_factory=dict)
 
@@ -103,6 +107,19 @@ class SyncResult:
 
 #: Used only until this installation has downloaded anything of its own.
 FALLBACK_MB_S = 1.0
+
+#: Stop a chunk after this many failures in a row.
+#:
+#: A real run lost its network partway and marked 1,435 assets FAILED in quick
+#: succession, one per remaining asset in the chunk. Nothing was lost -- a
+#: FAILED row is re-queued by the next run -- but attempting asset 1,435 after
+#: 1,434 consecutive failures cannot succeed, and the state it leaves behind
+#: reads as 1,435 individually broken photographs rather than one outage.
+#:
+#: Counted rather than diagnosed. Matching Apple's error strings to recognise
+#: "offline" would be reading a message where a signal already exists: whatever
+#: the cause, this many failures in a row means the next attempt is pointless.
+CONSECUTIVE_FAILURE_LIMIT = 10
 
 
 def observed_rate(db: Database, *, minimum_bytes: int = 20 * 1024 * 1024) -> float | None:
@@ -326,20 +343,34 @@ def run(
         with journal.operation(
             Op.DOWNLOAD, command="sync", detail={"planned": chunk.count, "bytes": chunk.total_bytes}
         ) as operation:
+            consecutive_failures = 0
             for asset in chunk.included:
+                failed_before = result.failed
                 _fetch_one(config, db, journal, helper, asset, result)
                 if on_asset:
                     on_asset(asset, result)
+
+                if result.failed > failed_before:
+                    consecutive_failures += 1
+                else:
+                    consecutive_failures = 0
+
+                if consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT:
+                    result.stopped_early = (
+                        f"stopped after {consecutive_failures} failures in a row, which is "
+                        f"an outage rather than {consecutive_failures} bad assets. Nothing "
+                        f"is lost: the next run picks up where this one stopped."
+                    )
+                    log.warning("%s", result.stopped_early)
+                    break
                 # Re-checked between assets: a chunk that would breach the floor
                 # part way through stops cleanly rather than filling the disk.
                 if free_bytes(config.archive.local_path) < floor:
-                    log.warning("free space fell below the floor, stopping this chunk")
-                    result.failures.append(
-                        {
-                            "filename": "(chunk)",
-                            "error": "stopped: free space reached the configured floor",
-                        }
+                    result.stopped_early = (
+                        "stopped: free space reached the configured floor. Free some disk, "
+                        "lower chunking.chunk_bytes, or point archive.local_path elsewhere."
                     )
+                    log.warning("%s", result.stopped_early)
                     break
             operation.note(
                 fetched=result.fetched,
@@ -350,6 +381,7 @@ def run(
                 networkSeconds=round(result.network_seconds, 3),
                 localBytes=result.local_bytes,
                 localCount=result.local_count,
+                stoppedEarly=result.stopped_early,
             )
     finally:
         db.close()
