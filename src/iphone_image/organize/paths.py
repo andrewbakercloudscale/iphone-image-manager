@@ -17,6 +17,7 @@ PATTERN_TOKENS: frozenset[str] = frozenset(
     {
         "source",
         "year",
+        "event",
         "month",
         "day",
         "country",
@@ -34,6 +35,7 @@ PATTERN_TOKENS: frozenset[str] = frozenset(
 #: "Unknown Date", "Unknown Location" and "Unknown City" explicitly.
 FALLBACKS: dict[str, str] = {
     "source": "Unknown Source",
+    "event": "Unknown Date",
     "year": "Unknown Date",
     "month": "Unknown Date",
     "day": "Unknown Date",

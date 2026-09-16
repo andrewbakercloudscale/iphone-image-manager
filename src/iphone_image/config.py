@@ -110,6 +110,16 @@ class OrganizationConfig(Strict):
     mode: OrganizationMode = OrganizationMode.DATE
     pattern: str = "{year}/{month}"
 
+    #: For the {event} token: how few photos a place can have and still earn its
+    #: own folder. Below it an asset falls back to its month, which sorts beside
+    #: the named folders rather than into a junk drawer. Measured on a real
+    #: archive, 1 gave 314 folders of which half held fewer than ten photos.
+    event_min_photos: int = Field(default=10, ge=1)
+
+    #: A gap longer than this starts a new visit. Cape Town in March and again
+    #: in November is two trips, not one eight-month span.
+    event_gap_days: int = Field(default=45, ge=1)
+
     @field_validator("pattern")
     @classmethod
     def _check_pattern(cls, value: str) -> str:

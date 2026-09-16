@@ -22,7 +22,7 @@ import json
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -30,8 +30,10 @@ from .config import Config
 from .db.database import Database, utcnow
 from .journal import Journal, Op
 from .logs import get_logger
+from .organize.events import assign
 from .organize.paths import render_pattern, unique_filename
 from .photos.helper import Helper
+from .photos.places import read_places
 from .selector import ChunkPlan, Selector, channel_of, plan_chunk
 
 log = get_logger("sync")
@@ -183,10 +185,59 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def archive_path_for(config: Config, asset: dict[str, Any]) -> Path:
+def event_folders(config: Config, db: Database, *, also: list[str] | None = None) -> dict[str, str]:
+    """The folder every asset belongs in, for the `{event}` token.
+
+    Clustered over **what the archive will actually hold**: assets already
+    archived, plus `also`, the chunk about to be fetched. Both halves of that
+    matter and the first draft got it wrong in each direction.
+
+    Clustering over one chunk alone would name the same trip differently
+    depending on which chunk it fell in -- five Cape Town photos become a month
+    bucket, two hundred become a folder.
+
+    Clustering over the whole library is worse, and this is the one that
+    shipped for a few minutes: a place passes the minimum on WhatsApp images and
+    screenshots that are never archived, so the folder is created for the two
+    camera photos that are. It produced 46 folders holding fewer than the ten
+    photos configured as the minimum, including "2019/11 London" holding two.
+    **The threshold has to count the files that will exist, not the assets that
+    inspired them.**
+
+    Skipped entirely when the pattern does not ask for it, because reading the
+    Photos database costs a copy of it.
+    """
+    if "{event}" not in config.organization.pattern:
+        return {}
+    places = read_places(config.photos.library_path)
+    placeholders = ",".join("?" for _ in (also or []))
+    extra = f" OR identity_key IN ({placeholders})" if also else ""
+    rows = db.conn.execute(
+        f"SELECT identity_key, created_at_device FROM assets "
+        f"WHERE present_on_phone = 1 AND (local_status = 'LOCAL_VERIFIED'{extra})",
+        list(also or []),
+    ).fetchall()
+    folders, _ = assign(
+        [dict(r) for r in rows],
+        places.by_uuid,
+        gap=timedelta(days=config.organization.event_gap_days),
+        min_photos=config.organization.event_min_photos,
+    )
+    return folders
+
+
+def archive_path_for(
+    config: Config, asset: dict[str, Any], *, events: dict[str, str] | None = None
+) -> Path:
     """Where this asset belongs in the archive, per the configured pattern."""
     created = asset.get("created_at_device") or ""
+    event = (events or {}).get(str(asset.get("identity_key") or ""))
+    if event is None and created:
+        # No assignment for this asset: its month, which is what an unnamed
+        # asset gets anyway. Never a different answer from the one `assign` gives.
+        event = created[5:7] or None
     values: dict[str, str | None] = {
+        "event": event,
         "source": channel_of(asset),
         "year": created[:4] or None,
         "month": created[5:7] or None,
@@ -321,6 +372,9 @@ def run(
         result.partials_swept, _ = sweep_partials(config.archive.local_path)
         result.missing_recovered = reconcile_missing(db, selector)
         chunk, _ = plan(config, selector, budget_bytes=budget_bytes, db=db)
+        # The chunk counts toward its own clustering: these assets are about to
+        # be archived, so they are part of what the folders will hold.
+        events = event_folders(config, db, also=[str(a["identity_key"]) for a in chunk.included])
         result.planned = chunk.count
         result.remaining_assets = chunk.remaining_assets
         result.remaining_bytes = chunk.remaining_bytes
@@ -346,7 +400,7 @@ def run(
             consecutive_failures = 0
             for asset in chunk.included:
                 failed_before = result.failed
-                _fetch_one(config, db, journal, helper, asset, result)
+                _fetch_one(config, db, journal, helper, asset, result, events)
                 if on_asset:
                     on_asset(asset, result)
 
@@ -396,9 +450,10 @@ def _fetch_one(
     helper: Helper,
     asset: dict[str, Any],
     result: SyncResult,
+    events: dict[str, str] | None = None,
 ) -> None:
     identifier = asset["identity_key"]
-    directory = archive_path_for(config, asset)
+    directory = archive_path_for(config, asset, events=events)
     directory.mkdir(parents=True, exist_ok=True)
 
     # An asset already recorded keeps its path, so a resumed run overwrites

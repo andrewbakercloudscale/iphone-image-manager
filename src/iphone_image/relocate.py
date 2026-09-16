@@ -35,7 +35,7 @@ from .db.database import Database, utcnow
 from .journal import Journal, Op
 from .logs import get_logger
 from .organize.paths import sanitize_segment, unique_filename
-from .sync import archive_path_for
+from .sync import archive_path_for, event_folders
 
 log = get_logger("relocate")
 
@@ -73,6 +73,7 @@ def plan(config: Config, db: Database) -> tuple[list[Move], RelocateResult]:
 
     result = RelocateResult()
     moves: list[Move] = []
+    events = event_folders(config, db)
 
     # Every path this plan will vacate. A file sitting on a name we want is not
     # an obstacle if it is itself moving away in the same plan.
@@ -90,7 +91,7 @@ def plan(config: Config, db: Database) -> tuple[list[Move], RelocateResult]:
             result.missing += 1
             continue
 
-        directory = archive_path_for(config, asset)
+        directory = archive_path_for(config, asset, events=events)
         preferred = sanitize_segment(asset.get("filename") or current.name, fallback="unnamed")
 
         if directory / preferred == current:
