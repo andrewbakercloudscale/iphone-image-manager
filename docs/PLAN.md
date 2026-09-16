@@ -4,7 +4,7 @@ Plan of record for delivering `docs/SPEC.md`.
 
 **Status:** P0 complete and it changed the architecture. P1 foundation complete.
 P2 onwards is re-cut around PhotoKit.
-**Last updated:** 2026-09-14
+**Last updated:** 2026-09-16
 
 ---
 
@@ -55,6 +55,7 @@ This is not a heuristic. It is `ZIMPORTEDBYBUNDLEIDENTIFIER`, recorded by iOS.
 | 12 | Mac-side deletion | Never `unlink` user media. macOS Trash via `NSFileManager.trashItem`. |
 | 13 | Exact duplicates | One archive file per unique SHA256, N asset rows. Requires downloading, no device fingerprint exists. |
 | 14 | Cloud transport | rclone. The tool never holds a token. |
+| 14b | Local disk is reclaimed each cycle | The archive is a **staging buffer, not a destination**. Once an asset is cloud-verified and gone from the phone, the Mac copy is released and the recycle bin keeps only its manifest row. Junk that was never uploaded keeps its bytes. Invariant: two independent copies at all times. Settled 2026-09-16; the plan had never said what frees the disk, and the recycle bin's hard link would have stalled the second cycle. |
 | 15 | Reverse geocoding | Offline bundled dataset. No network. |
 | 16 | Python baseline | 3.12 floor, CI on 3.12, 3.13 and 3.14. |
 | 17 | Distribution | Helper built from source. No Apple Developer account, no signing. |
@@ -153,9 +154,16 @@ This also solves where WhatsApp bulk goes. It lands in the recycle bin, not the
 archive, so ~70 GB of forwarded images never reaches Google Drive and ages out
 after the retention window instead of being kept forever.
 
-An asset that should be both archived and removed is `sync`ed first, and the
-remove step then hardlinks its recycle bin entry to the existing archive file
-rather than storing a second copy.
+An asset that should be both archived and removed is `sync`ed first. What the
+remove step then does with the Mac copy is decision 14b: released once the asset
+is cloud-verified, because Drive plus Recently Deleted is already two independent
+copies and the third is the disk the next chunk needs. Junk that was never
+uploaded keeps its bytes and hard links the archive file where one exists.
+
+**This is what makes the product work on a Mac with no room for the library.**
+Each cycle fetches a chunk, uploads what is worth keeping, removes it from the
+phone and hands the disk back. The archive is a staging buffer, not a
+destination.
 
 ---
 
@@ -225,6 +233,11 @@ per unique SHA256, N asset rows. Collapsed duplicates go to the macOS Trash.
 ### P7. Cloud
 `CloudProvider` protocol, `RcloneProvider`, Google Drive first. Archive only;
 the recycle bin is never mirrored.
+
+**This is the phase that unblocks everything else**, because nothing can be
+released from the Mac or removed from the phone until a second copy is proven to
+exist somewhere. Prerequisite outside the code: an rclone remote the user
+configures themselves, since decision 14 is that the tool never holds a token.
 
 ### P8. Verify and report
 Reconcile library, archive, cloud and ledger. Every blocked asset individually

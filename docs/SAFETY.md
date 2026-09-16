@@ -38,8 +38,8 @@ Step 4 is why bulk categories do not pollute the archive. WhatsApp media removed
 from the phone lands in the recycle bin, not the archive, so it is never mirrored
 to cloud storage and it ages out after the retention window rather than being
 kept forever. An asset that should be both archived and removed is `sync`ed
-first, and its recycle bin entry then hardlinks the existing archive file instead
-of storing a second copy.
+first; whether its recycle bin entry keeps the bytes then depends on the cloud
+copy, per section 5.
 
 ---
 
@@ -161,10 +161,27 @@ There are two separate undo paths and they are easy to confuse.
   meaning `.partial` fragments and failed downloads, are unlinked directly, because
   filling the Trash with junk is how a safety feature stops being used.
 - Every asset removed from the iPhone leaves a recycle bin entry on the Mac, under
-  `~/.iphone-image/recycle-bin/<campaign>/<date>/`. The entry hard links the
-  verified archive file, so it costs no extra disk, and records a manifest row with
-  the asset id, original device path, SHA256, capture date, classification, the
+  `~/.iphone-image/recycle-bin/<campaign>/<date>/`. It always records a manifest row
+  with the asset id, original device path, SHA256, capture date, classification, the
   evidence that made it eligible, and when it was removed.
+
+  **Whether it also keeps the bytes depends on whether a cloud copy exists.**
+
+  | | Drive | phone | Mac |
+  |---|---|---|---|
+  | cloud-verified | verified | Recently Deleted, 30 days | **released** |
+  | never uploaded | none | Recently Deleted, 30 days | bytes kept for the retention window |
+
+  The invariant is **two independent copies at all times**, and the Mac is only
+  ever the third. For an asset verified in the cloud, holding a third copy buys
+  nothing and costs the disk the next chunk needs. For junk that was deliberately
+  never uploaded, the recycle bin is the only copy besides Recently Deleted, so it
+  keeps the bytes and hard links the archive file where one exists.
+
+  This is what lets the whole library be processed on a Mac with 30 GB free and no
+  external drive: the archive is a staging buffer, not a destination. An earlier
+  version of this document said the entry always hard links the archive file and
+  holds it for 90 days, which would have stalled the second cycle.
 
 The recycle bin entry is written and flushed to disk **before** the deletion call
 reaches the device. A crash between the two leaves a spare record, never a hole.

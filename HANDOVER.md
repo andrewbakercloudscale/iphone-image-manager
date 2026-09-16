@@ -162,6 +162,7 @@ years that exist only in iCloud. Interrupt freely: resume is tested.
 | Ordering | photos before video; oldest first within a type |
 | Removal sequence | fetch to Mac, review, delete from device, move to recycle bin. **No exceptions.** A `--discard` flag was proposed and rejected. |
 | Destinations | `sync` writes the archive and will mirror to cloud; `remove` writes the recycle bin and never mirrors |
+| **The Mac is a temporary working copy** | The archive is a staging buffer, not a destination. Once an asset is in Google Drive the Mac copy is released, and the recycle bin keeps only its manifest row. Junk that was never uploaded keeps its bytes for the retention window, because nothing else holds it. Invariant: **two independent copies at all times**. Settled 2026-09-16. |
 | Proxies | backed up like anything else, **permanently blocked from removal**, no override. The block is applied by `Selector.for_removal()`, never by a selector default: as a default it silently removed them from backup too. |
 | iCloud sync propagation | detected; removal will need a typed confirmation |
 | Mac-side deletion | never `unlink` user media; macOS Trash via `NSFileManager.trashItem` |
@@ -249,15 +250,40 @@ Kept because the pattern matters more than the individual bugs.
 
 ## 9. What to do next
 
+**The goal, stated by the user 2026-09-16:** process the library in chunks and
+end with roughly one year of images on the phone. There is **no external drive
+and there will not be one** -- working in chunks on a Mac with ~30 GB free is
+the whole point of the product, not a limitation to engineer around.
+
+Measured against the current library, one year as the cutoff:
+
+```
+STAYS on the phone     15,208 assets    44 GB
+LEAVES the phone       63,598 assets   114 GB
+  camera               17,443 assets    92 GB   -> Google Drive
+  whatsapp             35,712 assets    10 GB   -> discard
+  screenrecording         223 assets     7 GB   -> discard
+  screenshot            4,377 assets     4 GB   -> discard
+  unattributed          5,115 assets     1 GB   -> look before deciding
+```
+
+Roughly 9 cycles of: fetch a chunk, upload what is worth keeping, remove it from
+the phone, hand the disk back.
+
 In order:
 
-1. **Chunk 2**: `iphone-image sync --source camera --apply`. Expect hours.
-2. **P6 exact dedupe.** No device-side fingerprint exists, so hashing happens
-   after download. One archive file per unique SHA256, N asset rows.
-3. **P7 cloud** via rclone to Google Drive. Archive only; the recycle bin is
-   never mirrored.
-4. **P8 verify** reconciling library, archive, cloud and ledger.
-5. **P10 removal**, gated on `tests/destructive/` existing and passing first.
+1. **P7 cloud** via rclone to Google Drive. **This unblocks everything else**:
+   nothing can be released from the Mac or removed from the phone until a second
+   copy is proven to exist. Prerequisite outside the code: the user configures an
+   rclone remote themselves, because the tool never holds a token. rclone 1.74.1
+   is installed and has **no remotes configured yet**.
+2. **P8 verify** reconciling library, archive, cloud and ledger.
+3. **The release step**, decision 14b. Nothing existed for this: the plan had
+   never said what frees the Mac disk, and the recycle bin's hard link would have
+   held every processed chunk for 90 days and stalled the second cycle.
+4. **P10 removal**, gated on `tests/destructive/` existing and passing first.
+5. **P6 exact dedupe** whenever convenient. It saves upload bandwidth rather than
+   unblocking anything, and every archived file already carries its SHA256.
 
 `docs/PLAN.md` is the plan of record and is current.
 
