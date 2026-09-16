@@ -75,10 +75,17 @@ def plan(config: Config, db: Database) -> tuple[list[Move], RelocateResult]:
     moves: list[Move] = []
     events = event_folders(config, db)
 
-    # Every path this plan will vacate. A file sitting on a name we want is not
-    # an obstacle if it is itself moving away in the same plan.
-    vacating = {str(Path(row["local_path"])) for row in rows}
-    claimed: set[str] = set()
+    # Two passes, and the split between them is the whole point.
+    #
+    # A file sitting on a name we want is not an obstacle if it is itself moving
+    # away in the same plan. But an asset that is *already where it belongs* is
+    # not moving away, and treating it as though it were is how a mover gets
+    # handed a stayer's path and `os.rename` destroys the file on it. That
+    # happened: 36 files, 91 MB, silently overwritten, and the ledger was left
+    # with two assets pointing at one file. Pass one therefore decides who stays
+    # before pass two decides where anyone goes.
+    staying: set[str] = set()
+    movers: list[tuple[dict[str, Any], Path, Path, str]] = []
 
     for row in rows:
         asset = dict(row)
@@ -96,7 +103,16 @@ def plan(config: Config, db: Database) -> tuple[list[Move], RelocateResult]:
 
         if directory / preferred == current:
             result.already_in_place += 1
+            staying.add(str(current))
             continue
+
+        movers.append((asset, current, directory, preferred))
+
+    # Only a mover vacates. Only a mover can be given a name.
+    vacating = {str(current) for _, current, _, _ in movers}
+    claimed: set[str] = set(staying)
+
+    for asset, current, directory, preferred in movers:
 
         def taken(candidate: Path, *, _self: str = str(current)) -> bool:
             if str(candidate) in claimed:
@@ -114,6 +130,7 @@ def plan(config: Config, db: Database) -> tuple[list[Move], RelocateResult]:
         destination = directory / name
         if destination == current:
             result.already_in_place += 1
+            claimed.add(str(current))
             continue
 
         claimed.add(str(destination))

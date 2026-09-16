@@ -201,3 +201,56 @@ def test_prune_never_climbs_out_of_the_archive_into_the_home_folder(tmp_path: Pa
     deep.mkdir(parents=True)
     prune_empty_directories({deep}, keep=tmp_path / "archive")
     assert tmp_path.exists()
+
+
+def test_a_mover_never_takes_the_path_of_an_asset_that_is_staying(
+    tmp_path: Path, ledger: Database
+) -> None:
+    """The bug that destroyed 36 files, 91 MB, on a real archive.
+
+    Every asset holding a path was treated as about to vacate it, including the
+    ones already where they belong. A mover was therefore told a stayer's path
+    would be free, os.rename overwrote the file on it, and the ledger was left
+    with two assets pointing at one file and no error anywhere.
+    """
+    config = _config(tmp_path, "{source}/{year}")
+    # A is already exactly where the pattern puts it.
+    stayer = tmp_path / "archive" / "camera" / "2020" / "IMG_1.JPG"
+    _asset(
+        ledger,
+        stayer,
+        identity_key="stayer",
+        sha256="a" * 64,
+        created_at_device="2020-05-04T10:00:00+00:00",
+        source_bundle_id="com.apple.camera",
+    )
+    stayer.write_bytes(b"the file that must survive")
+
+    # B is not, and wants the same name in the same folder.
+    mover = tmp_path / "archive" / "camera" / "2020" / "03" / "IMG_1.JPG"
+    _asset(
+        ledger,
+        mover,
+        identity_key="mover",
+        sha256="b" * 64,
+        created_at_device="2020-03-04T10:00:00+00:00",
+        source_bundle_id="com.apple.camera",
+    )
+    mover.write_bytes(b"the file that must move")
+
+    result = run(config, db=ledger)
+
+    assert result.failed == 0
+    assert stayer.exists(), "the stayer's file was destroyed"
+    assert stayer.read_bytes() == b"the file that must survive"
+
+    paths = [
+        r["local_path"]
+        for r in ledger.conn.execute(
+            "SELECT local_path FROM assets ORDER BY identity_key"
+        ).fetchall()
+    ]
+    assert len(set(paths)) == 2, f"two assets share one path: {paths}"
+    assert all(Path(p).exists() for p in paths)
+    contents = {Path(p).read_bytes() for p in paths}
+    assert contents == {b"the file that must survive", b"the file that must move"}
