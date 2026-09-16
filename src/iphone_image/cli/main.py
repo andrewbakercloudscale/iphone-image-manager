@@ -110,7 +110,7 @@ logging:
 performance:
   local_transfer_workers: 2   # device stability beats throughput
   hash_workers: 4
-  cloud_upload_workers: 4
+  cloud_upload_workers: 16    # measured: 4 gave 0.33 MB/s to Drive, 16 gave 2.55
 """
 
 

@@ -268,7 +268,9 @@ class LoggingConfig(Strict):
 class PerformanceConfig(Strict):
     local_transfer_workers: int = Field(default=2, ge=1, le=16)
     hash_workers: int = Field(default=4, ge=1, le=32)
-    cloud_upload_workers: int = Field(default=4, ge=1, le=32)
+    #: Measured against Google Drive: 4 gave 0.33 MB/s and 16 gave 2.55, because
+    #: the limit is per-file API overhead rather than bandwidth.
+    cloud_upload_workers: int = Field(default=16, ge=1, le=32)
 
 
 class Config(Strict):
