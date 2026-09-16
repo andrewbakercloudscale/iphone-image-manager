@@ -1,6 +1,7 @@
 # Handover
 
-Written 2026-09-16. Everything below is measured or recorded, not assumed.
+Written 2026-09-16, revised the same day once `release` landed. Everything below
+is measured or recorded, not assumed.
 
 ---
 
@@ -38,12 +39,14 @@ never uploaded   Recently Deleted 30d only              ->  Mac keeps the bytes
 
 ```
 fetch  ->  upload  ->  verify  ->  release the Mac copy  ->  next chunk
-                                          ^ NOT BUILT YET
 ```
 
-**The release step does not exist.** Everything else does. Until it is written
-the disk cannot be reclaimed and the cycle cannot turn a second time. It is the
-single most valuable thing to build next.
+**Every step now exists.** `release` landed in `ff4c9bd`; the cycle can turn a
+second time. It has not yet freed meaningful disk, because the first upload is
+still in flight and only what the remote confirms is eligible -- 20 of 19,926 on
+its verified trial run, the other 19,906 correctly refused as not yet in the
+cloud. **The disk is still at 18 GB. Finishing the upload is what unlocks it**,
+not more code.
 
 ---
 
@@ -57,10 +60,10 @@ single most valuable thing to build next.
 | P6 dedupe | Not needed yet: zero exact duplicates among the 19,962 archived. |
 | **P7 cloud** | **Built and running.** Upload in flight, see below. |
 | P8 verify | Per-asset hash verification exists inside `cloud`; a full reconcile does not. |
-| **The release step** | **Not started. Blocks everything.** |
+| **The release step** | **Built** (`ff4c9bd`). Waiting on the upload, not on code. |
 | P10 removal | Not started, gated on `tests/destructive/` existing first. |
 
-263 tests, ruff and mypy clean. 35 commits, 4 unpushed. Nothing uncommitted.
+270 tests, ruff and mypy clean. 37 commits, 1 unpushed. Nothing uncommitted.
 
 ### Where the bytes are
 
@@ -168,6 +171,7 @@ scan                inventory the library, ~2 min, no bandwidth
 list <selector>     preview, harmless
 sync <selector>     plan only; --apply to fetch
 cloud <selector>    plan only; --apply to upload and verify
+release <selector>  plan only; --apply to trash local copies the remote confirms
 relocate            re-file the archive after a layout change; --apply to run
 device | status | journal | config show|validate|init
 ```
@@ -302,7 +306,7 @@ Kept because the pattern matters more than the individual bugs.
   upload resumable in the way the fetch already is.
 - **36 assets are waiting to be re-fetched** and `sync` will refuse to start
   while free space is under the 20 GB floor. They come back as soon as the
-  release step frees the disk.
+  upload finishes and `release --apply` reclaims the disk.
 - **6,259 archived photos have GPS but no place name**, because Photos never
   reverse-geocoded them. They fall back to month buckets. Fixing it means an
   offline dataset, which is `docs/PLAN.md` decision 15 and a real build.
@@ -324,10 +328,9 @@ Kept because the pattern matters more than the individual bugs.
 
 ## 11. What to do next
 
-1. **The release step**, decision 14b. Free the disk: delete the Mac copy of any
-   asset whose `cloud_status` is CLOUD_VERIFIED and whose `cloud_path` names the
-   copy. Never `unlink` -- macOS Trash, per decision 12. Nothing else can happen
-   until this exists.
+1. **Let the upload finish, then `release --apply`.** The code exists; what it
+   needs is a remote that has the bytes. Watch `~/.iphone-image/cloud.log`.
+   Nothing else can happen until the disk is back.
 2. **Re-measure the sync gap** with ~80 GB free, which settles section 8.
 3. **Re-fetch the 36** and finish the screenshots/WhatsApp chunks.
 4. **P10 removal**, gated on `tests/destructive/` existing and passing first.
@@ -343,6 +346,7 @@ Kept because the pattern matters more than the individual bugs.
 | `docs/SAFETY.md` | Shortest and most important. The hazards, the four-step removal sequence, and what happens to the Mac copy. |
 | `docs/PLAN.md` | Architecture, decisions, phases, risk register. |
 | `src/iphone_image/cloud.py` | Why an upload is not believed until the remote is asked. |
+| `src/iphone_image/release.py` | The only other code that destroys data. Four rules, and why RELEASED had to be terminal. |
 | `src/iphone_image/relocate.py` | Two passes, and the 36 files that paid for the second one. |
 | `src/iphone_image/organize/events.py` | The three clustering rules and the data that produced them. |
 | `src/iphone_image/selector.py` | The selector, the channel classifier, and `for_removal`. |
