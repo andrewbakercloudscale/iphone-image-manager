@@ -98,8 +98,8 @@ with `cd spikes/iimphotos && swift build -c release`.
 | P8 verify, the release step, P10 removal | Not started. |
 | P6 dedupe, P9 campaigns | Not started, and not blocking. |
 
-237 tests, ruff and mypy clean, CI green on macOS across Python 3.12 to 3.14.
-30 commits. Nothing uncommitted.
+243 tests, ruff and mypy clean, CI green on macOS across Python 3.12 to 3.14.
+31 commits. Nothing uncommitted.
 
 ### Where the bytes are
 
@@ -262,6 +262,19 @@ Kept because the pattern matters more than the individual bugs.
    names both possibilities rather than picking the pessimistic one.
 8. **`&& echo pushed` after a commit that was rejected**, reporting success for
    a no-op push. Pushes now compare the SHA before and after.
+10. **A completeness check that could not check completeness, reporting `[ok]`.**
+   The phone holds **14,605 screenshots**; the Mac library holds **7,684**, and
+   every missing one predates 2024. The whole library is 79,024 against the
+   phone's ~94,180 -- **84%** -- and `doctor` called the sync healthy
+   throughout, because the comparison it would have used is guarded by
+   `if expected and ...` and `photos.expected_assets` was unset. Absence of a
+   reference read as a pass. This is the same shape as every gate failure in
+   this project and it mattered more than most: the user's first cleanup was
+   "delete all screenshots", which would have reached 53% of them and looked
+   finished. The fix does not depend on anyone typing a number -- the library's
+   own composition gives it away, since a year holding 8,411 assets and no
+   screenshots is not a change of habit. **The total looked plausible; only the
+   composition showed it.**
 9. **Treating an outage as N broken assets.** A chunk lost its network partway
    and marked **1,435 assets FAILED**, one per remaining asset in the plan,
    attempting every one of them after the cause was unmistakable. Nothing was

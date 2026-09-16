@@ -92,6 +92,26 @@ def _scalar(db: Path, sql: str) -> int | str | None:
         return None
 
 
+def _rows(db: Path, sql: str) -> list[sqlite3.Row] | None:
+    """Several rows, or None when the schema does not support the question.
+
+    None and an empty list mean different things and callers must not confuse
+    them: empty is "asked and answered, nothing matched", None is "could not
+    ask". An undocumented schema changes between macOS releases, so a query
+    that no longer parses has to degrade rather than crash or, worse, read as
+    a clean result.
+    """
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            return conn.execute(sql).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+
+
 def _human(n: float) -> str:
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if abs(n) < 1024.0:
@@ -247,6 +267,50 @@ def check_icloud_mode(config: Config) -> Check:
     )
 
 
+#: A year holding this many assets is a year the phone was in real use.
+_GAP_MIN_ASSETS = 500
+#: Below this share of screenshots, a year looks like it never received them.
+_GAP_LOW_SHARE = 0.01
+#: ...but only claim that when another year proves the library does hold them.
+_GAP_HEALTHY_SHARE = 0.05
+
+
+def _screenshot_gap(db: Path) -> list[str] | None:
+    """Years holding plenty of assets but almost no screenshots.
+
+    This is self-evidence: it needs nothing the user has to type, which is the
+    point. A phone in daily use produces screenshots every year, so a year with
+    8,411 assets and none at all is not a change of habit, it is a year the
+    library never received.
+
+    Written because the Mac held 7,684 of the phone's 14,605 screenshots, every
+    missing one predated 2024, and `doctor` called the sync `[ok]` throughout.
+    The total alone could not show it -- the library held 84% of the assets and
+    looked plausible -- but the composition could, and did.
+
+    Returns None when the subtype column is absent. An unreadable schema is not
+    evidence of a complete library, and must not read as one.
+    """
+    rows = _rows(
+        db,
+        "SELECT strftime('%Y', ZDATECREATED + 978307200, 'unixepoch') AS year, "
+        "COUNT(*) AS assets, "
+        "SUM(CASE WHEN ZKINDSUBTYPE = 10 THEN 1 ELSE 0 END) AS shots "
+        "FROM ZASSET WHERE ZTRASHEDSTATE = 0 AND ZDATECREATED IS NOT NULL "
+        "GROUP BY year ORDER BY year",
+    )
+    if rows is None:
+        return None
+
+    years = [(r["year"], int(r["assets"] or 0), int(r["shots"] or 0)) for r in rows if r["year"]]
+    substantial = [(y, n, s) for y, n, s in years if n >= _GAP_MIN_ASSETS]
+    if not any(s / n >= _GAP_HEALTHY_SHARE for _, n, s in substantial):
+        # No year is screenshot-rich, so there is no baseline to judge against.
+        # Someone who never screenshots anything is not a broken sync.
+        return []
+    return [y for y, n, s in substantial if s / n < _GAP_LOW_SHARE]
+
+
 def check_sync(config: Config) -> Check:
     db = _copy_photos_db(config.photos.library_path)
     if db is None:
@@ -342,9 +406,43 @@ def check_sync(config: Config) -> Check:
             data,
         )
 
+    gaps = _screenshot_gap(db)
+    data["screenshotGapYears"] = gaps
+    if gaps:
+        return Check(
+            "iCloud sync",
+            WARN,
+            f"{assets:,} assets, but {len(gaps)} year(s) hold almost no screenshots: "
+            f"{', '.join(gaps)}",
+            "A phone in daily use produces screenshots every year, so this library "
+            "is very likely missing those years rather than recording a change of "
+            "habit. Anything the library has not received cannot be backed up or "
+            "removed by this tool. Leave Photos open until it catches up, and check "
+            "free disk space: macOS throttles iCloud downloads when the disk is full.",
+            data,
+        )
+
     detail = f"{assets:,} assets, {videos:,} videos"
     if newest:
         detail += f", newest {newest:%Y-%m-%d}"
+
+    if not expected:
+        # The failure this check was built to stop. With no reference it cannot
+        # tell a complete library from a partial one, and it used to say [ok]
+        # anyway -- on a library holding 84% of the phone. Absence of a
+        # reference is not a pass.
+        return Check(
+            "iCloud sync",
+            WARN,
+            f"{detail} -- completeness not verified",
+            "Set photos.expected_assets to the number your phone reports, from "
+            "Photos > Library on the iPhone. Until it is set this check can see "
+            "that the library has assets but not whether it has all of them, and "
+            "planning a cleanup against a partial library silently does part of "
+            "the job.",
+            data,
+        )
+
     return Check("iCloud sync", PASS, detail, "", data)
 
 
