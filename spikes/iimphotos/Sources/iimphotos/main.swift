@@ -17,6 +17,9 @@ USAGE
                                         PhotoKit answers without downloading.
     iimphotos export [options]          Write originals to disk. Reads work from
                                         stdin as <localIdentifier>TAB<path>.
+    iimphotos trash                     Move files to the macOS Trash, never
+                                        unlink them. Reads paths from stdin, one
+                                        per line. Touches no photo library.
     iimphotos delete-roundtrip          Create a 1x1 test image OF ITS OWN, then
                                         delete it. Proves deletion works without
                                         touching any of your photographs.
@@ -139,6 +142,10 @@ case "export":
     }
     Export.run(timeout: exportTimeout, allowNetwork: !args.contains("--no-network"))
     exit(0)
+
+case "trash":
+    // No authorisation: this moves files on disk and never opens the library.
+    Trash.run()
 
 case "delete-roundtrip":
     requireAuthorization()

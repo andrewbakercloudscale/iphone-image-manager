@@ -17,6 +17,7 @@ import click
 
 from .. import __version__
 from .. import cloud as cloud_engine
+from .. import release as release_engine
 from .. import relocate as relocate_engine
 from .. import sync as sync_engine
 from ..config import (
@@ -897,6 +898,130 @@ def cloud(ctx: Context, apply_: bool, **kwargs: Any) -> None:
         ctx.out.line()
         ctx.out.line(
             "  Nothing local was deleted. Releasing the Mac copy is a separate step.",
+            style="muted",
+        )
+
+    ctx.out.result(data, render_result)
+    if result.failed:
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# release
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@selector_options
+@click.option("--apply", "apply_", is_flag=True, help="Actually release. Without it, plan only.")
+@pass_context
+def release(ctx: Context, apply_: bool, **kwargs: Any) -> None:
+    """Free disk by trashing local copies that are verified in the cloud.
+
+    The remote is asked what it holds in this same run, and only a matching
+    hash makes an asset eligible: a ledger row is a claim about when it was
+    written, and this deletes the only other copy.
+
+    Files go to the macOS Trash, never unlinked, so everything is restorable
+    from Finder.
+    """
+    config = ctx.config
+    try:
+        selector = build_selector(**kwargs)
+    except SelectorError as exc:
+        _fail(ctx.out, str(exc))
+        return
+
+    db = ctx.database()
+    try:
+        eligible, preview = release_engine.plan(config, db, selector)
+    except (release_engine.ReleaseError, cloud_engine.CloudError) as exc:
+        _fail(ctx.out, str(exc))
+        return
+    finally:
+        db.close()
+
+    freeable = sum(c.size_bytes for c in eligible)
+    data: dict[str, Any] = {
+        "applied": apply_,
+        "examined": preview.examined,
+        "eligible": preview.eligible,
+        "eligibleBytes": freeable,
+        "blocked": preview.blocked,
+        "blockedReasons": preview.blocks,
+    }
+
+    def render_blocks() -> None:
+        if not preview.blocks:
+            return
+        ctx.out.line()
+        ctx.out.line("  Not released, and why", style="head")
+        for reason, count in sorted(preview.blocks.items(), key=lambda kv: -kv[1]):
+            ctx.out.line(f"    {count:>7,}  {reason}", style="muted")
+
+    if not apply_:
+
+        def render_plan() -> None:
+            ctx.out.title("Release plan")
+            ctx.out.pairs(
+                [
+                    ("archived files examined", f"{preview.examined:,}"),
+                    ("safe to release", f"{preview.eligible:,}, {human_bytes(freeable)}"),
+                    ("blocked", f"{preview.blocked:,}"),
+                ]
+            )
+            render_blocks()
+            ctx.out.line()
+            if not eligible:
+                ctx.out.ok("nothing is safe to release yet")
+                return
+            ctx.out.line("  Files go to the macOS Trash, restorable from Finder.", style="muted")
+            ctx.out.line("  NOTHING HAS BEEN RELEASED. Add --apply to run it.", style="warn")
+
+        ctx.out.result(data, render_plan)
+        return
+
+    def tick(result: Any) -> None:
+        ctx.out.line(
+            f"  released {result.released:,} of {preview.eligible:,}, "
+            f"{human_bytes(result.bytes_freed)} freed",
+            style="muted",
+        )
+
+    try:
+        result = release_engine.run(config, selector, on_progress=tick)
+    except (release_engine.ReleaseError, cloud_engine.CloudError, HelperError) as exc:
+        _fail(ctx.out, str(exc))
+        return
+
+    data.update(
+        {
+            "released": result.released,
+            "bytesFreed": result.bytes_freed,
+            "failed": result.failed,
+            "failures": result.failures[:20],
+        }
+    )
+
+    def render_result() -> None:
+        ctx.out.title("Release")
+        ctx.out.pairs(
+            [
+                ("released", f"{result.released:,} files"),
+                ("disk freed", human_bytes(result.bytes_freed)),
+                ("blocked", f"{result.blocked:,}"),
+                ("failed", f"{result.failed:,}"),
+            ]
+        )
+        render_blocks()
+        if result.failures:
+            ctx.out.line()
+            ctx.out.line("  Failures", style="head")
+            for failure in result.failures[:10]:
+                ctx.out.line(f"    {failure['file']}: {failure['error']}", style="warn")
+        ctx.out.line()
+        ctx.out.line(
+            "  Everything released is in the macOS Trash, restorable from Finder.",
             style="muted",
         )
 

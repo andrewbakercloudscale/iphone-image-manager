@@ -230,6 +230,14 @@ uninterrupted run.
 Hash after download, since no device-side fingerprint exists. One archive file
 per unique SHA256, N asset rows. Collapsed duplicates go to the macOS Trash.
 
+### The release step **[done]**
+`iphone-image release`, decision 14b. Trashes the local copy of any asset whose
+cloud copy the remote confirms **in that same invocation** -- a ledger row is a
+claim about when it was written, and this deletes the only other copy. Files go
+to the macOS Trash through the Swift helper's `trash` command, never `unlink`.
+`RELEASED` is terminal: `sync` excludes it as firmly as `LOCAL_VERIFIED`, or the
+cycle would fetch, release and fetch the same asset forever.
+
 ### P7. Cloud
 `CloudProvider` protocol, `RcloneProvider`, Google Drive first. Archive only;
 the recycle bin is never mirrored.

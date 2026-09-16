@@ -214,7 +214,11 @@ def event_folders(config: Config, db: Database, *, also: list[str] | None = None
     extra = f" OR identity_key IN ({placeholders})" if also else ""
     rows = db.conn.execute(
         f"SELECT identity_key, created_at_device FROM assets "
-        f"WHERE present_on_phone = 1 AND (local_status = 'LOCAL_VERIFIED'{extra})",
+        # RELEASED counts too: its folder is already fixed in the cloud, so
+        # dropping it from the clustering could rename a trip that is by then
+        # only reachable under its old name.
+        f"WHERE present_on_phone = 1 "
+        f"AND (local_status IN ('LOCAL_VERIFIED', 'RELEASED'){extra})",
         list(also or []),
     ).fetchall()
     folders, _ = assign(
@@ -320,7 +324,11 @@ def reconcile_missing(db: Database, selector: Selector) -> int:
 def _candidates(db: Database, selector: Selector) -> list[dict[str, Any]]:
     where, params = selector.where()
     rows = db.conn.execute(
-        f"SELECT a.* FROM assets a WHERE {where} AND a.local_status != 'LOCAL_VERIFIED' "
+        f"SELECT a.* FROM assets a WHERE {where} "
+        # RELEASED is excluded as firmly as LOCAL_VERIFIED. Its file was deleted
+        # on purpose, because a verified cloud copy replaced it; selecting it
+        # again would download it, release it, and download it forever.
+        f"AND a.local_status NOT IN ('LOCAL_VERIFIED', 'RELEASED') "
         f"ORDER BY {selector.order_by()}",
         params,
     ).fetchall()
