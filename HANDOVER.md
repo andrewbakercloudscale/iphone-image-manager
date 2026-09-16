@@ -1,13 +1,13 @@
 # Handover
 
-Written 2026-09-14. Everything below is measured or recorded, not assumed.
+Written 2026-09-16. Everything below is measured or recorded, not assumed.
 
 ---
 
 ## 1. What this is
 
-`iphone-image` is a macOS CLI that inventories, backs up, verifies and
-eventually offloads iPhone media. Repo: **https://github.com/andrewbakercloudscale/iphone-image-manager**
+`iphone-image` is a macOS CLI that inventories, backs up, verifies and offloads
+iPhone media. Repo: **https://github.com/andrewbakercloudscale/iphone-image-manager**
 (public, MIT). Working copy: `~/Desktop/github/iphone-image-manager`.
 
 The core promise, unchanged: **nothing is ever removed from the phone that is
@@ -15,7 +15,55 @@ not already on the Mac, reviewed, and verified.** See `docs/SAFETY.md`.
 
 ---
 
-## 2. The one thing to understand first
+## 2. The goal, in the user's words
+
+> "We process this chunk, we delete files that aren't needed and upload needed
+> files to my gdrive. At the end of this, I will only have one year's images on
+> my phone."
+
+Two things follow from that, and both were got wrong once already.
+
+**There is no external drive and there will not be one.** Working in chunks on a
+Mac with ~30 GB free *is the product*, not a limitation to engineer around. A
+previous session proposed buying a drive; that was solving the wrong problem.
+
+**The Mac is a temporary working copy.** The archive is a staging buffer, not a
+destination. Once an asset is in Google Drive the Mac copy is released. The plan
+had never said what frees the disk, and `docs/SAFETY.md` said the opposite --
+that the recycle bin hard links the archive file and holds it 90 days -- which
+would have stalled the second cycle. Fixed 2026-09-16, decision 14b.
+
+The invariant that makes it safe: **two independent copies at all times**, and
+the Mac is only ever the third.
+
+```
+cloud-verified   Drive verified + Recently Deleted 30d  ->  Mac copy released
+never uploaded   Recently Deleted 30d only              ->  Mac keeps the bytes
+```
+
+### What that means numerically
+
+One year as the cutoff, measured against the real library:
+
+```
+STAYS on the phone     15,208 assets    44 GB
+LEAVES the phone       63,598 assets   114 GB
+  camera               17,443 assets    92 GB   -> Google Drive
+  whatsapp             35,712 assets    10 GB   -> discard
+  screenrecording         223 assets     7 GB   -> discard
+  screenshot            4,377 assets     4 GB   -> discard
+  unattributed          5,115 assets     1 GB   -> look before deciding
+```
+
+Phone goes from **158 GB to 44 GB**, in roughly 9 cycles of: fetch a chunk,
+upload what is worth keeping, remove it from the phone, hand the disk back.
+
+Note the shape: **92 of the 114 GB leaving is camera**, and 35,712 WhatsApp
+assets are only 10 GB. Cleaning WhatsApp is high-count and low-value for space.
+
+---
+
+## 3. The one piece of architecture to understand
 
 **The original USB architecture is dead.** The P0 spike ran against a real
 iPhone 15 Pro Max on iOS 26.6.2 and killed it on two independent counts:
@@ -33,70 +81,78 @@ refuses deletion outright. Full evidence: `spikes/P0-transport.md`.
 read-only query of `Photos.sqlite` for the source application, which PhotoKit
 does not expose. Evidence: `spikes/P0b-photokit.md`.
 
+The Swift helper is `spikes/iimphotos`, speaking JSON Lines on stdout. Build it
+with `cd spikes/iimphotos && swift build -c release`.
+
 ---
 
-## 3. Current state
+## 4. Current state
 
 | Phase | Status |
 |---|---|
 | P0 USB spike | Complete. Killed the architecture. |
 | P0b PhotoKit spike | Complete. Deletion **works** (`PHAssetChangeRequest.deleteAssets`). |
 | P1 foundation | Complete. Config, ledger, migrations, journal, CLI, paths, retention, logging, doctor. |
-| P5 scan / list / sync | **Complete and run against the real library.** |
-| P6 dedupe, P7 cloud, P8 verify, P9 campaigns, P10 removal | Not started. |
+| P5 scan / list / sync | Complete, run against the real library. **Camera is fully archived.** |
+| **P7 cloud** | **Next, and it blocks everything else.** |
+| P8 verify, the release step, P10 removal | Not started. |
+| P6 dedupe, P9 campaigns | Not started, and not blocking. |
 
 237 tests, ruff and mypy clean, CI green on macOS across Python 3.12 to 3.14.
-27 commits. Nothing uncommitted.
+30 commits. Nothing uncommitted.
 
-### What has actually been fetched
+### Where the bytes are
 
 ```
-archive   ~/Desktop/iphone           31 GB, 11,395 files, {source}/{year}/{month}
+archive   ~/Desktop/iphone            {source}/{year}/{month}
 ledger    ~/Desktop/iphone/iphone-image.sqlite
 config    ~/.iphone-image/config.yaml
-logs      ~/.iphone-image/logs/iphone-image.log
-
-PHOTO  LOCAL_VERIFIED   11,395    30.9 GB     done, all camera
-PHOTO  DISCOVERED       65,108    43.3 GB     to do
-VIDEO  DISCOVERED        2,303    83.5 GB     untouched, needs --type video
+logs      ~/.iphone-image/logs/, chunk.log, chunk.pid
 ```
 
-All 11,395 archived files were re-hashed from disk after the move and matched
-their recorded SHA256 exactly. Zero partials, zero failures.
+```
+PHOTO  LOCAL_VERIFIED   19,962    59.5 GB   camera, complete
+PHOTO  DISCOVERED       56,541    14.7 GB   whatsapp, screenshots, the small stuff
+VIDEO  DISCOVERED        2,303    83.5 GB   untouched, needs --type video
+TOTAL                   78,806   157.8 GB
 
-The archive moved out of `~/Pictures/iPhoneArchive` and the ledger out of
-`~/.iphone-image/` on 2026-09-14, and the layout gained a channel level, so
-each source lands in its own folder: `camera/2019/03/`, `whatsapp/2024/11/`.
-`iphone-image relocate` is what performs that move; it renames rather than
-copies, so it is instant on one volume and refused across two. Logs and the
-run-chunk state file stayed in `~/.iphone-image/`.
+cloud verified                0             nothing has been uploaded yet
+free disk on the Mac       31 GB
+```
+
+**This is the pinch point.** 59.5 GB is staged on a Mac with 31 GB free and
+nowhere to go. Nothing can be released until Drive has it, which is why P7 is
+next and not P6.
 
 ---
 
-## 4. Measured numbers
+## 5. Measured numbers
 
 Do not replace these with estimates; they were expensive to get.
 
 | | |
 |---|---|
 | Library | 78,806 assets, **158 GB** (not the 424 GB first estimated from the device cache) |
-| Photos | 76,503 assets, 74 GB |
-| Videos | 2,303 assets, **83.5 GB — 53% of bytes from 3% of items** |
-| iCloud download rate | **1.24 to 1.50 MB/s** sustained |
+| Videos | 2,303 assets, **83.5 GB -- 53% of bytes from 3% of items** |
+| iCloud download rate | **1.15 to 1.50 MB/s** sustained, measured repeatedly |
 | Local disk read rate | > 4,000 MB/s, which is why the two must never be averaged |
 | Scan time | ~2 minutes for the whole library, zero bandwidth |
-| WhatsApp | 43,967 assets but only **15.4 GB** |
-| Camera | 20,713 assets, **124 GB** (20,613 excluding suspected proxies, which is what the pre-2026-09-14 selector counted) |
-| Screenshots | 7,681 assets, 6.7 GB |
-| Suspected iCloud proxies | 4,224, excluded from selection by default |
+| Archive move | 11,395 files, 30.9 GB, **4.5 seconds** -- renames, not copies |
 
-**Storage insight worth keeping:** cleaning WhatsApp is high-count and
-low-value for space. 32,405 WhatsApp images over a year old recover only 5 GB.
-The space is in camera video.
+Channels, every asset filed in exactly one:
+
+```
+whatsapp        43,967      camera          20,713      screenshot   7,681
+unattributed     5,115      chrome             535      screenrecording 309
+chatgpt            217      snapchat            91      + 24 more
+```
+
+`camera` is 20,713 for backup and 20,613 with suspected proxies excluded, which
+is where an older figure in this document came from.
 
 ---
 
-## 5. How to run it
+## 6. How to run it
 
 ```bash
 cd ~/Desktop/github/iphone-image-manager
@@ -110,7 +166,8 @@ iphone-image scan              # inventory the library, ~2 min, no bandwidth
 iphone-image list <selector>   # preview, harmless
 iphone-image sync <selector>   # plan only
 iphone-image sync <selector> --apply
-iphone-image status | journal | config show|validate|init
+iphone-image relocate          # re-file the archive after a config change
+iphone-image device | status | journal | config show|validate|init
 ```
 
 The selector is one vocabulary shared by `list`, `sync` and later `remove`:
@@ -125,53 +182,48 @@ The selector is one vocabulary shared by `list`, `sync` and later `remove`:
 --budget   15GB   --limit N   --no-favourites   --no-proxy-suspects
 ```
 
-### The next chunk
+### Running a chunk
 
-A chunk takes hours, and a process started from a terminal dies with SIGHUP when
-the window closes. Use the detached runner:
+A chunk takes hours and dies with SIGHUP if the terminal closes. Use the
+detached runner, which runs under `nohup caffeinate -dimsu` and reparents to
+launchd (verified: PPID 1):
 
 ```bash
 ./run-chunk.sh --source camera      # detached, survives closing the terminal
-./run-chunk.sh --status             # is it running, how far along, any errors
-./run-chunk.sh --stop               # clean stop; resume with another run
+./run-chunk.sh --status             # this run's progress, errors, started time
+./run-chunk.sh --stop               # SIGTERM; resume with another run
 tail -f ~/.iphone-image/chunk.log
 ```
 
-It runs under `nohup caffeinate -dimsu`, so the Mac will not idle, sleep its
-disk or dim out mid-transfer, and the process reparents to launchd (verified:
-PPID 1). Or in the foreground if you prefer to watch:
-
-```bash
-iphone-image sync --source camera --apply     # 15 GB
-```
-
-Chunk 1 ran in minutes because 2019-2021 were already resident on disk from the
-old local originals. **Chunk 2 will be genuinely slow**, because it reaches
-years that exist only in iCloud. Interrupt freely: resume is tested.
+Interrupt freely. Every asset is journalled before it is fetched, no `.partial`
+is ever mistaken for a verified file, and the next run resumes from the ledger.
+A `FAILED` row is not terminal -- it is simply not `LOCAL_VERIFIED`, so the next
+run re-queues it. That path is tested and has been exercised for real: an outage
+left 1,435 failures and the retry recovered all of them.
 
 ---
 
-## 6. Decisions already taken
+## 7. Decisions already taken
 
 | Decision | Choice |
 |---|---|
 | Transport | PhotoKit + read-only `Photos.sqlite`, not USB |
 | Library residency | Photos stays in **Optimise Mac Storage**; originals fetched per asset on demand |
+| **The Mac is a temporary working copy** | Archive is a staging buffer. Released once the asset is in Drive; the recycle bin then keeps only its manifest row. Junk never uploaded keeps its bytes. Two independent copies at all times. |
+| Archive layout | `{source}/{year}/{month}` under `~/Desktop/iphone`. `{source}` is the channel as `--source` names it. |
 | Chunk size | **15 GB**, roughly one overnight run. Sized by wall clock, not disk. |
 | Default types | **`[photo]`**. Video must be asked for by name. |
-| Ordering | photos before video; oldest first within a type |
-| Removal sequence | fetch to Mac, review, delete from device, move to recycle bin. **No exceptions.** A `--discard` flag was proposed and rejected. |
-| Destinations | `sync` writes the archive and will mirror to cloud; `remove` writes the recycle bin and never mirrors |
-| **The Mac is a temporary working copy** | The archive is a staging buffer, not a destination. Once an asset is in Google Drive the Mac copy is released, and the recycle bin keeps only its manifest row. Junk that was never uploaded keeps its bytes for the retention window, because nothing else holds it. Invariant: **two independent copies at all times**. Settled 2026-09-16. |
-| Proxies | backed up like anything else, **permanently blocked from removal**, no override. The block is applied by `Selector.for_removal()`, never by a selector default: as a default it silently removed them from backup too. |
+| Removal sequence | fetch to Mac, review, delete from device, move to recycle bin. **No exceptions.** A `--discard` flag was proposed and rejected -- so even junk is fetched before it can be removed. |
+| Proxies | backed up like anything else, **permanently blocked from removal**, no override. The block is `Selector.for_removal()`, never a selector default: as a default it silently removed them from backup too. |
+| Channels partition | Every asset belongs to exactly one channel. `unattributed` is the exact complement of `camera`, not "no source app". |
 | iCloud sync propagation | detected; removal will need a typed confirmation |
 | Mac-side deletion | never `unlink` user media; macOS Trash via `NSFileManager.trashItem` |
-| Cloud | rclone; the tool never holds a token |
+| Cloud | rclone; **the tool never holds a token** |
 | Licence / distribution | MIT; helper built from source, no Apple Developer account |
 
 ---
 
-## 7. Mistakes made, and what they cost
+## 8. Mistakes made, and what they cost
 
 Kept because the pattern matters more than the individual bugs.
 
@@ -221,82 +273,69 @@ Kept because the pattern matters more than the individual bugs.
 
 ---
 
-## 8. Open questions
+## 9. Open questions
 
-- **Screenshot classification is unproven at scale.** `photoScreenshot` flagged
-  1 of 44,939 on the old library, but that library had 12 PNGs total. On the
-  current one `com.apple.springboard` and the subtype agree on 7,679 of 7,681,
-  which is strong, but it has not been checked against a library with many
-  screenshots from mixed sources.
-- **Whether parallel fetches raise the 1.5 MB/s rate.** Untested. Would change
-  the schedule materially.
+- **Screenshot classification is unproven at scale.** On the current library
+  `com.apple.springboard` and the `photoScreenshot` subtype agree on 7,679 of
+  7,681, which is strong, but it has not been checked against a library with
+  many screenshots from mixed sources.
+- **Whether parallel fetches raise the 1.5 MB/s rate.** Untested. At 1.5 MB/s
+  the remaining 98 GB is ~18 hours of transfer, so this is worth an hour to find
+  out before committing to 9 sequential cycles.
+- **The 5,115 unattributed assets.** uuid-named, no source app, not matched by
+  the `IMG_*` camera heuristic. Only 0.6 GB, so they cost nothing to keep -- but
+  nobody has looked at what they actually are.
+- **Proxy threshold (0.12 bytes per pixel) is calibrated from a sample**, not
+  proven. 4,224 assets are flagged. They are backed up; they can never be
+  removed. Worth eyeballing some before that block matters.
 - **`photos.expected_assets` is unset** and should stay unset unless a real
   number is known. The 94,180 figure came from a phone screenshot and caused a
   false stall report.
-- **Proxy threshold (0.12 bytes per pixel) is calibrated from a sample**, not
-  proven. 4,224 assets are currently excluded by it. Worth eyeballing some.
-- ~~Proxy suspects are not being backed up at all.~~ **Settled 2026-09-14: the
-  protection belongs on `remove`, where it is absolute.** It had been a selector
-  default, and because `sync` uses the default selector, all 4,224 were left out
-  of every backup while `docs/SAFETY.md` section 2 promised they were archived
-  normally. Backup now reaches all 78,806 assets; `Selector.for_removal()`
-  blocks the 4,224 and no flag can waive it. Found while verifying the channel
-  classifier against the real library, not by reading the code.
-- **The 18,932 unattributed assets** are assumed to be mostly camera. The
-  `IMG_*` heuristic covers 13,787 of them; the other 5,111 are uuid-named and
-  currently unattributed to any channel.
+- **Junk retention is unsettled in practice.** Decision 14b says junk never
+  uploaded keeps its bytes for the retention window (90 days by default). At
+  ~21 GB of junk against 31 GB free, that window may itself become the pinch
+  point. Shortening it, or dropping junk immediately, is a live option the user
+  has not been asked about directly.
 
 ---
 
-## 9. What to do next
+## 10. What to do next
 
-**The goal, stated by the user 2026-09-16:** process the library in chunks and
-end with roughly one year of images on the phone. There is **no external drive
-and there will not be one** -- working in chunks on a Mac with ~30 GB free is
-the whole point of the product, not a limitation to engineer around.
+**Blocked on the user, and nothing proceeds without it:** an rclone remote for
+Google Drive. rclone 1.74.1 is installed and has **no remotes configured**. The
+tool never holds a token, so this is configured by hand. A ready script was put
+on the clipboard; it creates the remote with `scope=drive.file` (least
+privilege -- rclone can only see files it created), makes the `iPhone Archive`
+folder, and round-trips a test file verified by hash before trusting it.
 
-Measured against the current library, one year as the cutoff:
+Then, in order:
 
-```
-STAYS on the phone     15,208 assets    44 GB
-LEAVES the phone       63,598 assets   114 GB
-  camera               17,443 assets    92 GB   -> Google Drive
-  whatsapp             35,712 assets    10 GB   -> discard
-  screenrecording         223 assets     7 GB   -> discard
-  screenshot            4,377 assets     4 GB   -> discard
-  unattributed          5,115 assets     1 GB   -> look before deciding
-```
-
-Roughly 9 cycles of: fetch a chunk, upload what is worth keeping, remove it from
-the phone, hand the disk back.
-
-In order:
-
-1. **P7 cloud** via rclone to Google Drive. **This unblocks everything else**:
-   nothing can be released from the Mac or removed from the phone until a second
-   copy is proven to exist. Prerequisite outside the code: the user configures an
-   rclone remote themselves, because the tool never holds a token. rclone 1.74.1
-   is installed and has **no remotes configured yet**.
-2. **P8 verify** reconciling library, archive, cloud and ledger.
-3. **The release step**, decision 14b. Nothing existed for this: the plan had
-   never said what frees the Mac disk, and the recycle bin's hard link would have
-   held every processed chunk for 90 days and stalled the second cycle.
-4. **P10 removal**, gated on `tests/destructive/` existing and passing first.
-5. **P6 exact dedupe** whenever convenient. It saves upload bandwidth rather than
-   unblocking anything, and every archived file already carries its SHA256.
+1. **P7 cloud.** `CloudProvider` protocol, `RcloneProvider`, upload + verify by
+   hash. Archive only; the recycle bin is never mirrored. Build it against a
+   fake provider the way `FakeHelper` works, so the logic is testable without a
+   live remote.
+2. **P8 verify.** Reconcile library, archive, cloud and ledger.
+3. **The release step**, decision 14b. Does not exist in any form yet. This is
+   what makes cycle 2 possible.
+4. **P10 removal.** Gated: `tests/destructive/` must exist and pass first. The
+   four-step sequence, fresh reconciliation, typed confirmation while iCloud
+   sync is on, per-asset journal writes, resumable, group-aware.
+5. **P6 exact dedupe** whenever convenient. It saves upload bandwidth rather
+   than unblocking anything, and every archived file already carries its SHA256.
 
 `docs/PLAN.md` is the plan of record and is current.
 
 ---
 
-## 10. Files worth reading, in order
+## 11. Files worth reading, in order
 
 | File | Why |
 |---|---|
-| `docs/SAFETY.md` | Shortest and most important. The hazards and the four-step removal sequence. |
+| `docs/SAFETY.md` | Shortest and most important. The hazards, the four-step removal sequence, and what happens to the Mac copy. |
 | `docs/PLAN.md` | Architecture, decisions, phases, risk register. |
+| `src/iphone_image/selector.py` | The selector, the channel classifier, and `for_removal`. |
+| `src/iphone_image/sync.py` | The fetch engine, its verification rules, and the rate split. |
+| `src/iphone_image/relocate.py` | How the archive is re-filed when the layout changes. |
 | `spikes/P0-transport.md` | Why USB failed. |
 | `spikes/P0b-photokit.md` | What replaced it, and the measured fetch rate. |
-| `docs/SPEC.md` | The original specification, kept verbatim. |
-| `src/iphone_image/selector.py` | The selector and chunk planner. |
-| `src/iphone_image/sync.py` | The fetch engine and its verification rules. |
+| `docs/SPEC.md` | The original specification, kept verbatim. Some of it is superseded; `PLAN.md` section 7 lists which. |
