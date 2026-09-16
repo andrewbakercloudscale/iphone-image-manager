@@ -16,6 +16,7 @@ from typing import Any
 import click
 
 from .. import __version__
+from .. import cloud as cloud_engine
 from .. import relocate as relocate_engine
 from .. import sync as sync_engine
 from ..config import (
@@ -787,6 +788,117 @@ def relocate(ctx: Context, apply_: bool, show: int) -> None:
                 ctx.out.line(f"      {failure['error']}", style="warn")
         ctx.out.line()
         ctx.out.line("  Files were renamed, not copied. Nothing was deleted.", style="muted")
+
+    ctx.out.result(data, render_result)
+    if result.failed:
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# cloud
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@selector_options
+@click.option("--apply", "apply_", is_flag=True, help="Actually upload. Without it, plan only.")
+@pass_context
+def cloud(ctx: Context, apply_: bool, **kwargs: Any) -> None:
+    """Mirror verified archive files to cloud storage.
+
+    Uploads, then asks the remote what it holds and compares SHA256 against the
+    ledger. Only a match marks an asset verified, because the local copy is
+    released on the strength of that record.
+    """
+    config = ctx.config
+    try:
+        selector = build_selector(**kwargs)
+    except SelectorError as exc:
+        _fail(ctx.out, str(exc))
+        return
+
+    db = ctx.database()
+    try:
+        uploads = cloud_engine.plan(config, selector, db)
+    finally:
+        db.close()
+
+    total_bytes = sum(u.size_bytes for u in uploads)
+    data: dict[str, Any] = {
+        "applied": apply_,
+        "remote": config.cloud.remote,
+        "destination": config.cloud.destination,
+        "planned": len(uploads),
+        "plannedBytes": total_bytes,
+    }
+
+    if not apply_:
+
+        def render_plan() -> None:
+            ctx.out.title("Cloud plan")
+            ctx.out.pairs(
+                [
+                    ("selector", selector.describe()),
+                    ("remote", f"{config.cloud.remote}:{config.cloud.destination}"),
+                    ("to upload", f"{len(uploads):,} files, {human_bytes(total_bytes)}"),
+                ]
+            )
+            ctx.out.line()
+            for upload in uploads[:8]:
+                ctx.out.line(f"    {upload.relative}", style="muted")
+            if len(uploads) > 8:
+                ctx.out.line(f"    ... and {len(uploads) - 8:,} more", style="muted")
+            ctx.out.line()
+            if not uploads:
+                ctx.out.ok("everything selected is already verified in the cloud")
+                return
+            ctx.out.line("  NOTHING HAS BEEN UPLOADED. Add --apply to run it.", style="warn")
+
+        ctx.out.result(data, render_plan)
+        return
+
+    def tick(channel: str, count: int) -> None:
+        ctx.out.line(f"  uploading {count:,} file(s) from {channel} ...", style="muted")
+
+    try:
+        result = cloud_engine.run(config, selector, on_channel=tick)
+    except cloud_engine.CloudError as exc:
+        _fail(ctx.out, str(exc))
+        return
+
+    data.update(
+        {
+            "uploaded": result.uploaded,
+            "verified": result.verified,
+            "failed": result.failed,
+            "bytesUploaded": result.bytes_uploaded,
+            "mbPerSecond": round(result.rate_mb_s, 2) or None,
+            "failures": result.failures[:20],
+        }
+    )
+
+    def render_result() -> None:
+        ctx.out.title("Cloud")
+        ctx.out.pairs(
+            [
+                ("destination", f"{config.cloud.remote}:{config.cloud.destination}"),
+                ("uploaded", f"{result.uploaded:,} files, {human_bytes(result.bytes_uploaded)}"),
+                ("verified by hash", f"{result.verified:,}"),
+                ("failed", f"{result.failed:,}"),
+                ("rate", f"{result.rate_mb_s:.2f} MB/s" if result.seconds else "-"),
+            ]
+        )
+        if result.failures:
+            ctx.out.line()
+            ctx.out.line("  Failures", style="head")
+            for failure in result.failures[:10]:
+                ctx.out.line(f"    {failure['file']}", style="warn")
+                ctx.out.line(f"      {failure['error']}", style="warn")
+        ctx.out.line()
+        ctx.out.line(
+            "  Nothing local was deleted. Releasing the Mac copy is a separate step.",
+            style="muted",
+        )
 
     ctx.out.result(data, render_result)
     if result.failed:
