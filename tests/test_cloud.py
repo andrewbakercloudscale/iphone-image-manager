@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -192,3 +193,137 @@ def test_limit_is_honoured(env) -> None:
         add_archived(config, db, f"a{i}", f"2019/11/IMG_{i}.JPG", body=f"x{i}".encode())
     assert len(cloud_engine.plan(config, Selector(limit=2), db)) == 2
     assert len(cloud_engine.plan(config, Selector(), db)) == 5
+
+
+# ---------------------------------------------------------------------------
+# What rclone tells us while it is working
+#
+# The first real upload wrote 228 bytes to its logfile and then nothing for
+# hours: rclone prints no progress unless asked, and stderr was captured rather
+# than streamed, so nothing could have appeared before the run ended anyway. A
+# log that looks identical whether a transfer is moving or dead is the failure
+# this project keeps meeting, so these tests hold both halves of the fix.
+# ---------------------------------------------------------------------------
+
+
+def _fake_rclone(path: Path, body: str) -> str:
+    """A stand-in for the binary. Tests drive its output, not a real remote."""
+    script = path / "rclone"
+    script.write_text("#!/bin/sh\n" + body)
+    script.chmod(0o755)
+    return str(script)
+
+
+def test_upload_asks_for_the_stats_rclone_will_not_print_otherwise(tmp_path: Path) -> None:
+    """All three flags, and --stats-log-level is the one easily left out.
+
+    Measured against rclone 1.74.1: --stats with --stats-one-line prints
+    nothing at all on its own, because stats are logged at INFO while the
+    default log level is NOTICE. Dropping it would restore the silent log
+    while looking like progress had been asked for.
+    """
+    argv = tmp_path / "argv.txt"
+    binary = _fake_rclone(tmp_path, f'printf "%s\\n" "$@" > {argv}\nexit 0\n')
+    (tmp_path / "src").mkdir()
+
+    provider = cloud_engine.RcloneProvider("gdrive", binary=binary)
+    provider.upload(tmp_path / "src", ["a/IMG_1.JPG"], "Dest")
+
+    args = argv.read_text().split("\n")
+    assert "--stats" in args
+    assert "--stats-one-line" in args
+    assert "--stats-log-level" in args
+    assert args[args.index("--stats-log-level") + 1] == "NOTICE"
+    assert "--progress" not in args, "redraws with control codes; unreadable in a logfile"
+
+
+def test_progress_arrives_while_rclone_is_still_running(tmp_path: Path) -> None:
+    """The test cannot pass if stderr is only handed over at exit.
+
+    The fake prints one line and then waits for the callback to have seen it,
+    failing if it never does. Under `capture_output` the callback cannot run
+    until the process has exited, so the wait times out and the run fails.
+    """
+    seen: list[str] = []
+    sentinel = tmp_path / "seen.flag"
+    binary = _fake_rclone(
+        tmp_path,
+        'echo "NOTICE: 1 MiB / 10 MiB, 10%" >&2\n'
+        "i=0\n"
+        f'while [ ! -f "{sentinel}" ]; do\n'
+        "  i=$((i+1))\n"
+        '  [ "$i" -gt 100 ] && exit 9\n'
+        "  sleep 0.05\n"
+        "done\n"
+        "exit 0\n",
+    )
+    (tmp_path / "src").mkdir()
+
+    def note(line: str) -> None:
+        seen.append(line)
+        sentinel.write_text("")
+
+    provider = cloud_engine.RcloneProvider("gdrive", binary=binary, on_progress=note)
+    provider.upload(tmp_path / "src", ["a/IMG_1.JPG"], "Dest")
+
+    assert seen == ["NOTICE: 1 MiB / 10 MiB, 10%"]
+
+
+def test_a_failing_rclone_still_reports_what_it_said(tmp_path: Path) -> None:
+    """Streaming stderr must not cost us the diagnostic on a non-zero exit."""
+    binary = _fake_rclone(
+        tmp_path,
+        'echo "ERROR: IMG_1.JPG: quota exceeded" >&2\nexit 3\n',
+    )
+    (tmp_path / "src").mkdir()
+
+    provider = cloud_engine.RcloneProvider("gdrive", binary=binary)
+    with pytest.raises(cloud_engine.CloudError, match="quota exceeded") as caught:
+        provider.upload(tmp_path / "src", ["a/IMG_1.JPG"], "Dest")
+    assert "exited 3" in str(caught.value)
+
+
+def test_hours_of_stats_do_not_crowd_out_the_error(tmp_path: Path) -> None:
+    """Only the tail is kept, and the last thing said is what went wrong."""
+    binary = _fake_rclone(
+        tmp_path,
+        'i=0\nwhile [ $i -lt 400 ]; do echo "NOTICE: stats $i" >&2; i=$((i+1)); done\n'
+        'echo "ERROR: giving up" >&2\nexit 1\n',
+    )
+    (tmp_path / "src").mkdir()
+
+    provider = cloud_engine.RcloneProvider("gdrive", binary=binary)
+    with pytest.raises(cloud_engine.CloudError, match="giving up"):
+        provider.upload(tmp_path / "src", ["a/IMG_1.JPG"], "Dest")
+
+
+def test_a_large_listing_does_not_deadlock(tmp_path: Path) -> None:
+    """20,000 remote files is megabytes of JSON on stdout.
+
+    A pipe nobody drains fills at 64 KB and blocks the child forever, which is
+    why stdout goes to a file. This is the size at which that stops being
+    theoretical.
+    """
+    rows = [
+        {"Path": f"2019/11/IMG_{i}.JPG", "Hashes": {"sha256": f"{i:064x}"}} for i in range(20_000)
+    ]
+    listing = tmp_path / "listing.json"
+    listing.write_text(json.dumps(rows))
+    assert listing.stat().st_size > 1_000_000, "not big enough to prove anything"
+
+    binary = _fake_rclone(tmp_path, f"cat {listing}\nexit 0\n")
+    provider = cloud_engine.RcloneProvider("gdrive", binary=binary)
+
+    found = provider.hashes("Dest")
+    assert len(found) == 20_000
+    assert found["2019/11/IMG_7.JPG"] == f"{7:064x}"
+
+
+def test_a_hung_rclone_is_killed_and_says_so(tmp_path: Path) -> None:
+    """A transfer that stops responding must not wait forever in silence."""
+    binary = _fake_rclone(tmp_path, 'echo "NOTICE: 0 B / 10 GiB, 0%" >&2\nsleep 30\n')
+    provider = cloud_engine.RcloneProvider("gdrive", binary=binary)
+
+    with pytest.raises(cloud_engine.CloudError, match="did not finish") as caught:
+        provider._run(["lsjson", "gdrive:Dest"], timeout=1)
+    assert "0 B / 10 GiB" in str(caught.value), "say what it was last doing"

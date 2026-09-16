@@ -63,7 +63,9 @@ not more code.
 | **The release step** | **Built** (`ff4c9bd`). Waiting on the upload, not on code. |
 | P10 removal | Not started, gated on `tests/destructive/` existing first. |
 
-270 tests, ruff and mypy clean. 37 commits, 1 unpushed. Nothing uncommitted.
+276 tests and ruff clean. 38 commits, 1 unpushed. Nothing uncommitted.
+(`mypy src` reports one pre-existing error: PyYAML stubs are not installed in
+this venv. It is the environment, not the code -- `pip install types-PyYAML`.)
 
 ### Where the bytes are
 
@@ -295,10 +297,30 @@ Kept because the pattern matters more than the individual bugs.
    them anyway as hash mismatches. **Who stays must be decided before where
    anyone goes.**
 
+12. **A log that could not report progress, on the run that needed it most.**
+   The first 59.5 GB upload wrote 228 bytes to `cloud.log` and then nothing for
+   hours. Two independent causes, either of which was enough: rclone prints no
+   progress unless asked, and `_run` used `capture_output`, which hands stderr
+   over only once the process exits. So the log read exactly the same whether
+   the transfer was moving or had died an hour before -- and the only way to
+   tell was to ask Drive what it held. Fixed by streaming stderr as it arrives
+   and passing `--stats 30s --stats-one-line --stats-log-level NOTICE`. **The
+   third flag is the one to keep**: measured against rclone 1.74.1, the first
+   two alone still print nothing, because stats log at INFO and the default
+   level is NOTICE. A test asserts all three. The first cut of the fix then
+   truncated the diagnostic from the front, so a failing run reported
+   `NOTICE: stats 351 ... 375` and cut off the `ERROR:` that came last -- a
+   message made entirely of noise with the signal trimmed off the end. Its own
+   test caught that. **Absence of output still is not absence of trouble.**
+
 ---
 
 ## 10. Open questions
 
+- **The fix above does not reach the upload now running.** It loaded the old
+  code at 15:26 and keeps it until it exits, so that log stays silent to the
+  end. Progress for this one comes from asking the remote:
+  `rclone size "gdrive:Diskstation2/Family Photos/Andrew iPhone Archive"`.
 - **Verification is all-or-nothing.** `cloud` uploads everything, then verifies
   once at the end, so an upload interrupted at hour six marks nothing verified
   and the next run re-lists and re-verifies the lot. Nothing is lost and rclone

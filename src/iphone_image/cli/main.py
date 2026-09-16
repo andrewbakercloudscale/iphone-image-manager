@@ -861,8 +861,11 @@ def cloud(ctx: Context, apply_: bool, **kwargs: Any) -> None:
     def tick(channel: str, count: int) -> None:
         ctx.out.line(f"  uploading {count:,} file(s) from {channel} ...", style="muted")
 
+    def progress(line: str) -> None:
+        ctx.out.line(f"  {line}", style="muted")
+
     try:
-        result = cloud_engine.run(config, selector, on_channel=tick)
+        result = cloud_engine.run(config, selector, on_channel=tick, on_progress=progress)
     except cloud_engine.CloudError as exc:
         _fail(ctx.out, str(exc))
         return

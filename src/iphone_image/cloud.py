@@ -23,11 +23,13 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
+import threading
 import time
+from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import IO, Any, Protocol
 
 from .config import Config
 from .db.database import Database, utcnow
@@ -103,6 +105,17 @@ class RcloneProvider:
     DEFAULT_TRANSFERS = 16
     DEFAULT_CHUNK = "32M"
 
+    #: How often rclone reports where it has got to. A 59.5 GB upload runs for
+    #: hours; at 30s that is a few hundred lines, which is cheap against a log
+    #: that otherwise says nothing at all until the run ends.
+    DEFAULT_STATS_INTERVAL = "30s"
+
+    #: Enough stderr kept for a diagnostic without holding hours of stats.
+    STDERR_TAIL_LINES = 50
+
+    #: How much of that reaches the error message.
+    DIAGNOSTIC_CHARS = 500
+
     def __init__(
         self,
         remote: str,
@@ -111,12 +124,16 @@ class RcloneProvider:
         transfers: int = DEFAULT_TRANSFERS,
         chunk_size: str = DEFAULT_CHUNK,
         extra: Iterable[str] = (),
+        on_progress: Callable[[str], None] | None = None,
+        stats_interval: str = DEFAULT_STATS_INTERVAL,
     ) -> None:
         self.remote = remote.rstrip(":")
         self.binary = binary
         self.transfers = transfers
         self.chunk_size = chunk_size
         self.extra = list(extra)
+        self.on_progress = on_progress
+        self.stats_interval = stats_interval
 
     def check(self) -> None:
         try:
@@ -138,15 +155,77 @@ class RcloneProvider:
             )
 
     def _run(self, args: list[str], *, timeout: float) -> str:
+        """Run rclone and return its stdout, reporting stderr as it arrives.
+
+        `capture_output` hands back stderr only once the process has exited,
+        which for a multi-hour upload means the log is empty for the whole run
+        and reads exactly the same whether the transfer is moving or died an
+        hour ago. That is the shape of failure this project keeps meeting:
+        absence of output taken for absence of trouble. So stderr is drained
+        line by line while rclone works, and the tail of it is still kept for
+        the diagnostic on a non-zero exit.
+
+        stdout goes to a file rather than a pipe. `lsjson` over 20,000 files is
+        megabytes, and a pipe nobody is reading fills and deadlocks the child.
+        """
         command = [self.binary, *args, *self.extra]
         log.debug("running %s", " ".join(command[:6]))
-        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
-        if result.returncode != 0:
-            raise CloudError(
-                f"rclone {args[0]} exited {result.returncode}: "
-                f"{result.stderr.strip()[:500] or 'no diagnostic on stderr'}"
+        tail: deque[str] = deque(maxlen=self.STDERR_TAIL_LINES)
+
+        def diagnostic() -> str:
+            """The end of what rclone said, not the beginning.
+
+            Now that progress is streamed, most of stderr is stats, and the
+            reason a run failed is the last thing on it. Truncating from the
+            front produced 'NOTICE: stats 351 ... stats 375' and dropped the
+            'ERROR: giving up' that followed -- a diagnostic made entirely of
+            the noise, with the signal cut off the end.
+            """
+            joined = " | ".join(tail)
+            if len(joined) <= self.DIAGNOSTIC_CHARS:
+                return joined or "no diagnostic on stderr"
+            return "..." + joined[-self.DIAGNOSTIC_CHARS :]
+
+        def drain(stream: IO[str]) -> None:
+            for raw in stream:
+                line = raw.rstrip("\n")
+                if not line:
+                    continue
+                tail.append(line)
+                if self.on_progress:
+                    self.on_progress(line)
+
+        with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as sink:
+            process = subprocess.Popen(
+                command,
+                stdout=sink,
+                stderr=subprocess.PIPE,
+                text=True,
+                errors="replace",
+                bufsize=1,
             )
-        return result.stdout
+            assert process.stderr is not None
+            pump = threading.Thread(target=drain, args=(process.stderr,), daemon=True)
+            pump.start()
+            try:
+                code = process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+                pump.join(timeout=5)
+                raise CloudError(
+                    f"rclone {args[0]} did not finish within {timeout:.0f}s and was killed. "
+                    f"Last output: {diagnostic()}"
+                ) from None
+            finally:
+                pump.join(timeout=5)
+                process.stderr.close()
+            sink.seek(0)
+            stdout = sink.read()
+
+        if code != 0:
+            raise CloudError(f"rclone {args[0]} exited {code}: {diagnostic()}")
+        return stdout
 
     def upload(self, root: Path, relatives: list[str], destination: str) -> None:
         if not relatives:
@@ -172,6 +251,18 @@ class RcloneProvider:
                     self.chunk_size,
                     "--retries",
                     "3",
+                    # Without these rclone copies 59 GB in total silence. All
+                    # three are needed and the last is the one easily missed:
+                    # measured against rclone 1.74.1, --stats with
+                    # --stats-one-line still prints nothing, because stats are
+                    # logged at INFO and the default log level is NOTICE.
+                    # --progress is the wrong tool here: it redraws the
+                    # terminal with control codes, which a log file cannot use.
+                    "--stats",
+                    self.stats_interval,
+                    "--stats-one-line",
+                    "--stats-log-level",
+                    "NOTICE",
                 ],
                 timeout=6 * 3600,
             )
@@ -243,6 +334,7 @@ def run(
     provider: CloudProvider | None = None,
     db: Database | None = None,
     on_channel: Callable[[str, int], None] | None = None,
+    on_progress: Callable[[str], None] | None = None,
 ) -> CloudResult:
     """Upload, then prove what arrived before recording anything as verified."""
     if not config.cloud.enabled:
@@ -250,8 +342,20 @@ def run(
     if not config.cloud.remote:
         raise CloudError("cloud.remote is empty. Name an rclone remote in the config.")
 
+    def note(line: str) -> None:
+        """Progress goes to the logfile as well as the screen.
+
+        `--json` silences the screen, and the run that most needs watching is
+        the detached one nobody is looking at.
+        """
+        log.info("%s", line)
+        if on_progress:
+            on_progress(line)
+
     provider = provider or RcloneProvider(
-        config.cloud.remote, transfers=config.performance.cloud_upload_workers
+        config.cloud.remote,
+        transfers=config.performance.cloud_upload_workers,
+        on_progress=note,
     )
     provider.check()
 
@@ -294,7 +398,7 @@ def run(
                 result.uploaded += len(group)
                 result.bytes_uploaded += sum(u.size_bytes for u in group)
 
-            _verify(config, db, provider, uploads, result)
+            _verify(config, db, provider, uploads, result, note)
             operation.note(
                 uploaded=result.uploaded,
                 verified=result.verified,
@@ -314,6 +418,7 @@ def _verify(
     provider: CloudProvider,
     uploads: list[Upload],
     result: CloudResult,
+    note: Callable[[str], None] = lambda _line: None,
 ) -> None:
     """Compare what the remote says it holds against what we recorded.
 
@@ -321,7 +426,11 @@ def _verify(
     only a matching SHA256 marks an asset verified, because the whole point of
     the cloud copy is that the local one can then be released.
     """
+    # Listing 20,000 remote files takes minutes and rclone prints nothing
+    # while it does, so say what is happening before going quiet.
+    note(f"asking the remote what it holds at {config.cloud.destination} ...")
     remote = provider.hashes(config.cloud.destination)
+    note(f"remote reports {len(remote):,} file(s); comparing {len(uploads):,} hash(es)")
     verified_at = utcnow()
 
     for upload in uploads:
