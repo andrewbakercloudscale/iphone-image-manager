@@ -81,7 +81,14 @@ def env(tmp_path: Path):
     return config, db
 
 
-def add_archived(config: Config, db: Database, key: str, relative: str, body: bytes = b"photo"):
+def add_archived(
+    config: Config,
+    db: Database,
+    key: str,
+    relative: str,
+    body: bytes = b"photo",
+    media_type: str = "PHOTO",
+):
     path = config.archive.local_path / "camera" / relative
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(body)
@@ -90,11 +97,12 @@ def add_archived(config: Config, db: Database, key: str, relative: str, body: by
         "INSERT INTO assets (device_id, identity_key, filename, media_type, created_at_device, "
         "size_bytes, source_bundle_id, present_on_phone, subtypes, local_path, local_status, "
         "sha256, first_seen_at, last_seen_at, created_at, updated_at) "
-        "VALUES (1, ?, ?, 'PHOTO', '2019-11-04T10:00:00+00:00', ?, 'com.apple.camera', 1, '[]', "
+        "VALUES (1, ?, ?, ?, '2019-11-04T10:00:00+00:00', ?, 'com.apple.camera', 1, '[]', "
         "?, 'LOCAL_VERIFIED', ?, ?, ?, ?, ?)",
         (
             key,
             Path(relative).name,
+            media_type,
             len(body),
             str(path),
             digest,
@@ -543,3 +551,93 @@ def test_the_rate_counts_only_batches_that_sent_something(env) -> None:
     assert result.bytes_transferred == 10 * 1024 * 1024
     assert result.seconds_transferring > 0
     assert result.rate_mb_s > 0
+
+
+# ---------------------------------------------------------------------------
+# Two archives, and every verb agreeing about which is which
+#
+# The user's Drive keeps `Family Photos` and `Family Videos` as separate
+# top-level archives. `cloud` writes to one, `release` and `remove-from-iphone`
+# delete on the strength of finding the file there. If those can disagree, a
+# video uploaded to one folder is looked for in the other and reported missing
+# -- and in `remove-from-iphone` "missing" is what decides whether the phone
+# keeps the only copy.
+# ---------------------------------------------------------------------------
+
+VIDEO_DEST = "Diskstation2/Family Videos"
+
+
+def _two_archive_config(config: Config) -> Config:
+    return config.model_copy(
+        update={"cloud": config.cloud.model_copy(update={"video_destination": VIDEO_DEST})}
+    )
+
+
+def test_videos_go_to_the_video_archive_and_photos_do_not(env) -> None:
+    config, db = env
+    config = _two_archive_config(config)
+    add_archived(config, db, "p", "2024/07 Plett/IMG_1.JPG", body=b"photo")
+    add_archived(config, db, "v", "2024/07 Plett/IMG_2.MOV", body=b"video", media_type="VIDEO")
+
+    uploads = {u.relative: u.destination for u in cloud_engine.plan(config, Selector(), db)}
+    assert uploads["2024/07 Plett/IMG_1.JPG"] == config.cloud.destination
+    assert uploads["2024/07 Plett/IMG_2.MOV"] == VIDEO_DEST
+
+
+def test_each_archive_is_uploaded_and_verified_against_itself(env) -> None:
+    """The batch key includes the destination, so the two never mix."""
+    config, db = env
+    config = _two_archive_config(config)
+    add_archived(config, db, "p", "2024/07 Plett/IMG_1.JPG", body=b"photo")
+    add_archived(config, db, "v", "2024/07 Plett/IMG_2.MOV", body=b"video", media_type="VIDEO")
+
+    fake = FakeCloud()
+    result = cloud_engine.run(config, Selector(), provider=fake, db=db)
+
+    assert result.verified == 2
+    assert result.batches == 2, "same folder, different archives, so two batches"
+    paths = dict(db.conn.execute("SELECT filename, cloud_path FROM assets").fetchall())
+    assert paths["IMG_1.JPG"].startswith(config.cloud.destination + "/")
+    assert paths["IMG_2.MOV"].startswith(VIDEO_DEST + "/")
+
+
+def test_a_recorded_path_resolves_to_the_archive_it_was_written_to(env) -> None:
+    """What `release` and `remove` rely on, and the reason it reads the path
+    rather than the config: config can be edited after the upload."""
+    config, _db = env
+    config = _two_archive_config(config)
+
+    dest, rel = cloud_engine.split_cloud_path(config, f"{VIDEO_DEST}/2024/07 Plett/IMG_2.MOV")
+    assert (dest, rel) == (VIDEO_DEST, "2024/07 Plett/IMG_2.MOV")
+
+    dest, rel = cloud_engine.split_cloud_path(
+        config, f"{config.cloud.destination}/2024/07 Plett/IMG_1.JPG"
+    )
+    assert (dest, rel) == (config.cloud.destination, "2024/07 Plett/IMG_1.JPG")
+
+
+def test_one_destination_being_a_prefix_of_another_resolves_the_long_one(env) -> None:
+    """ "Family Photos" and "Family Photos/Andrew iPhone Archive" both match by
+    prefix; the shorter would hand back a relative path with a folder still
+    glued to the front, and every hash lookup would miss."""
+    config, _db = env
+    config = config.model_copy(
+        update={
+            "cloud": config.cloud.model_copy(
+                update={"destination": "Family Photos", "video_destination": "Family Photos/Videos"}
+            )
+        }
+    )
+    dest, rel = cloud_engine.split_cloud_path(config, "Family Photos/Videos/2024/IMG_2.MOV")
+    assert dest == "Family Photos/Videos"
+    assert rel == "2024/IMG_2.MOV"
+
+
+def test_a_path_matching_no_configured_archive_is_not_silently_accepted(env) -> None:
+    """It must fail the later hash lookup rather than resolve to something
+    plausible: blocking is recoverable, deleting on a wrong match is not."""
+    config, _db = env
+    config = _two_archive_config(config)
+    dest, rel = cloud_engine.split_cloud_path(config, "Somewhere Else/2024/IMG_9.JPG")
+    assert rel == "Somewhere Else/2024/IMG_9.JPG", "kept whole, so no lookup can match it"
+    assert dest == config.cloud.destination

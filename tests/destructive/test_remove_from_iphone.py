@@ -393,3 +393,45 @@ def test_blocked_assets_are_individually_listable(env) -> None:
     assert len(result.blocked_assets) == 1
     assert result.blocked_assets[0]["filename"] == "IMG_1.HEIC"
     assert "Live Photo" in result.blocked_assets[0]["reason"]
+
+
+# -- the selector's bounds are the caller's only brake ----------------------
+
+
+def test_limit_is_honoured(env) -> None:
+    """`--limit` is how a caller bounds how much gets deleted.
+
+    It was dropped from the query in the first cut of this module, so a plan
+    asked to cover 6,831 assets covered all 24,481 and offered to delete
+    22.4 GB where 15 GB had been requested. Nothing warned, because a silently
+    ignored flag looks exactly like a flag that worked.
+    """
+    config, db = env
+    for i in range(6):
+        on_phone(config, db, f"a{i}", f"2019/11/IMG_{i}.JPG", body=f"photo-{i}".encode())
+
+    _, all_of_them = plan(config, db)
+    assert all_of_them.examined == 6
+
+    _, limited = remove_engine.plan(
+        config, db, Selector(limit=2), scan_id=SCAN, provider=FakeCloud()
+    )
+    assert limited.examined == 2, "the limit must reach the query, not be applied afterwards"
+
+
+def test_order_is_honoured(env) -> None:
+    """--order decides *which* assets a limit keeps, so ignoring it picks the wrong ones."""
+    config, db = env
+    for i, size in enumerate([b"x" * 10, b"x" * 500, b"x" * 50]):
+        on_phone(config, db, f"a{i}", f"2019/11/IMG_{i}.JPG", body=size)
+
+    _, biggest = remove_engine.plan(
+        config, db, Selector(order="largest", limit=1), scan_id=SCAN, provider=FakeCloud()
+    )
+    _, smallest = remove_engine.plan(
+        config, db, Selector(order="smallest", limit=1), scan_id=SCAN, provider=FakeCloud()
+    )
+    assert biggest.examined == 1
+    assert smallest.examined == 1
+    assert biggest.blocked_assets[0]["filename"] == "IMG_1.JPG"
+    assert smallest.blocked_assets[0]["filename"] == "IMG_0.JPG"

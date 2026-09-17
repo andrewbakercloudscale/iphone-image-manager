@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .cloud import CloudProvider, RcloneProvider
+from .cloud import CloudProvider, RcloneProvider, split_cloud_path
 from .config import Config, RemovalPolicy
 from .db.database import Database, utcnow
 from .journal import Journal, Op
@@ -186,8 +186,16 @@ def plan(
     # and 6.
     selector = selector.for_removal()
     where, params = selector.where()
+    # --limit and --order applied in SQL, exactly as `cloud` and `sync` do. The
+    # first cut of this hardcoded the ordering and dropped the limit entirely,
+    # so `--limit 6831` planned the whole 24,481 and offered to delete 22.4 GB
+    # when 15 GB had been asked for. cloud.py's own comment had already named
+    # the hazard -- "a verb that quietly ignored it would be worse than one
+    # that did not offer it" -- and this is the verb where it is worst, since
+    # the flag is how a caller bounds how many photographs get deleted.
+    limit = f" LIMIT {int(selector.limit)}" if selector.limit else ""
     rows = db.conn.execute(
-        f"SELECT a.* FROM assets a WHERE {where} ORDER BY a.created_at_device",
+        f"SELECT a.* FROM assets a WHERE {where} ORDER BY {selector.order_by()}{limit}",
         params,
     ).fetchall()
 
@@ -288,13 +296,19 @@ def plan(
     #    the copy on the device.
     provider = provider or RcloneProvider(config.cloud.remote)
     provider.check()
-    remote = provider.hashes(config.cloud.destination)
-    log.info("the remote reports %d file(s) at %s", len(remote), config.cloud.destination)
+    # One listing per destination in play, for the reason release gives: a
+    # video checked against the photo archive is reported missing, and this is
+    # the code path where "missing" decides whether a photograph is deleted.
+    wanted_destinations = sorted({split_cloud_path(config, c.cloud_path)[0] for c in wanted})
+    remote: dict[str, dict[str, str]] = {}
+    for destination in wanted_destinations:
+        remote[destination] = provider.hashes(destination)
+        log.info("the remote reports %d file(s) at %s", len(remote[destination]), destination)
 
     eligible: list[Candidate] = []
     for candidate in wanted:
-        relative = candidate.cloud_path.removeprefix(f"{config.cloud.destination}/")
-        digest = remote.get(relative)
+        destination, relative = split_cloud_path(config, candidate.cloud_path)
+        digest = remote.get(destination, {}).get(relative)
         asset_row = {"id": candidate.asset_id, "filename": candidate.filename}
         if digest is None:
             result.block(asset_row, "not at the remote right now")

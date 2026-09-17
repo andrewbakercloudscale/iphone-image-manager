@@ -45,6 +45,50 @@ class CloudError(Exception):
     """The mirror cannot safely proceed."""
 
 
+def destination_for(config: Config, media_type: str | None) -> str:
+    """Where this asset belongs on the remote.
+
+    One function, used by every verb. `cloud` writes to what it returns,
+    `release` and `remove-from-iphone` look for the file at what it returns,
+    and a stored `cloud_path` is always prefixed by it. The moment those three
+    can disagree, a file uploaded to one folder is checked for in another,
+    found missing, and the asset is blocked -- or worse, found *present*
+    because some unrelated file shares the name.
+    """
+    if str(media_type or "").upper() == "VIDEO" and config.cloud.video_destination:
+        return config.cloud.video_destination
+    return config.cloud.destination
+
+
+def destinations(config: Config) -> list[str]:
+    """Every destination in use, longest first.
+
+    Longest first because `split_cloud_path` matches by prefix, and one
+    destination can be a prefix of another -- "Family Photos" and
+    "Family Photos/Andrew iPhone Archive" would otherwise resolve the wrong
+    way round and hand back a relative path with a folder still glued to it.
+    """
+    found = {config.cloud.destination}
+    if config.cloud.video_destination:
+        found.add(config.cloud.video_destination)
+    return sorted(found, key=len, reverse=True)
+
+
+def split_cloud_path(config: Config, cloud_path: str) -> tuple[str, str]:
+    """A recorded cloud path, split into (destination, relative).
+
+    Derived from the path itself rather than from the current config: the
+    path records where the file actually went, and config can be edited
+    afterwards. If it matches no configured destination the whole thing is
+    returned as the relative part against the default, which fails the
+    hash lookup and blocks the asset -- the safe direction.
+    """
+    for destination in destinations(config):
+        if cloud_path.startswith(f"{destination}/"):
+            return destination, cloud_path[len(destination) + 1 :]
+    return config.cloud.destination, cloud_path
+
+
 class _Expired(Exception):
     """rclone ran out of time or went quiet. Internal to `_run`."""
 
@@ -104,6 +148,9 @@ class Upload:
     sha256: str
     size_bytes: int
     channel: str
+    #: Resolved once, in plan, and carried through upload and verification so
+    #: the two can never be computed from different rules.
+    destination: str = ""
 
 
 @dataclass
@@ -469,6 +516,7 @@ def plan(config: Config, selector: Selector, db: Database) -> list[Upload]:
                 sha256=str(asset["sha256"]),
                 size_bytes=int(asset.get("size_bytes") or 0),
                 channel=channel,
+                destination=destination_for(config, asset.get("media_type")),
             )
         )
     return uploads
@@ -534,34 +582,36 @@ def run(
                 "planned": len(uploads),
                 "bytes": sum(u.size_bytes for u in uploads),
                 "batches": len(batches),
-                "destination": config.cloud.destination,
+                "destinations": sorted({u.destination for u in uploads}),
             },
         ) as operation:
-            for index, ((channel, folder), group) in enumerate(batches.items(), start=1):
+            for index, ((channel, folder, destination), group) in enumerate(
+                batches.items(), start=1
+            ):
                 if on_channel and channel not in announced:
                     announced.add(channel)
                     on_channel(
                         channel,
-                        sum(len(g) for (c, _f), g in batches.items() if c == channel),
+                        sum(len(g) for (c, _f, _d), g in batches.items() if c == channel),
                     )
 
                 size = sum(u.size_bytes for u in group)
                 note(
-                    f"[batch {index}/{len(batches)}] {channel}/{folder or '.'}: "
-                    f"{len(group):,} file(s), {size / 1e9:.2f} GB"
+                    f"[batch {index}/{len(batches)}] {channel}/{folder or '.'} "
+                    f"-> {destination}: {len(group):,} file(s), {size / 1e9:.2f} GB"
                 )
                 began = time.monotonic()
                 try:
                     provider.upload(
                         config.archive.local_path / channel,
                         [u.relative for u in group],
-                        config.cloud.destination,
+                        destination,
                     )
                     result.seconds += time.monotonic() - began
                     result.uploaded += len(group)
                     result.bytes_uploaded += size
                     sent = getattr(provider, "last_transfer_bytes", None)
-                    _verify_batch(config, db, provider, group, folder, result, note)
+                    _verify_batch(config, db, provider, group, folder, destination, result, note)
                 except CloudError as exc:
                     # One folder failing is not the run failing. Whatever was
                     # banked before this stays banked, and a re-run replans
@@ -617,7 +667,7 @@ def run(
 CONSECUTIVE_BATCH_FAILURE_LIMIT = 3
 
 
-def _batches(uploads: list[Upload]) -> dict[tuple[str, str], list[Upload]]:
+def _batches(uploads: list[Upload]) -> dict[tuple[str, str, str], list[Upload]]:
     """One batch per remote folder, in plan order.
 
     The unit of work is a folder because it is also the unit of *checking*:
@@ -628,10 +678,11 @@ def _batches(uploads: list[Upload]) -> dict[tuple[str, str], list[Upload]]:
     1.12 MB/s Drive throttled us to, so nothing banked is ever far behind
     what has been sent.
     """
-    batches: dict[tuple[str, str], list[Upload]] = {}
+    batches: dict[tuple[str, str, str], list[Upload]] = {}
     for upload in uploads:
         folder = str(PurePosixPath(upload.relative).parent)
-        batches.setdefault((upload.channel, "" if folder == "." else folder), []).append(upload)
+        key = (upload.channel, "" if folder == "." else folder, upload.destination)
+        batches.setdefault(key, []).append(upload)
     return batches
 
 
@@ -641,6 +692,7 @@ def _verify_batch(
     provider: CloudProvider,
     uploads: list[Upload],
     subdir: str,
+    destination: str,
     result: CloudResult,
     note: Callable[[str], None] = lambda _line: None,
 ) -> None:
@@ -657,7 +709,7 @@ def _verify_batch(
     moment it is written, and an interruption costs at most the batch in
     flight.
     """
-    remote = provider.hashes(config.cloud.destination, subdir or None)
+    remote = provider.hashes(destination, subdir or None)
     verified_at = utcnow()
 
     for upload in uploads:
@@ -682,7 +734,7 @@ def _verify_batch(
             "cloud_path = ?, updated_at = ? WHERE id = ?",
             (
                 verified_at,
-                f"{config.cloud.destination}/{upload.relative}",
+                f"{destination}/{upload.relative}",
                 verified_at,
                 upload.asset_id,
             ),

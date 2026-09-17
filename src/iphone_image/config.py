@@ -175,6 +175,16 @@ class CloudConfig(Strict):
     remote: str = ""  # the rclone remote name, credentials stay in the user's rclone config
     destination: str = "iPhone Archive"
 
+    #: Where videos go, when that is somewhere else. Empty means "with the
+    #: photos". The user's Drive keeps `Family Photos` and `Family Videos` as
+    #: separate top-level archives going back twenty years, so the tool has to
+    #: be able to write to both -- and every verb has to agree about which,
+    #: because `release` and `remove-from-iphone` delete on the strength of
+    #: finding a file at the destination. A per-run `--destination` flag would
+    #: have let an upload go to one place and the check for it look in
+    #: another, which is the one way this could destroy data quietly.
+    video_destination: str = ""
+
     #: How long one folder's upload may take before it is abandoned. This is a
     #: backstop, not a prediction: `stall_timeout_seconds` is what normally
     #: catches a wedged transfer, and a slow one is left alone to be slow. The

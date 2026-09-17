@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .cloud import CloudProvider, RcloneProvider
+from .cloud import CloudProvider, RcloneProvider, split_cloud_path
 from .config import Config
 from .db.database import Database, utcnow
 from .journal import Journal, Op
@@ -54,6 +54,9 @@ class ReleaseError(Exception):
 class Candidate:
     asset_id: int
     local_path: Path
+    #: Taken from the recorded cloud_path, not from config: the path records
+    #: where the file actually went, and config can be edited afterwards.
+    destination: str
     relative: str
     cloud_path: str
     sha256: str
@@ -112,11 +115,12 @@ def plan(
         if not local.exists():
             result.block("the local file is already gone")
             continue
-        relative = str(asset["cloud_path"]).removeprefix(f"{config.cloud.destination}/")
+        destination, relative = split_cloud_path(config, str(asset["cloud_path"]))
         wanted.append(
             Candidate(
                 asset_id=int(asset["id"]),
                 local_path=local,
+                destination=destination,
                 relative=relative,
                 cloud_path=str(asset["cloud_path"]),
                 sha256=str(asset["sha256"]),
@@ -131,12 +135,18 @@ def plan(
     # the upload ran, and this is about to delete the only other copy.
     provider = provider or RcloneProvider(config.cloud.remote)
     provider.check()
-    remote = provider.hashes(config.cloud.destination)
-    log.info("the remote reports %d file(s) at %s", len(remote), config.cloud.destination)
+    # One listing per destination in play. Photos and videos live in separate
+    # top-level archives, and asking the wrong one would report every file
+    # missing and block the lot -- or, worse, match an unrelated file of the
+    # same name in the other archive.
+    remote: dict[str, dict[str, str]] = {}
+    for destination in sorted({c.destination for c in wanted}):
+        remote[destination] = provider.hashes(destination)
+        log.info("the remote reports %d file(s) at %s", len(remote[destination]), destination)
 
     eligible: list[Candidate] = []
     for candidate in wanted:
-        digest = remote.get(candidate.relative)
+        digest = remote.get(candidate.destination, {}).get(candidate.relative)
         if digest is None:
             result.block("not at the remote right now")
             continue
