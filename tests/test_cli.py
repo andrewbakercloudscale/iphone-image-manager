@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from click.testing import CliRunner
@@ -232,3 +233,31 @@ def test_the_error_is_stated_once(tmp_path: Path) -> None:
         env={"PYTHONPATH": "src", "PATH": "/usr/bin:/bin"},
     )
     assert result.stderr.lower().count("unable to open database file") == 1
+
+
+def test_sync_progress_shows_the_files_own_size_not_the_running_total(run, monkeypatch) -> None:
+    """A 2.4 MB photo must never be printed as "3.0 GB".
+
+    `tick` used to print `result.bytes_fetched`, the chunk's running total,
+    beside each individual filename. It read fine for the first file and grew
+    more wrong with every line after: by file 1,000 of a 60 GB chunk, a 2.4 MB
+    JPEG was reported as 3.0 GB. Asserted directly against the callback the
+    CLI passes to `sync_engine.run`, since a real chunk needs the PhotoKit
+    helper this test has no access to.
+    """
+    from iphone_image import sync as sync_engine
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(config, selector, *, budget_bytes, on_asset, **_kwargs):
+        result = sync_engine.SyncResult(fetched=1, bytes_fetched=3_000_000_000)
+        on_asset({"filename": "IMG_8591.JPG", "size_bytes": 2_400_000}, result)
+        captured["result"] = result
+        return result
+
+    monkeypatch.setattr(sync_engine, "run", fake_run)
+    result = run("sync", "--source", "camera", "--apply")
+
+    assert result.exit_code == 0
+    assert "3.0 GB" not in result.output, "the running total leaked into the per-file line"
+    assert "2.3 MB" in result.output, "the file's own size should be printed instead"

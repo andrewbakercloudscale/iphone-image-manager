@@ -575,9 +575,15 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
 
         def tick(asset: dict[str, Any], result: Any) -> None:
             done = result.fetched + result.failed
+            # Per-file size, not `result.bytes_fetched` -- that is the run's
+            # running total, and printing it beside one filename read as "this
+            # 2.4 MB photo is 3.0 GB", growing line by line as the chunk
+            # progressed. The cumulative total belongs in the final summary,
+            # which already reports it separately.
+            size = int(asset.get("size_bytes") or 0)
             ctx.out.line(
                 f"  [{done:>5,}] {str(asset.get('filename') or '?')[:34]:<36}"
-                f"{human_bytes(result.bytes_fetched):>11}  {result.rate_text}",
+                f"{human_bytes(size):>11}  {result.rate_text}",
                 style="muted",
             )
 
@@ -757,7 +763,11 @@ def relocate(ctx: Context, apply_: bool, show: int) -> None:
         ctx.out.result(data, render_plan)
         return
 
-    result = relocate_engine.run(config)
+    try:
+        result = relocate_engine.run(config)
+    except relocate_engine.RelocateError as exc:
+        _fail(ctx.out, str(exc))
+        return
     data.update(
         {
             "moved": result.moved,
