@@ -21,6 +21,7 @@ network and no account.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 import threading
@@ -55,6 +56,42 @@ class _Expired(Exception):
 #: How often the waiter looks up from `process.wait` to check for silence.
 _WAIT_TICK = 5.0
 
+#: rclone's one-line stats: "  6.027 MiB / 60 MiB, 10%, 3.027 MiB/s, ETA 17s".
+#: Only the first figure is wanted -- what has actually been sent.
+_TRANSFERRED = re.compile(r"([\d.]+)\s*([KMGTP]?i?B)\s*/\s*[\d.]+\s*[KMGTP]?i?B")
+_UNITS = {
+    "B": 1,
+    "KiB": 1024,
+    "MiB": 1024**2,
+    "GiB": 1024**3,
+    "TiB": 1024**4,
+    "PiB": 1024**5,
+    "kB": 1000,
+    "MB": 1000**2,
+    "GB": 1000**3,
+    "TB": 1000**4,
+    "PB": 1000**5,
+}
+
+
+def _transferred_bytes(line: str) -> int | None:
+    """Bytes sent, from a stats line, or None if it does not say.
+
+    None is not zero. A stats format we cannot read must report itself as
+    unreadable, because silently calling it zero would produce a confident
+    rate of 0 MB/s for a transfer that was working perfectly well.
+    """
+    match = _TRANSFERRED.search(line)
+    if not match:
+        return None
+    unit = _UNITS.get(match.group(2))
+    if unit is None:
+        return None
+    try:
+        return int(float(match.group(1)) * unit)
+    except ValueError:
+        return None
+
 
 @dataclass
 class Upload:
@@ -77,7 +114,15 @@ class CloudResult:
     failed: int = 0
     already_there: int = 0
     bytes_uploaded: int = 0
+    #: Bytes rclone actually put on the wire, which on a resumed run is far
+    #: less than `bytes_uploaded`: most of a re-run is skipped by checksum.
+    bytes_transferred: int = 0
     seconds: float = 0.0
+    #: Only the time spent in batches that sent something. A batch that sent
+    #: nothing took real seconds and contributes no bandwidth evidence, so
+    #: averaging it in would understate the rate exactly as including it in
+    #: the numerator overstates it.
+    seconds_transferring: float = 0.0
     batches: int = 0
     batches_done: int = 0
     stopped_early: str = ""
@@ -85,13 +130,27 @@ class CloudResult:
 
     @property
     def rate_mb_s(self) -> float:
-        return (self.bytes_uploaded / self.seconds / 1_048_576) if self.seconds else 0.0
+        """Transfer rate over the batches that actually transferred.
+
+        The first resumed run reported `76.99 MB/s` for a folder where rclone
+        sent nothing at all: the bytes were already on the remote and the
+        figure was planned-size over elapsed-time. A rate whose numerator
+        never crossed the network is the same error as averaging local disk
+        reads into a download rate, which this project has now made twice.
+        """
+        if not self.seconds_transferring:
+            return 0.0
+        return self.bytes_transferred / self.seconds_transferring / 1_048_576
 
 
 class CloudProvider(Protocol):
     """What the engine needs from any cloud backend."""
 
     name: str
+
+    #: Bytes the last `upload` actually sent, or None if it cannot say. None
+    #: means "unknown" and is reported as unknown; it is never treated as 0.
+    last_transfer_bytes: int | None
 
     def check(self) -> None:
         """Raise CloudError if this provider cannot be used at all."""
@@ -160,6 +219,7 @@ class RcloneProvider:
         self.batch_timeout = batch_timeout
         self.stall_timeout = stall_timeout
         self.tps_limit = tps_limit
+        self.last_transfer_bytes: int | None = None
 
     def check(self) -> None:
         try:
@@ -227,6 +287,9 @@ class RcloneProvider:
                 if not line:
                     continue
                 last_output = time.monotonic()
+                sent = _transferred_bytes(line)
+                if sent is not None:
+                    self.last_transfer_bytes = sent
                 tail.append(line)
                 if self.on_progress:
                     self.on_progress(line)
@@ -285,6 +348,9 @@ class RcloneProvider:
                     raise _Expired(f"said nothing for {silent:.0f}s")
 
     def upload(self, root: Path, relatives: list[str], destination: str) -> None:
+        # Cleared per call: a stale figure from the previous folder would be
+        # reported as this one's, which is worse than reporting nothing.
+        self.last_transfer_bytes = None
         if not relatives:
             return
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
@@ -494,6 +560,7 @@ def run(
                     result.seconds += time.monotonic() - began
                     result.uploaded += len(group)
                     result.bytes_uploaded += size
+                    sent = getattr(provider, "last_transfer_bytes", None)
                     _verify_batch(config, db, provider, group, folder, result, note)
                 except CloudError as exc:
                     # One folder failing is not the run failing. Whatever was
@@ -508,16 +575,22 @@ def run(
                     consecutive_failures = 0
                     result.batches_done += 1
                     took = max(time.monotonic() - began, 1e-9)
-                    note(
-                        f"  banked {result.verified:,}/{len(uploads):,} verified "
-                        f"at {size / took / 1e6:.2f} MB/s"
-                    )
+                    if sent is None:
+                        how = "rate not reported"
+                    elif sent == 0:
+                        how = "nothing sent, already on the remote"
+                    else:
+                        result.bytes_transferred += sent
+                        result.seconds_transferring += took
+                        how = f"{sent / 1e9:.2f} GB sent at {sent / took / 1e6:.2f} MB/s"
+                    note(f"  banked {result.verified:,}/{len(uploads):,} verified, {how}")
 
                 operation.note(
                     uploaded=result.uploaded,
                     verified=result.verified,
                     failed=result.failed,
                     bytes=result.bytes_uploaded,
+                    bytes_transferred=result.bytes_transferred,
                     batches_done=result.batches_done,
                 )
 

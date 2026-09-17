@@ -20,6 +20,7 @@ class FakeCloud:
     """A remote that can be told to lose or corrupt what it was given."""
 
     name = "fake"
+    last_transfer_bytes: int | None = None
 
     def __init__(self, *, lose: set[str] | None = None, corrupt: set[str] | None = None) -> None:
         self.stored: dict[str, str] = {}
@@ -481,3 +482,64 @@ def test_a_slow_transfer_that_keeps_talking_is_left_alone(tmp_path: Path) -> Non
 
     provider._run(["copy", "x"], timeout=3600, stall_timeout=1)
     assert len(seen) == 6, "it talked the whole way through and was not killed"
+
+
+# ---------------------------------------------------------------------------
+# Rates that measure what they claim to
+#
+# The first resumed run reported `banked 189 verified at 76.99 MB/s` for a
+# folder where rclone sent nothing at all: the files were already on the remote
+# and the figure was planned-size over elapsed-time. Entry 4 in the handover,
+# for the third time.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("2026/09/17 09:12:46 NOTICE:  6.027 MiB / 60 MiB, 10%, 3.027 MiB/s, ETA 17s", 6319767),
+        ("2026/09/17 09:12:46 NOTICE:         0 B / 0 B, -, 0 B/s, ETA -", 0),
+        ("2026/09/17 09:12:46 NOTICE:  1.5 GiB / 60 GiB, 2%, 3 MiB/s, ETA 1h", 1610612736),
+        ("ERROR: something went wrong", None),
+        ("2026/09/17 NOTICE: 6.027 QiB / 60 QiB, 10%", None),
+    ],
+)
+def test_transferred_bytes_reads_what_rclone_reports(line: str, expected: int | None) -> None:
+    assert cloud_engine._transferred_bytes(line) == expected
+
+
+def test_an_unreadable_stats_line_is_unknown_and_never_zero() -> None:
+    """A format we cannot parse must say so.
+
+    Calling it zero would report a confident 0 MB/s for a transfer that was
+    working perfectly well -- a wrong number where no number was available.
+    """
+    assert cloud_engine._transferred_bytes("NOTICE: transferred everything") is None
+
+
+def test_a_skipped_folder_does_not_invent_a_transfer_rate(env) -> None:
+    """The 76.99 MB/s bug: bytes that never crossed the network."""
+    config, db = env
+    add_archived(config, db, "a", "2019/11 Cape Town/IMG_1.JPG", body=b"x" * 4096)
+
+    fake = FakeCloud()
+    fake.last_transfer_bytes = 0  # rclone skipped it: already on the remote
+    result = cloud_engine.run(config, Selector(), provider=fake, db=db)
+
+    assert result.verified == 1
+    assert result.bytes_transferred == 0
+    assert result.rate_mb_s == 0.0, "no bytes were sent, so there is no rate to report"
+
+
+def test_the_rate_counts_only_batches_that_sent_something(env) -> None:
+    """Otherwise a resumed run's many instant skips drag the figure to nothing."""
+    config, db = env
+    add_archived(config, db, "a", "2019/11 Cape Town/IMG_1.JPG", body=b"x" * 4096)
+
+    fake = FakeCloud()
+    fake.last_transfer_bytes = 10 * 1024 * 1024
+    result = cloud_engine.run(config, Selector(), provider=fake, db=db)
+
+    assert result.bytes_transferred == 10 * 1024 * 1024
+    assert result.seconds_transferring > 0
+    assert result.rate_mb_s > 0

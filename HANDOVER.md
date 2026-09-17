@@ -63,7 +63,7 @@ not more code.
 | **The release step** | **Built** (`ff4c9bd`). Waiting on the upload, not on code. |
 | P10 removal | Not started, gated on `tests/destructive/` existing first. |
 
-284 tests and ruff clean. 39 commits, 1 unpushed. Nothing uncommitted.
+292 tests and ruff clean. 40 commits, 1 unpushed. Nothing uncommitted.
 (`mypy src` reports one pre-existing error: PyYAML stubs are not installed in
 this venv. It is the environment, not the code -- `pip install types-PyYAML`.)
 
@@ -345,6 +345,14 @@ Kept because the pattern matters more than the individual bugs.
      followed. Every estimate I gave from the fast window was wrong, and the
      ETA I quoted was under half the real figure. **A rate measured over
      minutes is not a rate**, which is entry 4 again in a new costume.
+
+   A fourth showed up within a minute of the re-run: `banked 189 verified at
+   76.99 MB/s` for a folder where rclone sent **nothing**, the files being
+   already on Drive. Planned size over elapsed time is not a transfer rate
+   when the transfer did not happen -- entry 4 a third time, in a third
+   costume. The rate now comes from rclone's own stats line, counts only
+   batches that sent something, and reports "rate not reported" rather than a
+   number when the line cannot be parsed. **Unknown is not zero.**
 
    `cloud_upload_workers` is still 16. Drive throttling is one observation and
    changing a measured constant on one observation is entry 4 as well; the
