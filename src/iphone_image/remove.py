@@ -51,8 +51,9 @@ log = get_logger("remove")
 #: Read in chunks so a huge file does not come into memory whole.
 _HASH_CHUNK = 1024 * 1024
 
-#: One PhotoKit change request per batch. macOS raises a confirmation dialog
-#: per invocation, so this is also how many prompts the user sees.
+#: Default only; the live value is `remove_from_iphone.batch_size`. One
+#: PhotoKit change request per batch, and macOS raises one confirmation dialog
+#: per request, so this is also how many prompts the user answers.
 BATCH_SIZE = 500
 
 
@@ -411,8 +412,9 @@ def run(
                 "policy": str(policy),
             },
         ) as operation:
-            for start in range(0, len(eligible), BATCH_SIZE):
-                batch = eligible[start : start + BATCH_SIZE]
+            batch_size = config.remove_from_iphone.batch_size
+            for start in range(0, len(eligible), batch_size):
+                batch = eligible[start : start + batch_size]
                 events = {
                     c.asset_id: _record_request(db, c, str(policy), getattr(operation, "id", None))
                     for c in batch

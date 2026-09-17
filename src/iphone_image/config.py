@@ -224,6 +224,14 @@ class RemoveFromIphoneConfig(Strict):
     include_new_campaign_assets: bool = False
     default_batch_limit: int = Field(default=50, ge=1, le=10_000)
 
+    #: How many assets go to PhotoKit in one change request. macOS raises one
+    #: confirmation dialog per request, so this is also how many prompts the
+    #: user answers: 5,024 photos at 500 was eleven dialogs. Larger means
+    #: fewer clicks and a larger blast radius per click -- a declined or
+    #: failed request abandons the whole batch, though nothing is deleted by
+    #: one that fails, and the next run replans from the ledger.
+    batch_size: int = Field(default=500, ge=1, le=20_000)
+
 
 class SafetyConfig(Strict):
     require_final_scan: bool = True
