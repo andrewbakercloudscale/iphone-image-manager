@@ -20,6 +20,13 @@ USAGE
     iimphotos trash                     Move files to the macOS Trash, never
                                         unlink them. Reads paths from stdin, one
                                         per line. Touches no photo library.
+    iimphotos delete                    DELETE assets from the Photos library.
+                                        Reads local identifiers from stdin, one
+                                        per line. Confirms by re-fetching and
+                                        exits non-zero if any survive. Deleted
+                                        assets go to Recently Deleted, not to
+                                        oblivion. macOS raises one confirmation
+                                        dialog per invocation.
     iimphotos delete-roundtrip          Create a 1x1 test image OF ITS OWN, then
                                         delete it. Proves deletion works without
                                         touching any of your photographs.
@@ -146,6 +153,10 @@ case "export":
 case "trash":
     // No authorisation: this moves files on disk and never opens the library.
     Trash.run()
+
+case "delete":
+    requireAuthorization()
+    Delete.run()
 
 case "delete-roundtrip":
     requireAuthorization()

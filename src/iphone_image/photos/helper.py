@@ -92,6 +92,19 @@ class Helper:
         # Overall timeout allows for every asset taking its own full timeout.
         yield from self._stream(args, stdin=payload, timeout=timeout * len(work) + 60)
 
+    def delete(self, identifiers: list[str], *, timeout: float = 3600) -> Iterator[dict[str, Any]]:
+        """Delete assets from the library, by local identifier.
+
+        Yields the helper's events. A non-zero exit raises `HelperError` after
+        the events have been yielded, which is the point: it means at least one
+        asset survived, and the caller must record only the ones it actually
+        saw confirmed rather than assuming the batch went.
+        """
+        if not identifiers:
+            return
+        payload = "".join(f"{identifier}\n" for identifier in identifiers)
+        yield from self._stream(["delete"], stdin=payload, timeout=timeout)
+
     def authorized(self) -> bool:
         self.check()
         result = subprocess.run(

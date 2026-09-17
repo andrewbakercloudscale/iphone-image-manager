@@ -19,6 +19,7 @@ from .. import __version__
 from .. import cloud as cloud_engine
 from .. import release as release_engine
 from .. import relocate as relocate_engine
+from .. import remove as remove_engine
 from .. import sync as sync_engine
 from ..config import (
     DEFAULT_CONFIG_PATH,
@@ -781,9 +782,6 @@ def relocate(ctx: Context, apply_: bool, show: int) -> None:
                 ("empty folders removed", f"{result.directories_removed:,}"),
             ]
         )
-        if result.stopped_early:
-            ctx.out.line()
-            ctx.out.line(f"  {result.stopped_early}", style="warn")
         if result.failures:
             ctx.out.line()
             ctx.out.line("  Failures", style="head")
@@ -899,6 +897,9 @@ def cloud(ctx: Context, apply_: bool, **kwargs: Any) -> None:
                 ("rate", f"{result.rate_mb_s:.2f} MB/s" if result.seconds else "-"),
             ]
         )
+        if result.stopped_early:
+            ctx.out.line()
+            ctx.out.line(f"  {result.stopped_early}", style="warn")
         if result.failures:
             ctx.out.line()
             ctx.out.line("  Failures", style="head")
@@ -916,6 +917,201 @@ def cloud(ctx: Context, apply_: bool, **kwargs: Any) -> None:
                 f"continue; what is banked is not sent again.",
                 style="muted",
             )
+
+    ctx.out.result(data, render_result)
+    if result.failed:
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# remove-from-iphone
+# ---------------------------------------------------------------------------
+
+
+def _removal_phrase(count: int) -> str:
+    """The phrase the user must type, tied to this plan's size.
+
+    `docs/SAFETY.md` section 3: an explicit typed confirmation while iCloud
+    sync is on, and "a `--yes` style flag is not sufficient". Binding the
+    phrase to the count means a command line copied from an earlier, smaller
+    run does not authorise a larger one.
+    """
+    return f"remove {count} photos from my iphone"
+
+
+@cli.command(name="remove-from-iphone")
+@selector_options
+@click.option("--apply", "apply_", is_flag=True, help="Actually remove. Without it, plan only.")
+@click.option("--confirm", default="", help="The typed confirmation phrase. Required with --apply.")
+@click.pass_obj
+def remove_from_iphone(ctx: Context, apply_: bool, confirm: str, **kwargs: Any) -> None:
+    """Delete assets from the iPhone, once every safety condition is proved.
+
+    A scan is taken in this same run and the plan is computed against it. The
+    local copy is re-hashed, the remote is asked what it holds now, and an
+    asset whose group is incomplete -- a Live Photo whose motion half was
+    never archived -- is never removable.
+
+    Assets go to Recently Deleted on the device and stay restorable there for
+    30 days. Storage is not reclaimed until that empties.
+    """
+    config = ctx.config
+    try:
+        selector = build_selector(**kwargs)
+    except SelectorError as exc:
+        _fail(ctx.out, str(exc))
+        return
+
+    # Before the scan, not after: scanning takes minutes and writes to the
+    # ledger, and refusing afterwards would spend both for nothing.
+    if config.remove_from_iphone.policy == RemovalPolicy.NEVER:
+        _fail(
+            ctx.out,
+            "remove_from_iphone.policy is 'never', so nothing is removed from the phone.\n"
+            "  That is the default and it is doing its job. To change it, edit\n"
+            "  the policy in your config to 'cloud_verified' -- which requires a\n"
+            "  hash-verified copy in the cloud before anything leaves the device.",
+        )
+        return
+
+    ctx.out.line()
+    ctx.out.line(
+        "  This deletes photographs from your iPhone. Because the library is "
+        "iCloud-synced, they leave every device signed in to that account.",
+        style="warn",
+    )
+    ctx.out.line(
+        "  They go to Recently Deleted and are restorable there for 30 days.",
+        style="muted",
+    )
+    ctx.out.line()
+    ctx.out.line(
+        "  Scanning the library first. Nothing is planned against stale state.", style="muted"
+    )
+
+    db = ctx.database()
+    try:
+        scan_result = run_scan(config)
+        eligible, preview = remove_engine.plan(config, db, selector, scan_id=scan_result.scan_id)
+    except (remove_engine.RemoveError, cloud_engine.CloudError, HelperError) as exc:
+        _fail(ctx.out, str(exc))
+        return
+    finally:
+        db.close()
+
+    removable = sum(c.size_bytes for c in eligible)
+    data: dict[str, Any] = {
+        "applied": apply_,
+        "scanId": preview.scan_id,
+        "examined": preview.examined,
+        "eligible": preview.eligible,
+        "eligibleBytes": removable,
+        "blocked": preview.blocked,
+        "blockedReasons": preview.blocks,
+        "blockedAssets": preview.blocked_assets[:200],
+    }
+
+    def render_blocks() -> None:
+        if not preview.blocks:
+            return
+        ctx.out.line()
+        ctx.out.line("  Not removable, and why", style="head")
+        for reason, count in sorted(preview.blocks.items(), key=lambda kv: -kv[1]):
+            ctx.out.line(f"    {count:>7,}  {reason}", style="muted")
+
+    if not apply_:
+
+        def render_plan() -> None:
+            ctx.out.title("Removal plan")
+            ctx.out.pairs(
+                [
+                    ("scan taken just now", f"#{preview.scan_id}"),
+                    ("assets examined", f"{preview.examined:,}"),
+                    ("safe to remove", f"{preview.eligible:,}, {human_bytes(removable)}"),
+                    ("blocked", f"{preview.blocked:,}"),
+                ]
+            )
+            render_blocks()
+            ctx.out.line()
+            if not eligible:
+                ctx.out.ok("nothing is safe to remove yet")
+                return
+            ctx.out.line(
+                "  Storage is reclaimed after Recently Deleted is emptied, up to 30 days.",
+                style="muted",
+            )
+            ctx.out.line("  NOTHING HAS BEEN REMOVED. To run it:", style="warn")
+            ctx.out.line(
+                f'    remove-from-iphone --apply --confirm "{_removal_phrase(preview.eligible)}"',
+                style="warn",
+            )
+
+        ctx.out.result(data, render_plan)
+        return
+
+    if not eligible:
+        _fail(ctx.out, "nothing is safe to remove, so there is nothing to apply")
+        return
+
+    expected = _removal_phrase(preview.eligible)
+    if config.safety.confirm_phrase_when_icloud_sync and confirm.strip().lower() != expected:
+        render_blocks()
+        _fail(
+            ctx.out,
+            f"--apply needs the confirmation phrase for this exact plan. Re-run with:\n"
+            f'    --confirm "{expected}"\n'
+            f"  The count is part of the phrase so an older command cannot authorise "
+            f"a larger removal than the one it was written for.",
+        )
+        return
+
+    def tick(result: Any) -> None:
+        ctx.out.line(
+            f"  removed {result.removed:,} of {preview.eligible:,}, "
+            f"{human_bytes(result.bytes_removed)}",
+            style="muted",
+        )
+
+    try:
+        result = remove_engine.run(config, selector, on_progress=tick)
+    except (remove_engine.RemoveError, cloud_engine.CloudError, HelperError) as exc:
+        _fail(ctx.out, str(exc))
+        return
+
+    data.update(
+        {
+            "removed": result.removed,
+            "alreadyGone": result.already_gone,
+            "failed": result.failed,
+            "bytesRemoved": result.bytes_removed,
+            "failures": result.failures[:20],
+        }
+    )
+
+    def render_result() -> None:
+        ctx.out.title("Removed from iPhone")
+        ctx.out.pairs(
+            [
+                ("removed", f"{result.removed:,} files, {human_bytes(result.bytes_removed)}"),
+                ("already gone", f"{result.already_gone:,}"),
+                ("failed", f"{result.failed:,}"),
+            ]
+        )
+        if result.failures:
+            ctx.out.line()
+            ctx.out.line("  Failures", style="head")
+            for failure in result.failures[:10]:
+                ctx.out.line(f"    {failure['file']}: {failure['error']}", style="warn")
+        ctx.out.line()
+        ctx.out.line(
+            "  These are in Recently Deleted on the phone for 30 days. Storage is "
+            "reclaimed when that empties, or when you empty it yourself.",
+            style="muted",
+        )
+        ctx.out.line(
+            "  If any of this was wrong, recover it from the phone now, not later.",
+            style="muted",
+        )
 
     ctx.out.result(data, render_result)
     if result.failed:
