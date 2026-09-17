@@ -1,7 +1,7 @@
 # Handover
 
 Written 2026-09-17, at the end of the day the camera photo roll finished
-uploading; **updated 2026-09-18** with two fixed defects and a full
+uploading; **updated 2026-09-17 (late evening)** with two fixed defects and a full
 remote-vs-ledger audit (section 8). Everything below is measured or recorded,
 not assumed -- and section 8c is about the difference between those two words.
 
@@ -48,7 +48,7 @@ biggest milestone since the project started.
 
 ```
 camera photos, total archived      22,888
-  verified in Drive                22,888   73.77 GB   100%   re-checked 2026-09-18
+  verified in Drive                22,888   73.77 GB   100%   re-checked 2026-09-17 (late evening)
   still on the Mac (LOCAL_VERIFIED)  5,032   13.20 GiB  release is the next step
   released (Trash, then emptied)    17,856
 deleted from the iPhone             5,024   13.19 GiB  Recently Deleted, 30-day window
@@ -284,7 +284,7 @@ this recurs -- it is exactly the kind of silent, self-correcting drift that
 
 ---
 
-## 8. Two defects, both fixed on 2026-09-18
+## 8. Two defects, both fixed on 2026-09-17 (late evening)
 
 ### 8a. `release` excluded the assets it exists to free — fixed, `1b7c5f4`
 
