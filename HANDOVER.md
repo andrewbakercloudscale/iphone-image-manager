@@ -1,7 +1,7 @@
 # Handover
 
-Written 2026-09-16, revised the same day once `release` landed. Everything below
-is measured or recorded, not assumed.
+Written 2026-09-17, at the end of the day the camera photo roll finished
+uploading. Everything below is measured or recorded, not assumed.
 
 ---
 
@@ -22,154 +22,114 @@ not already on the Mac, reviewed, and verified.** See `docs/SAFETY.md`.
 > files to my gdrive. At the end of this, I will only have one year's images on
 > my phone."
 
-**There is no external drive and there will not be one.** Working in chunks on a
-Mac with ~20 GB free *is the product*, not a limitation to engineer around. A
-previous session proposed buying a drive; that was solving the wrong problem.
+Restated today, more precisely: **12 months of photos on the phone, everything
+older uploaded and removed.** Cutoff as of today is **2025-09-17**.
 
-**The Mac is a temporary working copy.** The archive is a staging buffer. Once
-an asset is in Google Drive the Mac copy is released. Invariant: **two
-independent copies at all times**, and the Mac is only ever the third.
-
-```
-cloud-verified   Drive verified + Recently Deleted 30d  ->  Mac copy released
-never uploaded   Recently Deleted 30d only              ->  Mac keeps the bytes
-```
-
-### The cycle
+**There is no external drive and there will not be one.** The Mac is a
+temporary working copy; the archive is a staging buffer. The full cycle now
+exists and ran for a whole day without manual intervention once it was
+running:
 
 ```
 fetch  ->  upload  ->  verify  ->  release the Mac copy  ->  next chunk
 ```
 
-**Every step now exists.** `release` landed in `ff4c9bd`; the cycle can turn a
-second time. It has not yet freed meaningful disk, because the first upload is
-still in flight and only what the remote confirms is eligible -- 20 of 19,926 on
-its verified trial run, the other 19,906 correctly refused as not yet in the
-cloud. **The disk is still at 18 GB. Finishing the upload is what unlocks it**,
-not more code.
+Every step is built. Today proved it end to end, repeatedly, unattended.
 
 ---
 
-## 3. Current state
+## 3. Where things stand right now
 
-| Phase | Status |
-|---|---|
-| P0 / P0b spikes | Complete. USB is dead; PhotoKit works and deletion is permitted. |
-| P1 foundation | Complete. |
-| P5 scan / list / sync | Complete. **Camera is fully archived.** |
-| P6 dedupe | Not needed yet: zero exact duplicates among the 19,962 archived. |
-| **P7 cloud** | **Built and running.** Upload in flight, see below. |
-| P8 verify | Per-asset hash verification exists inside `cloud`; a full reconcile does not. |
-| **The release step** | **Built** (`ff4c9bd`). Waiting on the upload, not on code. |
-| P10 removal | Not started, gated on `tests/destructive/` existing first. |
-
-292 tests and ruff clean. 40 commits, 1 unpushed. Nothing uncommitted.
-(`mypy src` reports one pre-existing error: PyYAML stubs are not installed in
-this venv. It is the environment, not the code -- `pip install types-PyYAML`.)
-
-### Where the bytes are
+**The entire camera photo roll (22,888 photos, 73.77 GB) is uploaded to
+Google Drive and hash-verified.** `still to fetch: 0`. This is the single
+biggest milestone since the project started.
 
 ```
-archive   ~/Desktop/iphone           {source}/{year}/{event}
-ledger    ~/Desktop/iphone/iphone-image.sqlite
-config    ~/.iphone-image/config.yaml
-logs      ~/.iphone-image/logs/, chunk.log, cloud.log
+camera photos, total archived      22,888
+  verified in Drive                22,888   73.77 GB   100%
+  still on the Mac (LOCAL_VERIFIED) 5,024   14.16 GB   see section 8 -- gap found
+  released (Trash, then emptied)   17,864
+deleted from the iPhone             5,024   14.16 GB   Recently Deleted, 30-day window
 
-PHOTO  LOCAL_VERIFIED   19,926    59.4 GB   camera, complete
-PHOTO  DISCOVERED       56,577    14.8 GB   whatsapp, screenshots, and 36 to re-fetch
-VIDEO  DISCOVERED        2,303    83.5 GB   untouched, needs --type video
+camera video                        1,823  181.1 GB    NOT STARTED -- see section 6
 
-free disk on the Mac      18 GB   <- below the 20 GB floor; doctor says NOT READY
+Mac disk free                       26 GB
+Google Drive                        5 TiB total, 3.25 TiB free (upgraded today)
 ```
 
-**The first upload failed and nothing has been re-run.** It started 2026-09-16
-15:26, was killed by a hardcoded 6h timeout at 21:26, and is gone. What it left:
+320 tests pass, ruff clean. 44 commits, 0 unpushed, nothing uncommitted.
 
-```
-on Drive, measured      11,748 files   36.96 GB   62% of the 19,942 planned
-in the ledger                  20 assets          the release trial, nothing else
-disk freed                      none             still 17 GB
-```
+### What happened today, in order
 
-**Six hours of genuine uploading recorded as zero**, because verification was a
-single step at the very end and the run never reached it. Both causes are fixed
-(section 9 entry 13): work is now banked folder by folder, and a transfer is
-killed for going silent rather than for taking too long. The bytes on Drive are
-not wasted -- `--checksum` means a re-run skips them and the first pass banks
-those 11,748 almost immediately.
+1. **Fixed a log that said nothing for six hours** while the previous night's
+   upload ran silently, then died on a 6-hour timeout having banked nothing.
+   `fe48297`.
+2. **Rebuilt the upload to bank per folder** rather than all-at-once, so an
+   interruption costs a folder, not a night. `57e4415`.
+3. **Fixed a rate computed from bytes that never crossed the network** --
+   planned-size-over-elapsed-time for a skipped, already-uploaded folder.
+   `3acf7dc`.
+4. **Built P10, `remove-from-iphone`**, the last unbuilt phase. Found before
+   it deleted anything: 528 Live Photos archived as the still image only, zero
+   `.MOV` anywhere in the archive. Now permanently blocked. `37b980a`.
+5. **Ran the first real removal: 5,024 photos deleted from the iPhone**, zero
+   failures, zero collateral (verified by a before/after scan: library shrank
+   by exactly 5,024, nothing else). Recently Deleted, 30-day window.
+6. **Added photo/video as two separate cloud archives** (`Family Photos` /
+   `Family Videos`), because every verb -- upload, release, remove -- has to
+   agree on where a file lives or one of them deletes on a wrong match.
+   `c1366fb`.
+7. **Found and fixed a double-planning bug**: `release` and
+   `remove-from-iphone` each planned twice per invocation (once for the
+   preview, once inside `run`), so the two numbers printed side by side could
+   disagree, and `remove-from-iphone` was scanning the whole 95,000-asset
+   library twice per run. `03f39e6`.
+8. **Made the PhotoKit confirmation batch size configurable** and raised it to
+   10,000 live, so a removal is 1-2 macOS dialogs instead of eleven. `4e07fdf`.
+9. **Found `relocate` would have silently un-named the archive.** Photos'
+   place-name coverage had fallen from 69% to 24.8% as an iCloud backfill
+   added 15,000 unanalysed assets, and `relocate --show` proposed moving 8,590
+   files out of named folders into bare months on the strength of it.
+   `relocate` now refuses any plan that removes a name; adding one is always
+   allowed. `bac26e3`.
+10. **Fixed a display bug live**: the per-file progress line printed the
+    *chunk's running total* beside each filename, so late in a run an ordinary
+    2.4 MB JPEG printed as "3.0 GB". Display only; nothing about what was
+    fetched or verified was wrong. `a760f02`.
+11. **Ran an unattended fetch -> upload -> release cycle** (`~/.iphone-image/cycle.sh`)
+    to completion: the last 2,962 undownloaded camera photos, fetched,
+    uploaded, verified, released, with a 10 GB disk floor re-checked before
+    every fetch. It finished on its own and reported "nothing left to fetch."
+12. **The Mac ran out of disk mid-afternoon** (117 MB free) -- not from the
+    archive, from `~/Library/Caches` (21 GB, 8 GB of it Homebrew's download
+    cache) on a Data volume already at 97%. Cleared 10 GB of safe,
+    regenerable caches. Not a code problem; recorded here so it isn't
+    mistaken for one later.
 
 ---
 
-## 4. Google Drive
+## 4. What to do next, in order
 
-Connected and working. `rclone` holds the token; the tool never does.
-
-```
-remote        gdrive              scope = drive (full)
-destination   Diskstation2/Family Photos/Andrew iPhone Archive
-quota         2 TiB total, 325 GiB free   (124 GB would cover all of camera)
-```
-
-**The scope is deliberately full and was originally not.** `drive.file` was
-chosen first because it lets rclone see only files it created, but the target is
-a folder created by hand in the web UI, which `drive.file` cannot reach at all.
-The user chose full access knowingly. Consequence worth remembering: rclone can
-now also modify everything else in that Drive, including `cloudscale-backups`.
-
-**`Family Photos` is a hand-curated archive going back to 2003**, organised as
-`2019/03 Plett/`, `2020/05 and 06 Lockdown Covid/`. Nothing the tool writes goes
-into those folders. It writes to one new top-level folder, matching the existing
-convention for device dumps (`Shannon iPhone 7 Plus 2019`).
+1. **Fix the release gap in section 8** -- five minutes of work, described
+   there precisely. It is why 14.16 GB is stuck on the Mac that should already
+   be free.
+2. **Empty the Trash** if it hasn't been since the last release. Check
+   `du -sh ~/.Trash` isn't readable from a terminal (macOS privacy) --
+   check from Finder.
+3. **Decide the video job**, section 6. It cannot start today's way because
+   Photos' place-name coverage is still recovering (section 7). Options are
+   there.
+4. **Decide what to do about screenshots, WhatsApp, and screen recordings**,
+   section 9 -- 74,127 items / 278 GB have no plan at all and are outside the
+   12-month camera-only pipeline that exists today.
+5. **A second, larger removal pass** is now realistic: with the whole camera
+   roll in Drive, `remove-from-iphone --source camera --older-than 1y` would
+   plan against roughly 15,000 eligible photos rather than 5,024. Not run
+   today -- deliberately left for the user to authorise, per SAFETY section 3.
 
 ---
 
-## 5. The archive layout
-
-`{source}/{year}/{event}`, where `{event}` is a place and the span of one visit:
-
-```
-camera/2019/11-12 Cape Town/       194
-camera/2019/11 Constantia and Hout Bay/  42
-camera/2019/12 Mossel Bay/         166
-camera/2019/11/                     21   <- month bucket, not "Unsorted"
-```
-
-Place names come from **Photos' own on-device reverse geocoding**, read from
-`Photos.sqlite` the same way the source bundle id is. No network, no dataset, no
-dependency, and the names match what the user sees in Photos. 69% of archived
-photos get one; the rest fall back to their month, which sorts beside the named
-folders so the year stays chronological.
-
-Three clustering rules, each from a real failure: a cluster never crosses a year,
-a gap over 45 days starts a new visit, and a folder needs at least
-`organization.event_min_photos` (10) files to earn a name. **That count is of
-files the archive will hold**, not of assets that inspired them -- counting
-library-wide let a place clear the minimum on WhatsApp images that are never
-archived.
-
----
-
-## 6. Measured numbers
-
-Do not replace these with estimates; they were expensive to get.
-
-| | |
-|---|---|
-| Library, on the Mac | 79,024 assets, 158 GB |
-| Library, on the phone | **~94,180 assets. The Mac holds 84%.** See section 8. |
-| iCloud download rate | **1.15 to 1.50 MB/s** sustained |
-| Drive upload rate | **2.55 MB/s** at 16 transfers; 0.33 at rclone's default of 4 |
-| Drive upload rate, sustained | **falls to 1.12 MB/s after roughly an hour.** 4.46 rising to 6.79 over the first 63 min, then 1.12 for the next 5 hours, and `rateLimitExceeded` on a listing the next morning. Short benchmarks do not see this. |
-| Archive shape | 236 folders, median 25 files, largest 965 files / 2.70 GB |
-| Local disk read rate | > 4,000 MB/s, which is why the two must never be averaged |
-| Scan time | ~2 minutes for the whole library, zero bandwidth |
-| Archive re-file | 13,172 files, 37 GB, 20 seconds -- renames, not copies |
-| Exact duplicates among archived | **zero**, all 19,962 unique by SHA256 |
-| GPS in the archived files | 99% in the ledger, 98% in the EXIF itself |
-
----
-
-## 7. How to run it
+## 5. How to run it
 
 ```bash
 cd ~/Desktop/github/iphone-image-manager
@@ -184,236 +144,183 @@ list <selector>     preview, harmless
 sync <selector>     plan only; --apply to fetch
 cloud <selector>    plan only; --apply to upload and verify
 release <selector>  plan only; --apply to trash local copies the remote confirms
+remove-from-iphone <selector>   plan only; --apply --confirm "<phrase>" to delete from the phone
 relocate            re-file the archive after a layout change; --apply to run
+                    refuses if it would remove a place name -- see section 3.9
 device | status | journal | config show|validate|init
 ```
 
 Selector: `--source --type --older-than --newer-than --year --min-size
 --max-size --order --limit --no-favourites --no-proxy-suspects`.
 
-Long runs go detached, survive the terminal, and keep the Mac awake:
+**The unattended cycle used today:**
 
 ```bash
-./run-chunk.sh --source camera      # fetch
-./run-chunk.sh --status | --stop
+~/.iphone-image/cycle.sh
 ```
 
-The upload was launched by hand with the same `nohup caffeinate -dimsu` pattern.
-**A generalised runner does not exist** and `run-chunk.sh` only knows `sync`.
+Started under `nohup caffeinate -dimsu`, so it survives closing the terminal
+and keeps the Mac awake. Logs to `~/.iphone-image/cycle.log`. Loops
+release -> check-nothing-to-fetch -> check-floor -> fetch -> upload, up to 12
+times, and stops cleanly when there is nothing left to fetch. **Written for
+today's photo job specifically** (hardcoded `--type photo`); would need
+`--type video` and a size-aware batching decision to be reused for videos,
+see section 6.
+
+`run-chunk.sh` (older, `sync`-only) still exists and still works; `cycle.sh`
+is the one that also uploads and releases.
+
+**The live config now has:**
+
+```yaml
+cloud:
+  video_destination: "Diskstation2/Family Videos"
+remove_from_iphone:
+  policy: cloud_verified          # ARMED -- see docs/SAFETY.md before touching
+  batch_size: 10000               # PhotoKit confirmation batch, was 500
+chunking:
+  free_space_floor: 10GB          # was 20GB, per the user's explicit ask today
+```
 
 ---
 
-## 8. The thing that is actually wrong
-
-**The Mac's Photos library is missing ~15,156 assets that are on the phone.**
+## 6. The video job -- measured, not started
 
 ```
-screenshots     phone 14,605   Mac  7,684   missing  6,921   (53% synced)
-whole library   phone 94,180   Mac 79,024   missing 15,156   (84% synced)
+camera video            1,823 files    181.1 GB
+  excluded (correct)    WhatsApp video   3,102 / 22.5 GB
+                        screen recordings 597 / 20.8 GB
 ```
 
-Characterised, not guessed: the Mac holds thousands of assets from 2019-2023 but
-**essentially zero PNGs** from those years (2, 2, 1, 1, 2). Screenshots are PNG,
-so they were never downloaded rather than misclassified. This fits the record
-that the Mac library was a detached iCloud library that got reconnected: it
-carried the old camera roll forward and has only backfilled 2024-onward.
+This is **not the 83.5 GB the previous handover recorded** -- that figure was
+wrong, possibly from before the camera bundle-id backfill was understood
+correctly (see the old mistake list, item 6). 181.1 GB is measured against the
+real ledger with the real selector.
 
-**The tool can only ever act on what the Mac library holds.** Removal goes
-through PhotoKit against that library, so "delete all screenshots" today reaches
-53% of them and reports success. Completing the sync is a prerequisite for the
-goal, not a tidiness matter.
+**Why it hasn't started: place-name coverage, not disk or Drive space.**
+Google Drive was upgraded to 5 TiB today specifically to make room for this
+(3.25 TiB free, plenty). Disk is fine at 26 GB and the cycle script proved it
+can maintain a floor unattended. The blocker is organisational: see section 7.
 
-**The cause is not established.** All four sync daemons run and sit at 0.0% CPU;
-nothing new has arrived in two days; the disk is at 95%; there are 106,003 queued
-background work items. Photos did a burst of work mid-investigation (resources
-203,945 -> 210,019, ~5.6 GB) and stopped. Do not assert a cause from one number:
-that mistake is already in the list below. The cheapest real test is the work
-already planned -- free ~60 GB by releasing uploaded copies, then re-measure.
+**The user's decision, given today:** wait for place-name coverage to recover
+before running any video chunk, so trip folders come out named
+(`2024/07 Plett/`) rather than bare months (`2024/07/`). A video chunk run
+today would mostly produce bare-month folders and the `relocate` guard from
+item 9 would then block ever renaming them into place, because renaming a
+month into a name is fine but the archive-vs-cloud desync risk from section
+3.9 applies just as much to a first filing as to a re-file.
 
----
-
-## 9. Mistakes made, and what they cost
-
-Kept because the pattern matters more than the individual bugs.
-
-1. **Trusting SDK headers over a device.** `originatingAssetID`, `fingerprint`,
-   `gpsString`, `exifCreationDate`, `pairedRawImage` are all declared by
-   ImageCaptureCore and populated **0.0%** of the time. A header is not evidence.
-2. **Reporting an empty result as success.** A locked iPhone reports a complete
-   but empty catalog with a stripped capability list. The first spike run called
-   that a successful measurement.
-3. **Trusting a delegate callback.** `deviceDidBecomeReadyWithCompleteContentCatalog`
-   never fires on that device. The probe sat at 100% for 153 seconds. Progress
-   is now polled, because a callback cannot report its own absence.
-4. **A hardcoded rate constant.** 0.45 MB/s was measured while Apple's metadata
-   sync competed for bandwidth. The real rate is 1.24 to 1.50. Estimates now
-   come from this installation's own journal.
-5. **Averaging disk reads into a network rate.** Produced 3.77 MB/s where the
-   truth was 1.24, then later displayed "4696.44 MB/s" as a transfer rate. The
-   same threshold is now defined once and used in both places. **It came back
-   on 2026-09-15**, because that threshold was applied to the *run*: it catches
-   a chunk that was entirely local and cannot see a chunk that was half of
-   each. One was live at the time, reporting 10.12 MB/s while the instantaneous
-   network rate was 2.6, and it would have estimated the next all-iCloud chunk
-   at 0.4 hours instead of 1.7. Now each asset is classified as it lands and
-   only downloads feed the estimate. Rows written before the split are ignored
-   rather than approximated, because their bytes cover both kinds and the
-   proportion cannot be recovered afterwards. **A threshold is only as good as
-   the thing it is applied to.**
-6. **A channel mapping invented rather than measured.** `camera` was mapped
-   first to "no source app", then to `com.apple.camera` alone, which matched
-   6,181 assets and 20.7 GB. It should have been 20,613 and 124 GB, because iOS
-   only began recording that bundle id around 2024-08. A backup filter silently
-   omitting 39 GB of the user's photographs is the worst way to be wrong.
-7. **Asserting a cause from a single number.** Claimed the iCloud sync had
-   "quietly stalled" on no evidence. Photos had zero upload jobs queued and
-   every asset marked cloud-synced. `doctor` now reports the count's trend and
-   names both possibilities rather than picking the pessimistic one.
-8. **`&& echo pushed` after a commit that was rejected**, reporting success for
-   a no-op push. Pushes now compare the SHA before and after.
-10. **A completeness check that could not check completeness, reporting `[ok]`.**
-   The phone holds **14,605 screenshots**; the Mac library holds **7,684**, and
-   every missing one predates 2024. The whole library is 79,024 against the
-   phone's ~94,180 -- **84%** -- and `doctor` called the sync healthy
-   throughout, because the comparison it would have used is guarded by
-   `if expected and ...` and `photos.expected_assets` was unset. Absence of a
-   reference read as a pass. This is the same shape as every gate failure in
-   this project and it mattered more than most: the user's first cleanup was
-   "delete all screenshots", which would have reached 53% of them and looked
-   finished. The fix does not depend on anyone typing a number -- the library's
-   own composition gives it away, since a year holding 8,411 assets and no
-   screenshots is not a change of habit. **The total looked plausible; only the
-   composition showed it.**
-9. **Treating an outage as N broken assets.** A chunk lost its network partway
-   and marked **1,435 assets FAILED**, one per remaining asset in the plan,
-   attempting every one of them after the cause was unmistakable. Nothing was
-   lost, because a FAILED row is re-queued by the next run, but the state read
-   as 1,435 individually broken photographs. `sync` now ends a chunk after
-   `CONSECUTIVE_FAILURE_LIMIT` failures in a row and says it stopped early. The
-   rule counts rather than diagnoses: matching Apple's error strings to spot
-   "offline" would be reading a message where a signal already exists.
-11. **Destroying 36 files while reporting zero failures.** `relocate` treated
-   every asset holding a path as about to vacate it, including the ones already
-   where they belonged. A mover was told a stayer's path was free, `os.rename`
-   replaced the file, and because rename is atomic and succeeds, the run
-   reported "13,172 moved, 0 failed". The ledger was left with two assets
-   pointing at one file. Found by noticing 19,962 assets against 19,926 distinct
-   paths -- **the count disagreed before anything else did**. Every duplicated
-   path had exactly one claimant whose recorded hash matched the survivor, so
-   the 36 losers were identifiable rather than guessed; they are reset to
-   DISCOVERED and the next sync re-fetches 91 MB. Two things did work: the
-   originals were all still in the Photos library, which is the entire reason
-   the archive is a staging buffer, and the upload in flight would have caught
-   them anyway as hash mismatches. **Who stays must be decided before where
-   anyone goes.**
-
-12. **A log that could not report progress, on the run that needed it most.**
-   The first 59.5 GB upload wrote 228 bytes to `cloud.log` and then nothing for
-   hours. Two independent causes, either of which was enough: rclone prints no
-   progress unless asked, and `_run` used `capture_output`, which hands stderr
-   over only once the process exits. So the log read exactly the same whether
-   the transfer was moving or had died an hour before -- and the only way to
-   tell was to ask Drive what it held. Fixed by streaming stderr as it arrives
-   and passing `--stats 30s --stats-one-line --stats-log-level NOTICE`. **The
-   third flag is the one to keep**: measured against rclone 1.74.1, the first
-   two alone still print nothing, because stats log at INFO and the default
-   level is NOTICE. A test asserts all three. The first cut of the fix then
-   truncated the diagnostic from the front, so a failing run reported
-   `NOTICE: stats 351 ... 375` and cut off the `ERROR:` that came last -- a
-   message made entirely of noise with the signal trimmed off the end. Its own
-   test caught that. **Absence of output still is not absence of trouble.**
-
-13. **Six hours of uploading recorded as zero.** The first real upload put
-   11,748 files and 36.96 GB on Drive, then hit a hardcoded 6h timeout at 62%
-   and was killed. Not one of those files was marked verified, because
-   verification was a single pass after every upload finished, so an
-   interruption anywhere recorded nothing at all. Three faults, and the middle
-   one is the one that mattered:
-   - **the timeout asked the wrong question.** A wall clock cannot tell a slow
-     transfer from a dead one, and it killed a working upload for the crime of
-     being throttled. It is now a *stall* timeout -- no output at all for 15
-     minutes -- which is only answerable because progress is streamed at all
-     (entry 12). Being throttled still prints stats; being wedged does not.
-   - **nothing was banked until everything was done.** Now each folder is
-     uploaded, verified against a listing of *that folder*, and committed
-     before the next begins. The connection is in autocommit, so an
-     interruption costs at most the batch in flight. A folder was chosen as
-     the unit because it is also the unit of checking: re-listing all 20,000
-     files per batch is what made frequent verification too dear to consider.
-   - **the rate was measured over minutes and assumed to hold for hours.** It
-     did not: 6.79 MB/s at the one-hour mark, 1.12 MB/s over the five that
-     followed. Every estimate I gave from the fast window was wrong, and the
-     ETA I quoted was under half the real figure. **A rate measured over
-     minutes is not a rate**, which is entry 4 again in a new costume.
-
-   A fourth showed up within a minute of the re-run: `banked 189 verified at
-   76.99 MB/s` for a folder where rclone sent **nothing**, the files being
-   already on Drive. Planned size over elapsed time is not a transfer rate
-   when the transfer did not happen -- entry 4 a third time, in a third
-   costume. The rate now comes from rclone's own stats line, counts only
-   batches that sent something, and reports "rate not reported" rather than a
-   number when the line cannot be parsed. **Unknown is not zero.**
-
-   `cloud_upload_workers` is still 16. Drive throttling is one observation and
-   changing a measured constant on one observation is entry 4 as well; the
-   `cloud.tps_limit` knob exists, defaults to off, and per-folder rates now go
-   to the journal so the next session argues from data.
+**When ready:** `cycle.sh` as written will not do this -- it hardcodes
+`--type photo`. Either write a twin script with `--type video`, or generalise
+`cycle.sh` to take the type as an argument (recommended, five-minute change).
+The 15-minute-chunk size in config (`chunk_bytes: 15GB`) will need
+reconsidering too: at ~100 MB average per video, a 15 GB chunk is only ~150
+files, so 1,823 files is roughly 12 chunks regardless -- same order of
+magnitude as the photo job's, but each file is much larger so a single stalled
+transfer costs more wall-clock before the stall detector (15 min silence)
+fires.
 
 ---
 
-## 10. Open questions
+## 7. Place-name coverage -- what it is and why it collapsed
 
-- **Whether 16 transfers is what provokes Drive's rate limiter.** Unresolved
-  and now instrumented rather than guessed: per-folder rates go to the journal,
-  so a second long run answers it. `cloud.tps_limit` is the knob, default off.
-- **36 assets are waiting to be re-fetched** and `sync` will refuse to start
-  while free space is under the 20 GB floor. They come back as soon as the
-  upload finishes and `release --apply` reclaims the disk.
-- **6,259 archived photos have GPS but no place name**, because Photos never
-  reverse-geocoded them. They fall back to month buckets. Fixing it means an
-  offline dataset, which is `docs/PLAN.md` decision 15 and a real build.
-- **Screenshot classification is unproven at scale.** On the current library
-  `com.apple.springboard` and the subtype agree on 7,679 of 7,681.
-- **Whether parallel fetches raise the 1.5 MB/s download rate.** Untested. The
-  upload gained 8x from concurrency, so this is worth an hour.
-- **Proxy threshold (0.12 bytes per pixel) misfires on screenshots**, which are
-  flat colour and compress 7x better than photographs: 35% of them fall below it
-  against 5% of camera photos. 595 screenshots are permanently unremovable for a
-  reason that does not apply to them.
-- **`photos.expected_assets` is still unset.** The phone's own count is ~94,180.
-  Setting it turns `doctor`'s completeness check from a warning into a real
-  comparison.
-- **Junk retention may become the next pinch point.** ~21 GB of never-uploaded
-  junk held for 90 days, against ~20 GB free.
+Read live from Photos' own reverse geocoding at organise time (`places.py`),
+never cached in the ledger. Two numbers, straight from the real Photos
+database today:
 
----
+```
+assets not trashed             89,849
+with a ZMOMENT title (place)   22,241   =  24.8%
+```
 
-## 11. What to do next
+The previous handover recorded **69%** when the archive was first filed. The
+cause: the library grew from 78,806 to 94,678 assets between then and now, as
+an iCloud backfill (already in progress, unrelated to this tool) caught up.
+Photos analyses new arrivals lazily and had not yet run its reverse-geocoding
+pass on ~15,000 of them, so overall coverage fell even though the *old*
+assets' coverage did not change.
 
-1. **Re-run `cloud --source camera --apply`, then `release --apply`.** The
-   first pass banks the 11,748 files already on Drive almost immediately, since
-   rclone skips them by checksum and verification is now per folder. Expect the
-   remaining ~22 GB to be slow; being throttled is no longer fatal. Progress is
-   visible in `cloud.log` this time, a line every 30s.
-2. **Re-measure the sync gap** with ~80 GB free, which settles section 8.
-3. **Re-fetch the 36** and finish the screenshots/WhatsApp chunks.
-4. **P10 removal**, gated on `tests/destructive/` existing and passing first.
+**It is recovering.** Spot-checked mid-cycle today: newly-uploaded 2022/2023
+folders were correctly named (`2022/12 Babylonstoren Road`, `2023/09 Taunton`)
+in the upload log, meaning that period's coverage has already come back.
+2024-2026 is presumably still catching up. Speeds up with the Mac plugged in,
+on wifi, screen locked -- normal Photos background-analysis conditions, no
+tool involvement needed.
 
-`docs/PLAN.md` is the plan of record and is current.
+**No command in this tool measures coverage.** Today's number came from a
+one-off query against a copy of `Photos.sqlite`. Worth adding to `doctor` if
+this recurs -- it is exactly the kind of silent, self-correcting drift that
+`doctor`'s trend-reporting pattern was built for.
 
 ---
 
-## 12. Files worth reading, in order
+## 8. A gap found while writing this handover, not yet fixed
+
+**`release`'s selector unconditionally requires `present_on_phone = 1`.**
+`Selector.where()` (selector.py:202) hardcodes that clause with no override,
+because it is the right default for `sync` (don't fetch what isn't there) and
+`remove-from-iphone` (can't remove what isn't there). It is the *wrong*
+default for `release`, whose entire job is Mac disk space: whether an asset is
+still on the phone has no bearing on whether its Mac copy can be freed once
+Drive holds a verified copy. If anything, an asset **already removed from the
+phone** is a *stronger* candidate for release, not a weaker one.
+
+**Measured consequence:** the 5,024 photos deleted from the iPhone earlier
+today are still sitting on the Mac, fully cloud-verified, because every
+`release --apply` run since then silently excluded them.
+
+```sql
+SELECT COUNT(*) FROM assets
+WHERE removed_from_phone_at IS NOT NULL
+  AND local_status = 'LOCAL_VERIFIED'
+  AND cloud_status = 'CLOUD_VERIFIED';
+-- 5,024
+```
+
+That is **14.16 GB stranded on the Mac for no reason**, exactly matching the
+count deleted from the phone -- confirmed by overlap query, not coincidence.
+
+**The fix**, not yet made: `release`'s `plan()` should not depend on
+`selector.where()`'s phone-presence clause at all, or should offer an explicit
+override the way `for_removal()` does for the opposite direction. The cleanest
+shape is probably a `for_release()` method on `Selector` parallel to
+`for_removal()`, dropping `present_on_phone` entirely, since release never
+touches the phone and has no reason to care about it.
+
+No test caught this because no test exercises `release` against an asset that
+has been removed from the phone -- every existing fixture has
+`present_on_phone = 1`. Add that fixture alongside the fix.
+
+---
+
+## 9. What still has no plan
+
+```
+still on the phone, no upload/delete pipeline exists for any of these:
+  screenshots          14,607 items    13.8 GB
+  WhatsApp (photo+video) ~6,200 items  46.8 GB
+  screen recordings      597 items    20.8 GB
+```
+
+None of this is touched by the camera-only pipeline. Under `cloud_verified`
+removal policy, none of it can ever be deleted by this tool without a
+decision to also upload it somewhere -- and unlike the photo archive, none of
+these have an agreed destination folder on Drive. This was flagged to the
+user today and deliberately left as an open decision, not started.
+
+---
+
+## 10. Files worth reading, in order
 
 | File | Why |
 |---|---|
 | `docs/SAFETY.md` | Shortest and most important. The hazards, the four-step removal sequence, and what happens to the Mac copy. |
 | `docs/PLAN.md` | Architecture, decisions, phases, risk register. |
-| `src/iphone_image/cloud.py` | Why an upload is not believed until the remote is asked. |
-| `src/iphone_image/release.py` | The only other code that destroys data. Four rules, and why RELEASED had to be terminal. |
-| `src/iphone_image/relocate.py` | Two passes, and the 36 files that paid for the second one. |
-| `src/iphone_image/organize/events.py` | The three clustering rules and the data that produced them. |
-| `src/iphone_image/selector.py` | The selector, the channel classifier, and `for_removal`. |
-| `src/iphone_image/sync.py` | The fetch engine, its verification rules, and the rate split. |
-| `spikes/P0-transport.md` | Why USB failed. |
+| `src/iphone_image/remove.py` | P10. The eight-way refusal, and the Live Photo group-completeness check that caught 528 photos before this was ever run for real. |
+| `src/iphone_image/release.py` | Why an asset is re-verified against the remote in the same invocation it is deleted from the Mac -- and see section 8 for the gap in its selector. |
+| `src/iphone_image/cloud.py` | Per-folder batching, the stall-vs-slow distinction, `destination_for` / `split_cloud_path` for the two-archive split. |
+| `src/iphone_image/relocate.py` | The un-naming guard (`unnaming()`), added today after nearly stripping 8,590 folder names. |
+| `src/iphone_image/photos/places.py` | Where place names come from, and why their coverage is not stable. |
+| `~/.iphone-image/cycle.sh` | The unattended fetch/upload/release loop used today. Gitignored, local-only, photo-only as written. |
+| `spikes/iimphotos/Sources/iimphotos/Delete.swift` | The PhotoKit deletion primitive: confirms by re-fetching, never guesses at a missing identifier. |
 | `docs/SPEC.md` | The original specification, kept verbatim; `PLAN.md` section 7 lists what is superseded. |
