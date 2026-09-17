@@ -63,7 +63,7 @@ not more code.
 | **The release step** | **Built** (`ff4c9bd`). Waiting on the upload, not on code. |
 | P10 removal | Not started, gated on `tests/destructive/` existing first. |
 
-276 tests and ruff clean. 38 commits, 1 unpushed. Nothing uncommitted.
+284 tests and ruff clean. 39 commits, 1 unpushed. Nothing uncommitted.
 (`mypy src` reports one pre-existing error: PyYAML stubs are not installed in
 this venv. It is the environment, not the code -- `pip install types-PyYAML`.)
 
@@ -82,13 +82,21 @@ VIDEO  DISCOVERED        2,303    83.5 GB   untouched, needs --type video
 free disk on the Mac      18 GB   <- below the 20 GB floor; doctor says NOT READY
 ```
 
-**An upload is running right now**: pid in `~/.iphone-image/cloud.pid`, logging to
-`~/.iphone-image/cloud.log`, 19,942 files and 59.5 GB at a measured 2.55 MB/s, so
-roughly seven hours. Detached under `caffeinate` and reparented to launchd, so
-closing the terminal will not kill it. Interrupting is safe: a re-run skips what
-is already there by checksum. Verification runs once at the end, so an
-interrupted upload marks nothing verified and the next run re-verifies
-everything -- see open questions.
+**The first upload failed and nothing has been re-run.** It started 2026-09-16
+15:26, was killed by a hardcoded 6h timeout at 21:26, and is gone. What it left:
+
+```
+on Drive, measured      11,748 files   36.96 GB   62% of the 19,942 planned
+in the ledger                  20 assets          the release trial, nothing else
+disk freed                      none             still 17 GB
+```
+
+**Six hours of genuine uploading recorded as zero**, because verification was a
+single step at the very end and the run never reached it. Both causes are fixed
+(section 9 entry 13): work is now banked folder by folder, and a transfer is
+killed for going silent rather than for taking too long. The bytes on Drive are
+not wasted -- `--checksum` means a re-run skips them and the first pass banks
+those 11,748 almost immediately.
 
 ---
 
@@ -151,6 +159,8 @@ Do not replace these with estimates; they were expensive to get.
 | Library, on the phone | **~94,180 assets. The Mac holds 84%.** See section 8. |
 | iCloud download rate | **1.15 to 1.50 MB/s** sustained |
 | Drive upload rate | **2.55 MB/s** at 16 transfers; 0.33 at rclone's default of 4 |
+| Drive upload rate, sustained | **falls to 1.12 MB/s after roughly an hour.** 4.46 rising to 6.79 over the first 63 min, then 1.12 for the next 5 hours, and `rateLimitExceeded` on a listing the next morning. Short benchmarks do not see this. |
+| Archive shape | 236 folders, median 25 files, largest 965 files / 2.70 GB |
 | Local disk read rate | > 4,000 MB/s, which is why the two must never be averaged |
 | Scan time | ~2 minutes for the whole library, zero bandwidth |
 | Archive re-file | 13,172 files, 37 GB, 20 seconds -- renames, not copies |
@@ -313,19 +323,41 @@ Kept because the pattern matters more than the individual bugs.
    message made entirely of noise with the signal trimmed off the end. Its own
    test caught that. **Absence of output still is not absence of trouble.**
 
+13. **Six hours of uploading recorded as zero.** The first real upload put
+   11,748 files and 36.96 GB on Drive, then hit a hardcoded 6h timeout at 62%
+   and was killed. Not one of those files was marked verified, because
+   verification was a single pass after every upload finished, so an
+   interruption anywhere recorded nothing at all. Three faults, and the middle
+   one is the one that mattered:
+   - **the timeout asked the wrong question.** A wall clock cannot tell a slow
+     transfer from a dead one, and it killed a working upload for the crime of
+     being throttled. It is now a *stall* timeout -- no output at all for 15
+     minutes -- which is only answerable because progress is streamed at all
+     (entry 12). Being throttled still prints stats; being wedged does not.
+   - **nothing was banked until everything was done.** Now each folder is
+     uploaded, verified against a listing of *that folder*, and committed
+     before the next begins. The connection is in autocommit, so an
+     interruption costs at most the batch in flight. A folder was chosen as
+     the unit because it is also the unit of checking: re-listing all 20,000
+     files per batch is what made frequent verification too dear to consider.
+   - **the rate was measured over minutes and assumed to hold for hours.** It
+     did not: 6.79 MB/s at the one-hour mark, 1.12 MB/s over the five that
+     followed. Every estimate I gave from the fast window was wrong, and the
+     ETA I quoted was under half the real figure. **A rate measured over
+     minutes is not a rate**, which is entry 4 again in a new costume.
+
+   `cloud_upload_workers` is still 16. Drive throttling is one observation and
+   changing a measured constant on one observation is entry 4 as well; the
+   `cloud.tps_limit` knob exists, defaults to off, and per-folder rates now go
+   to the journal so the next session argues from data.
+
 ---
 
 ## 10. Open questions
 
-- **The fix above does not reach the upload now running.** It loaded the old
-  code at 15:26 and keeps it until it exits, so that log stays silent to the
-  end. Progress for this one comes from asking the remote:
-  `rclone size "gdrive:Diskstation2/Family Photos/Andrew iPhone Archive"`.
-- **Verification is all-or-nothing.** `cloud` uploads everything, then verifies
-  once at the end, so an upload interrupted at hour six marks nothing verified
-  and the next run re-lists and re-verifies the lot. Nothing is lost and rclone
-  skips re-sending by checksum, but incremental verification would make a long
-  upload resumable in the way the fetch already is.
+- **Whether 16 transfers is what provokes Drive's rate limiter.** Unresolved
+  and now instrumented rather than guessed: per-folder rates go to the journal,
+  so a second long run answers it. `cloud.tps_limit` is the knob, default off.
 - **36 assets are waiting to be re-fetched** and `sync` will refuse to start
   while free space is under the 20 GB floor. They come back as soon as the
   upload finishes and `release --apply` reclaims the disk.
@@ -350,9 +382,11 @@ Kept because the pattern matters more than the individual bugs.
 
 ## 11. What to do next
 
-1. **Let the upload finish, then `release --apply`.** The code exists; what it
-   needs is a remote that has the bytes. Watch `~/.iphone-image/cloud.log`.
-   Nothing else can happen until the disk is back.
+1. **Re-run `cloud --source camera --apply`, then `release --apply`.** The
+   first pass banks the 11,748 files already on Drive almost immediately, since
+   rclone skips them by checksum and verification is now per folder. Expect the
+   remaining ~22 GB to be slow; being throttled is no longer fatal. Progress is
+   visible in `cloud.log` this time, a line every 30s.
 2. **Re-measure the sync gap** with ~80 GB free, which settles section 8.
 3. **Re-fetch the 36** and finish the screenshots/WhatsApp chunks.
 4. **P10 removal**, gated on `tests/destructive/` existing and passing first.

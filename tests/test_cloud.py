@@ -27,6 +27,7 @@ class FakeCloud:
         self.corrupt = corrupt or set()
         self.checked = False
         self.calls: list[tuple[Path, int, str]] = []
+        self.listed: list[str | None] = []
 
     def check(self) -> None:
         self.checked = True
@@ -42,8 +43,17 @@ class FakeCloud:
                 digest = "0" * 64
             self.stored[relative] = digest
 
-    def hashes(self, destination: str) -> dict[str, str]:
-        return dict(self.stored)
+    def hashes(self, destination: str, subdir: str | None = None) -> dict[str, str]:
+        """Scoped like the real thing, or the key space goes untested.
+
+        rclone returns paths relative to whatever it was asked to list, so a
+        fake that ignored `subdir` and handed back everything would hide a
+        batch looking up `IMG_1.JPG` in a dict keyed `2019/11/IMG_1.JPG`.
+        """
+        self.listed.append(subdir)
+        if subdir is None:
+            return dict(self.stored)
+        return {k: v for k, v in self.stored.items() if k.startswith(f"{subdir}/")}
 
 
 @pytest.fixture
@@ -327,3 +337,147 @@ def test_a_hung_rclone_is_killed_and_says_so(tmp_path: Path) -> None:
     with pytest.raises(cloud_engine.CloudError, match="did not finish") as caught:
         provider._run(["lsjson", "gdrive:Dest"], timeout=1)
     assert "0 B / 10 GiB" in str(caught.value), "say what it was last doing"
+
+
+# ---------------------------------------------------------------------------
+# Banking progress as it is earned
+#
+# The first real upload ran six hours, put 11,748 files on Drive, was killed by
+# a wall-clock timeout before it reached verification, and recorded nothing at
+# all. Six hours of genuine work read as zero because verification was one step
+# at the very end. These tests are about what survives an interruption.
+# ---------------------------------------------------------------------------
+
+
+class FlakyCloud(FakeCloud):
+    """A remote that stops accepting uploads partway through the run."""
+
+    def __init__(self, *, fail_from: int, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.fail_from = fail_from
+
+    def upload(self, root: Path, relatives: list[str], destination: str) -> None:
+        if len(self.calls) >= self.fail_from:
+            self.calls.append((root, len(relatives), destination))
+            raise cloud_engine.CloudError("rclone copy said nothing for 900s and was killed")
+        super().upload(root, relatives, destination)
+
+
+def test_one_batch_per_folder(env) -> None:
+    config, db = env
+    add_archived(config, db, "a", "2019/11 Cape Town/IMG_1.JPG", body=b"1")
+    add_archived(config, db, "b", "2019/11 Cape Town/IMG_2.JPG", body=b"2")
+    add_archived(config, db, "c", "2019/12 Mossel Bay/IMG_3.JPG", body=b"3")
+
+    fake = FakeCloud()
+    result = cloud_engine.run(config, Selector(), provider=fake, db=db)
+
+    assert result.batches == 2, "two folders, two batches"
+    assert result.verified == 3
+    assert fake.listed == ["2019/11 Cape Town", "2019/12 Mossel Bay"], (
+        "each batch lists its own folder, never the whole archive"
+    )
+
+
+def test_an_interrupted_run_keeps_what_it_already_proved(env) -> None:
+    """The failure that cost six hours, as a test.
+
+    The remote takes the first folder and then refuses. What was verified
+    before the refusal must still be in the ledger afterwards.
+    """
+    config, db = env
+    add_archived(config, db, "a", "2019/11 Cape Town/IMG_1.JPG", body=b"1")
+    add_archived(config, db, "b", "2019/12 Mossel Bay/IMG_2.JPG", body=b"2")
+    add_archived(config, db, "c", "2020/01 Plett/IMG_3.JPG", body=b"3")
+
+    result = cloud_engine.run(config, Selector(), provider=FlakyCloud(fail_from=1), db=db)
+
+    assert result.verified == 1, "the first folder got through"
+    assert result.batches_done == 1
+    recorded = db.conn.execute(
+        "SELECT COUNT(*) FROM assets WHERE cloud_status = 'CLOUD_VERIFIED'"
+    ).fetchone()[0]
+    assert recorded == 1, "and it is durable, not merely counted in memory"
+
+
+def test_a_resumed_run_replans_and_skips_what_was_banked(env) -> None:
+    """Which is what makes the interruption cheap rather than merely survivable."""
+    config, db = env
+    for i, folder in enumerate(["2019/11 Cape Town", "2019/12 Mossel Bay", "2020/01 Plett"]):
+        add_archived(config, db, f"a{i}", f"{folder}/IMG_{i}.JPG", body=f"{i}".encode())
+
+    first = cloud_engine.run(config, Selector(), provider=FlakyCloud(fail_from=1), db=db)
+    assert first.verified == 1
+
+    second = cloud_engine.run(config, Selector(), provider=FakeCloud(), db=db)
+    assert second.planned == 2, "the banked folder is not replanned"
+    assert second.verified == 2
+    assert (
+        db.conn.execute(
+            "SELECT COUNT(*) FROM assets WHERE cloud_status = 'CLOUD_VERIFIED'"
+        ).fetchone()[0]
+        == 3
+    )
+
+
+def test_an_outage_stops_the_run_rather_than_failing_every_folder(env) -> None:
+    """Counted, not diagnosed -- the rule `sync` already uses."""
+    config, db = env
+    for i in range(10):
+        add_archived(config, db, f"a{i}", f"2019/{i:02d} Trip/IMG_{i}.JPG", body=f"{i}".encode())
+
+    result = cloud_engine.run(config, Selector(), provider=FlakyCloud(fail_from=0), db=db)
+
+    assert result.stopped_early, "an unavailable remote is an outage, not 10 bad folders"
+    assert result.batches_done == 0
+    assert "resumes where this one stopped" in result.stopped_early
+
+
+def test_a_folder_missing_from_the_remote_is_not_an_error(tmp_path: Path) -> None:
+    """The first upload creates it; a listing that blew up would fail its own batch."""
+    binary = _fake_rclone(
+        tmp_path,
+        'echo "ERROR: directory not found" >&2\nexit 3\n',
+    )
+    provider = cloud_engine.RcloneProvider("gdrive", binary=binary)
+    assert provider.hashes("Dest", "2019/11 Cape Town") == {}
+
+
+def test_a_listing_asks_only_for_the_folder_it_is_checking(tmp_path: Path) -> None:
+    """Re-listing 20,000 files per batch is what made this too dear to do often."""
+    argv = tmp_path / "argv.txt"
+    binary = _fake_rclone(tmp_path, f'printf "%s\\n" "$@" > {argv}\nprintf "[]"\nexit 0\n')
+    provider = cloud_engine.RcloneProvider("gdrive", binary=binary)
+
+    provider.hashes("Dest", "2019/11 Cape Town")
+    assert "gdrive:Dest/2019/11 Cape Town" in argv.read_text().split("\n")
+
+
+def test_a_wedged_transfer_is_killed_on_silence_not_on_the_clock(tmp_path: Path) -> None:
+    """The distinction that cost the first upload.
+
+    A wall clock cannot tell a slow transfer from a dead one, so a throttled
+    but working upload was killed at 62%. Silence can: rclone is asked for
+    stats every 30s and prints them even at 0 B/s.
+    """
+    binary = _fake_rclone(tmp_path, 'echo "NOTICE: 0 B / 10 GiB, 0%" >&2\nsleep 30\n')
+    provider = cloud_engine.RcloneProvider("gdrive", binary=binary)
+
+    with pytest.raises(cloud_engine.CloudError, match="said nothing for") as caught:
+        provider._run(["copy", "x"], timeout=3600, stall_timeout=1)
+    assert "0 B / 10 GiB" in str(caught.value)
+
+
+def test_a_slow_transfer_that_keeps_talking_is_left_alone(tmp_path: Path) -> None:
+    """The other half: being throttled is not being broken."""
+    binary = _fake_rclone(
+        tmp_path,
+        "i=0\nwhile [ $i -lt 6 ]; do\n"
+        '  echo "NOTICE: $i MiB / 10 GiB, 0%, 0.1 MiB/s" >&2\n'
+        "  sleep 0.2\n  i=$((i+1))\ndone\nexit 0\n",
+    )
+    seen: list[str] = []
+    provider = cloud_engine.RcloneProvider("gdrive", binary=binary, on_progress=seen.append)
+
+    provider._run(["copy", "x"], timeout=3600, stall_timeout=1)
+    assert len(seen) == 6, "it talked the whole way through and was not killed"

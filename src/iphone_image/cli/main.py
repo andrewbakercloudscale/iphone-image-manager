@@ -781,6 +781,9 @@ def relocate(ctx: Context, apply_: bool, show: int) -> None:
                 ("empty folders removed", f"{result.directories_removed:,}"),
             ]
         )
+        if result.stopped_early:
+            ctx.out.line()
+            ctx.out.line(f"  {result.stopped_early}", style="warn")
         if result.failures:
             ctx.out.line()
             ctx.out.line("  Failures", style="head")
@@ -877,6 +880,9 @@ def cloud(ctx: Context, apply_: bool, **kwargs: Any) -> None:
             "failed": result.failed,
             "bytesUploaded": result.bytes_uploaded,
             "mbPerSecond": round(result.rate_mb_s, 2) or None,
+            "batches": result.batches,
+            "batchesDone": result.batches_done,
+            "stoppedEarly": result.stopped_early or None,
             "failures": result.failures[:20],
         }
     )
@@ -888,6 +894,7 @@ def cloud(ctx: Context, apply_: bool, **kwargs: Any) -> None:
                 ("destination", f"{config.cloud.remote}:{config.cloud.destination}"),
                 ("uploaded", f"{result.uploaded:,} files, {human_bytes(result.bytes_uploaded)}"),
                 ("verified by hash", f"{result.verified:,}"),
+                ("folders banked", f"{result.batches_done:,} of {result.batches:,}"),
                 ("failed", f"{result.failed:,}"),
                 ("rate", f"{result.rate_mb_s:.2f} MB/s" if result.seconds else "-"),
             ]
@@ -903,6 +910,12 @@ def cloud(ctx: Context, apply_: bool, **kwargs: Any) -> None:
             "  Nothing local was deleted. Releasing the Mac copy is a separate step.",
             style="muted",
         )
+        if result.batches_done < result.batches:
+            ctx.out.line(
+                f"  {result.verified:,} asset(s) are verified and recorded. Re-run to "
+                f"continue; what is banked is not sent again.",
+                style="muted",
+            )
 
     ctx.out.result(data, render_result)
     if result.failed:

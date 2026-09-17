@@ -28,7 +28,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import IO, Any, Protocol
 
 from .config import Config
@@ -42,6 +42,18 @@ log = get_logger("cloud")
 
 class CloudError(Exception):
     """The mirror cannot safely proceed."""
+
+
+class _Expired(Exception):
+    """rclone ran out of time or went quiet. Internal to `_run`."""
+
+    def __init__(self, why: str) -> None:
+        super().__init__(why)
+        self.why = why
+
+
+#: How often the waiter looks up from `process.wait` to check for silence.
+_WAIT_TICK = 5.0
 
 
 @dataclass
@@ -66,6 +78,9 @@ class CloudResult:
     already_there: int = 0
     bytes_uploaded: int = 0
     seconds: float = 0.0
+    batches: int = 0
+    batches_done: int = 0
+    stopped_early: str = ""
     failures: list[dict[str, Any]] = field(default_factory=list)
 
     @property
@@ -84,8 +99,13 @@ class CloudProvider(Protocol):
     def upload(self, root: Path, relatives: list[str], destination: str) -> None:
         """Copy `relatives`, resolved under `root`, to `destination`."""
 
-    def hashes(self, destination: str) -> dict[str, str]:
-        """SHA256 per relative path already at `destination`."""
+    def hashes(self, destination: str, subdir: str | None = None) -> dict[str, str]:
+        """SHA256 per path already at `destination`, keyed relative to it.
+
+        `subdir` narrows the listing to one folder. Keys stay relative to
+        `destination` either way, so a caller never has to know which was
+        used -- one key space, whatever the question was.
+        """
 
 
 class RcloneProvider:
@@ -126,6 +146,9 @@ class RcloneProvider:
         extra: Iterable[str] = (),
         on_progress: Callable[[str], None] | None = None,
         stats_interval: str = DEFAULT_STATS_INTERVAL,
+        batch_timeout: float = 7200,
+        stall_timeout: float = 900,
+        tps_limit: float = 0.0,
     ) -> None:
         self.remote = remote.rstrip(":")
         self.binary = binary
@@ -134,6 +157,9 @@ class RcloneProvider:
         self.extra = list(extra)
         self.on_progress = on_progress
         self.stats_interval = stats_interval
+        self.batch_timeout = batch_timeout
+        self.stall_timeout = stall_timeout
+        self.tps_limit = tps_limit
 
     def check(self) -> None:
         try:
@@ -154,7 +180,7 @@ class RcloneProvider:
                 f"Create one with: rclone config"
             )
 
-    def _run(self, args: list[str], *, timeout: float) -> str:
+    def _run(self, args: list[str], *, timeout: float, stall_timeout: float | None = None) -> str:
         """Run rclone and return its stdout, reporting stderr as it arrives.
 
         `capture_output` hands back stderr only once the process has exited,
@@ -167,6 +193,12 @@ class RcloneProvider:
 
         stdout goes to a file rather than a pipe. `lsjson` over 20,000 files is
         megabytes, and a pipe nobody is reading fills and deadlocks the child.
+
+        `stall_timeout` kills a process that has produced no output at all for
+        that long. It is a better question than "has this run too long?",
+        which cannot tell a slow transfer from a dead one and killed a real
+        upload at 62% for the crime of being throttled. Silence is the signal:
+        rclone is asked for stats every 30s and prints them even at 0 B/s.
         """
         command = [self.binary, *args, *self.extra]
         log.debug("running %s", " ".join(command[:6]))
@@ -186,11 +218,15 @@ class RcloneProvider:
                 return joined or "no diagnostic on stderr"
             return "..." + joined[-self.DIAGNOSTIC_CHARS :]
 
+        last_output = time.monotonic()
+
         def drain(stream: IO[str]) -> None:
+            nonlocal last_output
             for raw in stream:
                 line = raw.rstrip("\n")
                 if not line:
                     continue
+                last_output = time.monotonic()
                 tail.append(line)
                 if self.on_progress:
                     self.on_progress(line)
@@ -208,14 +244,13 @@ class RcloneProvider:
             pump = threading.Thread(target=drain, args=(process.stderr,), daemon=True)
             pump.start()
             try:
-                code = process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
+                code = self._wait(process, timeout, stall_timeout, lambda: last_output)
+            except _Expired as expiry:
                 process.kill()
                 process.wait()
                 pump.join(timeout=5)
                 raise CloudError(
-                    f"rclone {args[0]} did not finish within {timeout:.0f}s and was killed. "
-                    f"Last output: {diagnostic()}"
+                    f"rclone {args[0]} {expiry.why} and was killed. Last output: {diagnostic()}"
                 ) from None
             finally:
                 pump.join(timeout=5)
@@ -226,6 +261,28 @@ class RcloneProvider:
         if code != 0:
             raise CloudError(f"rclone {args[0]} exited {code}: {diagnostic()}")
         return stdout
+
+    @staticmethod
+    def _wait(
+        process: subprocess.Popen[str],
+        timeout: float,
+        stall_timeout: float | None,
+        last_output: Callable[[], float],
+    ) -> int:
+        """Wait for rclone, watching both the clock and its silence."""
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _Expired(f"did not finish within {timeout:.0f}s")
+            try:
+                return process.wait(timeout=min(remaining, _WAIT_TICK))
+            except subprocess.TimeoutExpired:
+                pass
+            if stall_timeout is not None:
+                silent = time.monotonic() - last_output()
+                if silent >= stall_timeout:
+                    raise _Expired(f"said nothing for {silent:.0f}s")
 
     def upload(self, root: Path, relatives: list[str], destination: str) -> None:
         if not relatives:
@@ -263,22 +320,46 @@ class RcloneProvider:
                     "--stats-one-line",
                     "--stats-log-level",
                     "NOTICE",
+                    *self._pacing(),
                 ],
-                timeout=6 * 3600,
+                timeout=self.batch_timeout,
+                stall_timeout=self.stall_timeout,
             )
         finally:
             Path(listing).unlink(missing_ok=True)
 
-    def hashes(self, destination: str) -> dict[str, str]:
-        out = self._run(
-            ["lsjson", f"{self.remote}:{destination}", "--recursive", "--files-only", "--hash"],
-            timeout=3600,
-        )
+    def _pacing(self) -> list[str]:
+        return ["--tpslimit", str(self.tps_limit)] if self.tps_limit else []
+
+    def hashes(self, destination: str, subdir: str | None = None) -> dict[str, str]:
+        where = f"{destination}/{subdir}" if subdir else destination
+        try:
+            out = self._run(
+                [
+                    "lsjson",
+                    f"{self.remote}:{where}",
+                    "--recursive",
+                    "--files-only",
+                    "--hash",
+                    *self._pacing(),
+                ],
+                timeout=self.batch_timeout,
+                stall_timeout=None,  # lsjson is silent by design; only the clock applies
+            )
+        except CloudError as exc:
+            # A folder that is not there yet is an empty folder, not an error:
+            # the first upload of a batch creates it, and a verification that
+            # blew up here would fail the batch it was meant to be checking.
+            if "directory not found" in str(exc).lower():
+                return {}
+            raise
         found: dict[str, str] = {}
         for row in json.loads(out or "[]"):
             digest = (row.get("Hashes") or {}).get("sha256")
-            if digest:
-                found[row["Path"]] = digest
+            if not digest:
+                continue
+            path = f"{subdir}/{row['Path']}" if subdir else row["Path"]
+            found[path] = digest
         return found
 
 
@@ -356,6 +437,9 @@ def run(
         config.cloud.remote,
         transfers=config.performance.cloud_upload_workers,
         on_progress=note,
+        batch_timeout=config.cloud.batch_timeout_seconds,
+        stall_timeout=config.cloud.stall_timeout_seconds,
+        tps_limit=config.cloud.tps_limit,
     )
     provider.check()
 
@@ -372,9 +456,10 @@ def run(
         if not uploads:
             return result
 
-        by_channel: dict[str, list[Upload]] = {}
-        for upload in uploads:
-            by_channel.setdefault(upload.channel, []).append(upload)
+        batches = _batches(uploads)
+        result.batches = len(batches)
+        announced: set[str] = set()
+        consecutive_failures = 0
 
         with journal.operation(
             Op.CLOUD_UPLOAD,
@@ -382,29 +467,70 @@ def run(
             detail={
                 "planned": len(uploads),
                 "bytes": sum(u.size_bytes for u in uploads),
+                "batches": len(batches),
                 "destination": config.cloud.destination,
             },
         ) as operation:
-            for channel, group in by_channel.items():
-                if on_channel:
-                    on_channel(channel, len(group))
-                began = time.monotonic()
-                provider.upload(
-                    config.archive.local_path / channel,
-                    [u.relative for u in group],
-                    config.cloud.destination,
-                )
-                result.seconds += time.monotonic() - began
-                result.uploaded += len(group)
-                result.bytes_uploaded += sum(u.size_bytes for u in group)
+            for index, ((channel, folder), group) in enumerate(batches.items(), start=1):
+                if on_channel and channel not in announced:
+                    announced.add(channel)
+                    on_channel(
+                        channel,
+                        sum(len(g) for (c, _f), g in batches.items() if c == channel),
+                    )
 
-            _verify(config, db, provider, uploads, result, note)
-            operation.note(
-                uploaded=result.uploaded,
-                verified=result.verified,
-                failed=result.failed,
-                bytes=result.bytes_uploaded,
-            )
+                size = sum(u.size_bytes for u in group)
+                note(
+                    f"[batch {index}/{len(batches)}] {channel}/{folder or '.'}: "
+                    f"{len(group):,} file(s), {size / 1e9:.2f} GB"
+                )
+                began = time.monotonic()
+                try:
+                    provider.upload(
+                        config.archive.local_path / channel,
+                        [u.relative for u in group],
+                        config.cloud.destination,
+                    )
+                    result.seconds += time.monotonic() - began
+                    result.uploaded += len(group)
+                    result.bytes_uploaded += size
+                    _verify_batch(config, db, provider, group, folder, result, note)
+                except CloudError as exc:
+                    # One folder failing is not the run failing. Whatever was
+                    # banked before this stays banked, and a re-run replans
+                    # from the ledger and skips it.
+                    result.seconds += time.monotonic() - began
+                    consecutive_failures += 1
+                    result.failed += len(group)
+                    result.failures.append({"file": f"{channel}/{folder}", "error": str(exc)})
+                    note(f"  batch failed: {exc}")
+                else:
+                    consecutive_failures = 0
+                    result.batches_done += 1
+                    took = max(time.monotonic() - began, 1e-9)
+                    note(
+                        f"  banked {result.verified:,}/{len(uploads):,} verified "
+                        f"at {size / took / 1e6:.2f} MB/s"
+                    )
+
+                operation.note(
+                    uploaded=result.uploaded,
+                    verified=result.verified,
+                    failed=result.failed,
+                    bytes=result.bytes_uploaded,
+                    batches_done=result.batches_done,
+                )
+
+                if consecutive_failures >= CONSECUTIVE_BATCH_FAILURE_LIMIT:
+                    result.stopped_early = (
+                        f"stopped after {consecutive_failures} batches failed in a row, which "
+                        f"is an outage rather than {consecutive_failures} bad folders. "
+                        f"{result.verified:,} asset(s) are verified and recorded; the next "
+                        f"run replans from the ledger and resumes where this one stopped."
+                    )
+                    log.warning("%s", result.stopped_early)
+                    note(result.stopped_early)
+                    break
     finally:
         if owned:
             db.close()
@@ -412,11 +538,36 @@ def run(
     return result
 
 
-def _verify(
+#: Counted rather than diagnosed, the same rule `sync` uses for an outage.
+#: Three folders failing in a row is the remote being unavailable, not three
+#: unlucky folders, and the next attempt is pointless.
+CONSECUTIVE_BATCH_FAILURE_LIMIT = 3
+
+
+def _batches(uploads: list[Upload]) -> dict[tuple[str, str], list[Upload]]:
+    """One batch per remote folder, in plan order.
+
+    The unit of work is a folder because it is also the unit of *checking*:
+    verifying a batch lists that one folder instead of re-listing the whole
+    archive, which is what made end-of-run verification too expensive to do
+    more than once. Measured against the real archive: 236 folders, median 25
+    files, the largest 965 files and 2.70 GB -- an hour's work even at the
+    1.12 MB/s Drive throttled us to, so nothing banked is ever far behind
+    what has been sent.
+    """
+    batches: dict[tuple[str, str], list[Upload]] = {}
+    for upload in uploads:
+        folder = str(PurePosixPath(upload.relative).parent)
+        batches.setdefault((upload.channel, "" if folder == "." else folder), []).append(upload)
+    return batches
+
+
+def _verify_batch(
     config: Config,
     db: Database,
     provider: CloudProvider,
     uploads: list[Upload],
+    subdir: str,
     result: CloudResult,
     note: Callable[[str], None] = lambda _line: None,
 ) -> None:
@@ -425,12 +576,15 @@ def _verify(
     rclone exiting zero is not evidence. The remote is asked what it has, and
     only a matching SHA256 marks an asset verified, because the whole point of
     the cloud copy is that the local one can then be released.
+
+    This runs per folder rather than once at the end. The first real upload
+    ran for six hours, put 11,748 files on Drive, was killed by a wall-clock
+    timeout before it reached verification, and recorded **nothing** -- the
+    connection is in autocommit, so every batch that gets here is durable the
+    moment it is written, and an interruption costs at most the batch in
+    flight.
     """
-    # Listing 20,000 remote files takes minutes and rclone prints nothing
-    # while it does, so say what is happening before going quiet.
-    note(f"asking the remote what it holds at {config.cloud.destination} ...")
-    remote = provider.hashes(config.cloud.destination)
-    note(f"remote reports {len(remote):,} file(s); comparing {len(uploads):,} hash(es)")
+    remote = provider.hashes(config.cloud.destination, subdir or None)
     verified_at = utcnow()
 
     for upload in uploads:

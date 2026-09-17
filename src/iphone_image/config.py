@@ -175,6 +175,27 @@ class CloudConfig(Strict):
     remote: str = ""  # the rclone remote name, credentials stay in the user's rclone config
     destination: str = "iPhone Archive"
 
+    #: How long one folder's upload may take before it is abandoned. This is a
+    #: backstop, not a prediction: `stall_timeout_seconds` is what normally
+    #: catches a wedged transfer, and a slow one is left alone to be slow. The
+    #: first real run died on a 6h cap covering *all* 19,942 files at once and
+    #: threw away six hours of genuine uploading, which is the failure this
+    #: whole arrangement exists to prevent. Measured: the largest folder in the
+    #: archive is 965 files and 2.70 GB, which is well inside two hours even at
+    #: the 1.12 MB/s Drive throttled us to.
+    batch_timeout_seconds: int = Field(default=7200, ge=60)
+
+    #: Kill a transfer that has said nothing at all for this long. rclone is
+    #: asked for stats every 30s, so silence this long is a wedged process
+    #: rather than a slow one. Being throttled still prints stats.
+    stall_timeout_seconds: int = Field(default=900, ge=60)
+
+    #: rclone transactions per second, 0 to let rclone pace itself. Google
+    #: Drive answered `rateLimitExceeded` after six hours at 16 transfers and
+    #: the throughput fell sixfold, so the knob is here -- but the default is
+    #: unchanged, because one run is an observation and not yet a measurement.
+    tps_limit: float = Field(default=0.0, ge=0.0)
+
     @model_validator(mode="after")
     def _check(self) -> CloudConfig:
         if self.enabled:
