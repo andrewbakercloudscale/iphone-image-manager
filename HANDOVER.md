@@ -1,7 +1,9 @@
 # Handover
 
 Written 2026-09-17, at the end of the day the camera photo roll finished
-uploading. Everything below is measured or recorded, not assumed.
+uploading; **updated 2026-09-18** with two fixed defects and a full
+remote-vs-ledger audit (section 8). Everything below is measured or recorded,
+not assumed -- and section 8c is about the difference between those two words.
 
 ---
 
@@ -46,18 +48,36 @@ biggest milestone since the project started.
 
 ```
 camera photos, total archived      22,888
-  verified in Drive                22,888   73.77 GB   100%
-  still on the Mac (LOCAL_VERIFIED) 5,024   14.16 GB   see section 8 -- gap found
-  released (Trash, then emptied)   17,864
-deleted from the iPhone             5,024   14.16 GB   Recently Deleted, 30-day window
+  verified in Drive                22,888   73.77 GB   100%   re-checked 2026-09-18
+  still on the Mac (LOCAL_VERIFIED)  5,032   13.20 GiB  release is the next step
+  released (Trash, then emptied)    17,856
+deleted from the iPhone             5,024   13.19 GiB  Recently Deleted, 30-day window
 
 camera video                        1,823  181.1 GB    NOT STARTED -- see section 6
 
-Mac disk free                       26 GB
-Google Drive                        5 TiB total, 3.25 TiB free (upgraded today)
+Mac disk free                       42 GB
+Google Drive                        5 TiB total, 3.25 TiB free
 ```
 
-320 tests pass, ruff clean. 44 commits, 0 unpushed, nothing uncommitted.
+The 22,888 is now a measured count of files in Drive, not a count of ledger
+rows claiming to be there -- **one recursive `rclone lsjson --hash` against the
+archive, diffed against every CLOUD_VERIFIED row: 22,888 files, 22,888 rows,
+every one matching on both size and SHA256, zero in any disagreement class.**
+Section 8c is why that distinction is the whole point and why no command does
+it yet.
+
+The 5,032 is 5,024 + the 8 photographs section 8b had to re-fetch.
+
+334 tests pass, ruff clean. 46 commits, 0 unpushed, nothing uncommitted.
+
+**The figures above are corrected, and the correction is the point.** As
+written on 09-17 this block said 22,888 verified in Drive. Drive held 22,880
+files: eight pairs of distinct photographs shared one file each, and eight rows
+read CLOUD_VERIFIED over a copy that did not exist. Nothing was lost -- all
+sixteen were still on the phone -- but the next removal pass would have turned
+it into loss. Section 8b has the mechanism and the repair. **The number was
+wrong because it was a count of rows that claimed to be in Drive, and the
+ledger cannot verify the ledger.**
 
 ### What happened today, in order
 
@@ -110,22 +130,32 @@ Google Drive                        5 TiB total, 3.25 TiB free (upgraded today)
 
 ## 4. What to do next, in order
 
-1. **Fix the release gap in section 8** -- five minutes of work, described
-   there precisely. It is why 14.16 GB is stuck on the Mac that should already
-   be free.
-2. **Empty the Trash** if it hasn't been since the last release. Check
-   `du -sh ~/.Trash` isn't readable from a terminal (macOS privacy) --
-   check from Finder.
+Both section-8 defects are fixed and the ledger is repaired. What is left:
+
+1. **Run `release --source camera --type photo --apply`** to free the 13.2 GiB
+   that 8a was stranding. The plan is verified and reports 5,024 safe,
+   0 blocked; the trashing step was deliberately left unrun for the user to
+   authorise. Then **empty the Trash** from Finder (`~/.Trash` is not readable
+   from a terminal -- macOS privacy -- so the terminal cannot confirm either
+   the size or that it worked).
+2. **Add the remote-vs-ledger audit to `doctor`**, section 8c. It is the only
+   check that has ever found a false CLOUD_VERIFIED, and right now it exists
+   only as something a person remembered to do by hand. It must report
+   duplicate `cloud_path` values too: that was the signal that unpicked 8b.
 3. **Decide the video job**, section 6. It cannot start today's way because
    Photos' place-name coverage is still recovering (section 7). Options are
-   there.
+   there. Note that 6 video filename collisions are already waiting in the
+   un-uploaded set -- harmless now, and a demonstration that 8b was a class of
+   defect and not an incident.
 4. **Decide what to do about screenshots, WhatsApp, and screen recordings**,
    section 9 -- 74,127 items / 278 GB have no plan at all and are outside the
    12-month camera-only pipeline that exists today.
 5. **A second, larger removal pass** is now realistic: with the whole camera
    roll in Drive, `remove-from-iphone --source camera --older-than 1y` would
-   plan against roughly 15,000 eligible photos rather than 5,024. Not run
-   today -- deliberately left for the user to authorise, per SAFETY section 3.
+   plan against roughly 15,000 eligible photos rather than 5,024. Not run --
+   deliberately left for the user to authorise, per SAFETY section 3.
+   **Do not run this before item 2.** 8b is exactly the defect this pass turns
+   into permanent loss, and the audit is what proves there is not another one.
 
 ---
 
@@ -254,42 +284,142 @@ this recurs -- it is exactly the kind of silent, self-correcting drift that
 
 ---
 
-## 8. A gap found while writing this handover, not yet fixed
+## 8. Two defects, both fixed on 2026-09-18
 
-**`release`'s selector unconditionally requires `present_on_phone = 1`.**
-`Selector.where()` (selector.py:202) hardcodes that clause with no override,
-because it is the right default for `sync` (don't fetch what isn't there) and
-`remove-from-iphone` (can't remove what isn't there). It is the *wrong*
-default for `release`, whose entire job is Mac disk space: whether an asset is
-still on the phone has no bearing on whether its Mac copy can be freed once
-Drive holds a verified copy. If anything, an asset **already removed from the
-phone** is a *stronger* candidate for release, not a weaker one.
+### 8a. `release` excluded the assets it exists to free — fixed, `1b7c5f4`
 
-**Measured consequence:** the 5,024 photos deleted from the iPhone earlier
-today are still sitting on the Mac, fully cloud-verified, because every
-`release --apply` run since then silently excluded them.
+`Selector.where()` required `present_on_phone = 1` unconditionally. Right for
+`sync` (cannot fetch what is not there) and `remove-from-iphone` (cannot delete
+what is not there); wrong for `release`, whose only job is Mac disk space and
+which never touches the phone. The set it excluded was the set *most* eligible:
+an asset already off the phone has a Mac copy that is pure surplus.
 
-```sql
-SELECT COUNT(*) FROM assets
-WHERE removed_from_phone_at IS NOT NULL
-  AND local_status = 'LOCAL_VERIFIED'
-  AND cloud_status = 'CLOUD_VERIFIED';
--- 5,024
+Measured, not estimated: the 5,024 photos deleted from the phone on 09-17 were
+all LOCAL_VERIFIED **and** CLOUD_VERIFIED, and every `release --apply` since had
+silently skipped them — 13.2 GiB stranded on a Mac that had run out of disk
+that same afternoon.
+
+`Selector.for_release()` drops the clause, applied inside `release.plan()` the
+way `for_removal()` is applied inside `remove.plan()`, so no route into the
+verb can miss it. None of release's own guards changed: every candidate is
+still re-verified against the remote in the same invocation. `where()` can now
+compile to no clauses at all, which would have produced `WHERE  AND ...`; it
+returns `1 = 1` instead.
+
+No test had caught it because every release fixture hardcoded
+`present_on_phone = 1`. `archived()` takes `on_phone` now.
+
+**A plan run against the live ledger reports 5,024 examined, 5,024 safe,
+0 blocked** — so all 5,024 were also hash-matched at the remote in that run,
+not merely believed from the ledger. **Not yet released:** the trashing step
+was left for the user to authorise. `release --source camera --type photo
+--apply` frees 13.2 GiB.
+
+### 8b. Two photographs, one Drive file — fixed, `64396f1`
+
+Found by answering "have any photos been lost?" properly: listing all 22,888
+files Drive actually holds and comparing them to the ledger, rather than
+reading the ledger's account of itself.
+
+22,880 matched on size and SHA256. The other 8 were **pairs** — two distinct
+photographs, different capture dates, different hashes, sharing one Drive
+file. Both rows of each pair read CLOUD_VERIFIED. Only one of each was there.
+
+```
+IMG_0083.HEIC   2020-01-18  2,733,615 B  in Drive    |  2020-08-25  1,384,918 B  NOT in Drive
+IMG_0369.HEIC   2020-01-25  1,504,153 B  in Drive    |  2020-09-06  1,331,226 B  NOT in Drive
+IMG_0624.HEIC   2020-02-02  1,457,662 B  in Drive    |  2020-09-08  1,354,602 B  NOT in Drive
+IMG_1742.HEIC   2020-03-04  1,796,437 B  in Drive    |  2020-09-29  1,370,674 B  NOT in Drive
+IMG_3349.HEIC   2020-03-23  5,300,900 B  in Drive    |  2020-11-14    849,998 B  NOT in Drive
+IMG_3351.HEIC   2020-03-23  5,940,621 B  in Drive    |  2020-11-14    853,576 B  NOT in Drive
+IMG_3683.HEIC   2020-03-25  4,428,749 B  in Drive    |  2020-11-28  1,327,121 B  NOT in Drive
+IMG_0999.JPG    2023-10-20  2,682,399 B  in Drive    |  2023-12-28  4,668,663 B  NOT in Drive
 ```
 
-That is **14.16 GB stranded on the Mac for no reason**, exactly matching the
-count deleted from the phone -- confirmed by overlap query, not coincidence.
+**The mechanism.** `unique_filename` asks the *filesystem* whether a name is
+free, and the filesystem forgets. Release trashes the Mac copy and clears
+`local_path`, so the name looks free again, so the next asset with the same
+camera filename — iPhone counters wrap, which is why all eight collisions are
+same-name-same-year — is handed the same archive path, the same remote path,
+and its upload replaces a file the first asset's row still points at.
 
-**The fix**, not yet made: `release`'s `plan()` should not depend on
-`selector.where()`'s phone-presence clause at all, or should offer an explicit
-override the way `for_removal()` does for the opposite direction. The cleanest
-shape is probably a `for_release()` method on `Selector` parallel to
-`for_removal()`, dropping `present_on_phone` entirely, since release never
-touches the phone and has no reason to care about it.
+Every one of the eight losers was verified between 07:27 and 10:19 on 09-17 and
+overwritten by its twin between 16:27 and 17:48 the same day. **Verification
+cannot catch this**: by the time the second upload runs, the first has long
+since verified and is never re-checked. `release` *would* have caught it — it
+re-asks the remote in the same invocation — but each loser had already been
+released, in the morning, before its twin arrived.
 
-No test caught this because no test exercises `release` against an asset that
-has been removed from the phone -- every existing fixture has
-`present_on_phone = 1`. Add that fixture alongside the fix.
+**Nothing was lost.** All 16 were still on the phone; `present_on_phone = 1`,
+`removed_from_phone_at` NULL for every one. But CLOUD_VERIFIED is exactly what
+`remove_from_iphone.policy: cloud_verified` consults before deleting from the
+phone, so **a second removal pass would have deleted eight photographs whose
+only other copy did not exist.** That pass was item 5 on the old section 4 list.
+
+**The repair, in order, all done:**
+
+1. The eight rows corrected in the live ledger to `cloud_status = 'NONE'`, which
+   closed the deletion hazard immediately. Ledger backed up first to
+   `~/Desktop/iphone/iphone-image.sqlite.backup-20260917-215225`.
+2. Migration **0004** adds `archive_claim`: the archive-relative name an asset
+   has taken, written when the name is chosen and **never cleared**, because the
+   whole point is to outlive the file. `sync.backfill_archive_claims` fills it
+   for rows predating the column — from `local_path`, or for released rows from
+   `cloud_path` plus the channel rule, which is Python and so cannot live in the
+   migration. Applied live: **22,880 claims recorded, 0 names claimed twice.**
+3. `sync.claimed_by_another` replaces `unique_filename`'s default `taken` test.
+   A name is taken when the file is there *or* when another row claims it.
+4. `relocate` will not move a file onto a claim held by a row it cannot see
+   (released rows have no `local_path`, so they are neither movers nor stayers),
+   and `cloud.plan` refuses outright to upload onto another asset's
+   `cloud_path`. The last is redundant with 2 and 3 **deliberately**: it is the
+   layer that still holds the day someone adds a second route to a filename.
+5. The eight re-fetched and re-uploaded. Each was given a distinct
+   hash-suffixed name, which is the fix working in production rather than in a
+   test: `camera/2020/01-12 Home/IMG_0083__E021EDF7.HEIC`. All eight verified
+   by hash. Drive now holds 22,888 distinct files.
+
+**Two things worth keeping from this.**
+
+The regression test was checked by disabling the fix and watching it fail with
+both assets on `2021/07/IMG_0083.HEIC`. A test for a defect this quiet is worth
+nothing until it has been seen to fail.
+
+One further test exists only to catch a silent failure this design invites: a
+fetched claim is derived from a real archive path, a backfilled one is
+reconstructed from a cloud path, and **if those two ever disagree about the
+channel level, every comparison between them is false and the whole check reads
+as "no claim, name free" for precisely the rows it was built for.** Note that
+the channel level comes from `organization.pattern` (live value
+`{source}/{year}/{event}`) and is not structural — the `Config` default
+`{year}/{month}` has no channel level at all, so a test written against the
+default pattern would have proved nothing. That is the same shape as every
+gate in the WordPress CLAUDE.md that reported OK while measuring the wrong
+thing.
+
+### 8c. What this says about the audit itself
+
+The ledger cannot verify the ledger. Both defects were invisible to every
+existing check and both were found the same way: **asking the remote what it
+actually holds and diffing it against what we claim.** That is one recursive
+`rclone lsjson --hash` and a dictionary comparison — a few minutes for the whole
+22,888-file archive, and it is the only check that has ever found a
+false CLOUD_VERIFIED.
+
+Nothing in the tool does this. `doctor` is where it belongs, and the numbers to
+report are: files in Drive, rows claiming CLOUD_VERIFIED, and the three
+disagreement classes separately (missing, size mismatch, hash mismatch). It
+must **also** report duplicate `cloud_path` values, because that was the signal
+that unpicked this one — the listing had 8 fewer files than the ledger had rows
+while reporting zero missing, which is only possible if two rows point at one
+file.
+
+`cloud_objects` is worth knowing about: the table exists, has a full schema,
+and is **empty** — all 22,888 verified assets carry their state in
+`assets.cloud_path` / `cloud_verified_at` instead. Not a data-loss bug, and the
+per-asset fields are the ones every verb reads, but a reader who trusts the
+schema will conclude there are no cloud copies at all. Either populate it or
+drop it.
 
 ---
 
@@ -317,7 +447,9 @@ user today and deliberately left as an open decision, not started.
 | `docs/SAFETY.md` | Shortest and most important. The hazards, the four-step removal sequence, and what happens to the Mac copy. |
 | `docs/PLAN.md` | Architecture, decisions, phases, risk register. |
 | `src/iphone_image/remove.py` | P10. The eight-way refusal, and the Live Photo group-completeness check that caught 528 photos before this was ever run for real. |
-| `src/iphone_image/release.py` | Why an asset is re-verified against the remote in the same invocation it is deleted from the Mac -- and see section 8 for the gap in its selector. |
+| `src/iphone_image/release.py` | Why an asset is re-verified against the remote in the same invocation it is deleted from the Mac. Its selector gap is fixed; see section 8a. |
+| `src/iphone_image/db/migrations/0004_archive_claim.sql` | The whole of section 8b, written where the next person will hit it. Why the archive name an asset claims has to outlive the file. |
+| `src/iphone_image/sync.py` | `claimed_by_another` and `backfill_archive_claims`: why `unique_filename` cannot ask the filesystem whether a name is free. |
 | `src/iphone_image/cloud.py` | Per-folder batching, the stall-vs-slow distinction, `destination_for` / `split_cloud_path` for the two-archive split. |
 | `src/iphone_image/relocate.py` | The un-naming guard (`unnaming()`), added today after nearly stripping 8,590 folder names. |
 | `src/iphone_image/photos/places.py` | Where place names come from, and why their coverage is not stable. |
