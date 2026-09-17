@@ -548,3 +548,146 @@ def test_failures_scattered_among_successes_do_not_stop_the_chunk(env) -> None:
     assert result.failed == len(doomed)
     assert result.fetched == 40 - len(doomed)
     assert len(helper.requested) == 40, "the whole chunk should still have been attempted"
+
+
+# -- the archive name a released asset still holds ----------------------------
+
+
+def test_a_released_asset_does_not_hand_its_name_to_the_next_one(env) -> None:
+    """The defect that put two photographs on one Drive file on 2026-09-17.
+
+    Both assets are `IMG_0083.HEIC` from the same month, so both want the same
+    archive path. The first is fetched, uploaded and released: the file is
+    trashed, the name looks free on disk, and its row still points a cloud_path
+    at it. If the second is then given that name, its upload replaces the first
+    asset's cloud copy while the first's row goes on saying CLOUD_VERIFIED --
+    which is what `remove_from_iphone.policy: cloud_verified` reads before
+    deleting from the phone.
+    """
+    config, db = env
+    add_asset(db, "first", size=MB, filename="IMG_0083.HEIC")
+    add_asset(db, "second", size=2 * MB, filename="IMG_0083.HEIC")
+
+    sync_engine.run(config, Selector(limit=1), helper=FakeHelper(sizes={"first": MB}))
+    first = db.conn.execute(
+        "SELECT id, local_path, archive_claim FROM assets WHERE identity_key = 'first'"
+    ).fetchone()
+    assert first["archive_claim"], "the claim is what outlives the file"
+
+    # Release it the way release.run does: the file goes, the path is cleared.
+    Path(first["local_path"]).unlink()
+    db.conn.execute(
+        "UPDATE assets SET local_status = 'RELEASED', local_path = NULL, "
+        "cloud_status = 'CLOUD_VERIFIED', cloud_path = ? WHERE id = ?",
+        (f"remote/{Path(first['local_path']).name}", first["id"]),
+    )
+
+    sync_engine.run(config, Selector(), helper=FakeHelper(sizes={"second": 2 * MB}))
+
+    second = db.conn.execute(
+        "SELECT local_path, archive_claim FROM assets WHERE identity_key = 'second'"
+    ).fetchone()
+    assert second["local_path"], "the second asset was not fetched at all"
+    assert second["archive_claim"] != first["archive_claim"], (
+        "the second asset took the released asset's archive name, so its upload "
+        "would overwrite the first asset's only cloud copy"
+    )
+
+
+def test_two_assets_never_share_an_archive_claim(env) -> None:
+    config, db = env
+    for key in ("a", "b", "c"):
+        add_asset(db, key, size=MB, filename="IMG_0083.HEIC")
+    sync_engine.run(config, Selector(), helper=FakeHelper(sizes=dict.fromkeys("abc", MB)))
+    claims = [
+        row["archive_claim"]
+        for row in db.conn.execute(
+            "SELECT archive_claim FROM assets WHERE archive_claim IS NOT NULL"
+        ).fetchall()
+    ]
+    assert len(claims) == 3
+    assert len(set(claims)) == 3, f"two assets claim the same archive name: {claims}"
+
+
+def test_a_resumed_fetch_keeps_its_own_name(env) -> None:
+    """Self-claims must not count, or every retry renames the file."""
+    config, db = env
+    add_asset(db, "a", size=MB, filename="IMG_0083.HEIC")
+    sync_engine.run(config, Selector(), helper=FakeHelper(sizes={"a": MB}))
+    before = db.conn.execute("SELECT local_path FROM assets").fetchone()["local_path"]
+
+    Path(before).unlink()
+    db.conn.execute("UPDATE assets SET local_status = 'DISCOVERED', local_path = NULL")
+    sync_engine.run(config, Selector(), helper=FakeHelper(sizes={"a": MB}))
+
+    after = db.conn.execute("SELECT local_path FROM assets").fetchone()["local_path"]
+    assert after == before, "a refetch invented a new name for the same asset"
+
+
+def test_the_backfill_recovers_the_claim_of_an_already_released_asset(env) -> None:
+    """Rows written before migration 0004 have no claim; only cloud_path knows.
+
+    Run under the production pattern, because the channel level this
+    reconstruction puts back is part of `organization.pattern` and not a
+    structural constant. Under the default `{year}/{month}` there is no channel
+    level, nothing could have written a cloud_path in the first place, and a
+    test that passed there would prove nothing about the ledger this repairs.
+    """
+    config, db = env
+    config = config.model_copy(
+        update={
+            "organization": config.organization.model_copy(
+                update={"pattern": "{source}/{year}/{event}"}
+            )
+        }
+    )
+    add_asset(db, "a", size=MB, filename="IMG_0083.HEIC")
+    destination = config.cloud.destination
+    db.conn.execute(
+        "UPDATE assets SET local_status = 'RELEASED', cloud_status = 'CLOUD_VERIFIED', "
+        "cloud_path = ?, archive_claim = NULL",
+        (f"{destination}/2021/07/IMG_0083.HEIC",),
+    )
+
+    assert sync_engine.backfill_archive_claims(config, db) == 1
+    claim = db.conn.execute("SELECT archive_claim FROM assets").fetchone()["archive_claim"]
+    assert claim == str(Path("camera") / "2021" / "07" / "IMG_0083.HEIC")
+
+
+def test_a_backfilled_claim_and_a_fetched_claim_are_the_same_kind_of_string(env) -> None:
+    """Two derivations, one namespace -- or the protection silently does nothing.
+
+    A fetched asset's claim comes from its real archive path; a released
+    asset's is reconstructed from its cloud_path. If those disagree about the
+    channel level, every comparison between them is false and the collision
+    check reads as "no claim, name free" for exactly the rows it exists for.
+    """
+    config, db = env
+    config = config.model_copy(
+        update={
+            "organization": config.organization.model_copy(
+                update={"pattern": "{source}/{year}/{event}"}
+            )
+        }
+    )
+    add_asset(db, "fetched", size=MB, filename="IMG_0083.HEIC")
+    sync_engine.run(config, Selector(), helper=FakeHelper(sizes={"fetched": MB}))
+    fetched = db.conn.execute(
+        "SELECT archive_claim FROM assets WHERE identity_key = 'fetched'"
+    ).fetchone()["archive_claim"]
+
+    add_asset(db, "released", size=MB, filename="IMG_9999.HEIC")
+    db.conn.execute(
+        "UPDATE assets SET local_status = 'RELEASED', cloud_status = 'CLOUD_VERIFIED', "
+        "cloud_path = ?, archive_claim = NULL WHERE identity_key = 'released'",
+        (f"{config.cloud.destination}/{Path(fetched).parent.relative_to('camera')}/IMG_9999.HEIC",),
+    )
+    sync_engine.backfill_archive_claims(config, db)
+    backfilled = db.conn.execute(
+        "SELECT archive_claim FROM assets WHERE identity_key = 'released'"
+    ).fetchone()["archive_claim"]
+
+    assert Path(backfilled).parent == Path(fetched).parent, (
+        f"a backfilled claim ({backfilled}) and a fetched claim ({fetched}) "
+        f"describe the same folder differently, so neither can ever match the other"
+    )

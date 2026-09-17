@@ -259,6 +259,99 @@ def archive_path_for(
     return config.archive.local_path / relative
 
 
+def archive_claim_for(archive: Path, local_path: str | Path) -> str | None:
+    """The archive-relative name a path claims, or None if it is outside it."""
+    try:
+        return str(Path(local_path).relative_to(archive))
+    except ValueError:
+        return None
+
+
+def backfill_archive_claims(config: Config, db: Database) -> int:
+    """Record the archive name of every asset that took one but never said so.
+
+    `archive_claim` was added after the archive existed, and a released asset
+    has no `local_path` left to derive it from -- only a `cloud_path`, which is
+    the archive path with the channel level removed. Putting that level back is
+    the channel rule, which is Python, not SQL, so the backfill lives here and
+    runs on every sync rather than inside migration 0004.
+
+    Rows with neither a local path nor a cloud path keep a NULL claim. That
+    reads as "no claim recorded", and `claimed_by_another` treats it as
+    unknown rather than free.
+    """
+    archive = config.archive.local_path
+    rows = db.conn.execute(
+        "SELECT * FROM assets WHERE archive_claim IS NULL "
+        "AND ((local_path IS NOT NULL AND local_path != '') "
+        "     OR (cloud_path IS NOT NULL AND cloud_path != ''))"
+    ).fetchall()
+
+    filled = 0
+    for row in rows:
+        asset = dict(row)
+        claim: str | None = None
+        if asset.get("local_path"):
+            claim = archive_claim_for(archive, str(asset["local_path"]))
+        if claim is None and asset.get("cloud_path"):
+            # destination/<year>/<event>/<file> -> <channel>/<year>/<event>/<file>.
+            # The destination is whatever archive the media type went to, and
+            # only its trailing part matters, so take the tail after the
+            # configured destination rather than trying to parse the remote.
+            tail = _cloud_tail(config, str(asset["cloud_path"]))
+            if tail:
+                claim = str(Path(channel_of(asset)) / tail)
+        if claim:
+            db.conn.execute(
+                "UPDATE assets SET archive_claim = ? WHERE id = ?", (claim, asset["id"])
+            )
+            filled += 1
+
+    if filled:
+        log.info("recorded the archive name of %d asset(s) that had none", filled)
+    return filled
+
+
+def _cloud_tail(config: Config, cloud_path: str) -> str | None:
+    """`cloud_path` with its remote destination stripped off."""
+    from .cloud import destination_for  # local: cloud imports nothing from sync
+
+    for destination in {destination_for(config, "PHOTO"), destination_for(config, "VIDEO")}:
+        prefix = destination.rstrip("/") + "/"
+        if cloud_path.startswith(prefix):
+            return cloud_path[len(prefix) :]
+    return None
+
+
+def claimed_by_another(db: Database, archive: Path, asset_id: int | None) -> Callable[[Path], bool]:
+    """`unique_filename`'s `taken` test, asked of the ledger and not just the disk.
+
+    The default test is `path.exists()`, and the filesystem forgets: once an
+    asset's Mac copy is released the name is free again, so the next asset with
+    the same camera filename is handed the same archive path, the same remote
+    path, and overwrites a file the first asset's row still points at. See
+    migration 0004 for the eight pairs this did it to on 2026-09-17.
+
+    A name is taken when the file is there, or when any *other* row claims it.
+    Same-row claims do not count, so a resumed fetch keeps its own name.
+    """
+
+    def taken(path: Path) -> bool:
+        if path.exists():
+            return True
+        claim = archive_claim_for(archive, path)
+        if claim is None:
+            return False
+        row = db.conn.execute(
+            "SELECT 1 FROM assets WHERE (archive_claim = ? OR local_path = ?) "
+            "AND id IS NOT ? LIMIT 1",
+            (claim, str(path), asset_id),
+        ).fetchone()
+        return row is not None
+
+    return taken
+
+
 def sweep_partials(archive: Path) -> tuple[int, int]:
     """Delete leftover .partial files. Returns (count, bytes reclaimed).
 
@@ -378,6 +471,9 @@ def run(
         # Anything left by a previous interruption. Doing this first means a
         # kill never costs more than the asset that was in flight.
         result.partials_swept, _ = sweep_partials(config.archive.local_path)
+        # Before any name is chosen, so the first fetch after an upgrade already
+        # knows which names the archive's released assets still hold.
+        backfill_archive_claims(config, db)
         result.missing_recovered = reconcile_missing(db, selector)
         chunk, _ = plan(config, selector, budget_bytes=budget_bytes, db=db)
         # The chunk counts toward its own clustering: these assets are about to
@@ -475,6 +571,9 @@ def _fetch_one(
         directory,
         asset.get("filename") or identifier,
         asset.get("sha256") or identifier.replace("-", ""),
+        # Not the filesystem alone: a released asset's file is gone but its
+        # claim on the name is not. See `claimed_by_another`.
+        taken=claimed_by_another(db, config.archive.local_path, asset.get("id")),
     )
     final = directory / name
     partial = final.with_name(final.name + ".partial")
@@ -523,9 +622,18 @@ def _fetch_one(
             pass
 
     db.conn.execute(
-        "UPDATE assets SET local_path = ?, local_status = 'LOCAL_VERIFIED', "
+        "UPDATE assets SET local_path = ?, archive_claim = ?, local_status = 'LOCAL_VERIFIED', "
         "sha256 = ?, local_verified_at = ?, updated_at = ? WHERE id = ?",
-        (str(final), digest, utcnow(), utcnow(), asset["id"]),
+        (
+            str(final),
+            # Recorded with the path and never cleared, so releasing the file
+            # does not hand its name to the next asset that wants it.
+            archive_claim_for(config.archive.local_path, final),
+            digest,
+            utcnow(),
+            utcnow(),
+            asset["id"],
+        ),
     )
 
     result.fetched += 1

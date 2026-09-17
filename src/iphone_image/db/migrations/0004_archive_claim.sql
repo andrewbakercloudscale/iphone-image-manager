@@ -1,0 +1,31 @@
+-- The archive name an asset has claimed, kept after the file itself is gone.
+--
+-- `local_path` is cleared on release, so a released asset stops recording the
+-- name it took. `unique_filename` then asks the filesystem whether a name is
+-- free, the filesystem says yes because the file was trashed, and the next
+-- asset with the same camera filename is handed the same archive path -- and
+-- therefore the same remote path, since the remote layout is the archive
+-- layout with the channel level removed. The upload overwrites a file the
+-- first asset's row still points at, and that row goes on claiming a cloud
+-- copy of a different photograph.
+--
+-- Measured on 2026-09-17, on this ledger: 8 pairs of distinct photographs
+-- shared one Drive file that way, each released in the morning and overwritten
+-- by its twin in the afternoon of the same day. Nothing was lost -- every one
+-- of the 16 was still on the phone -- but 8 rows read CLOUD_VERIFIED with no
+-- cloud copy behind them, and CLOUD_VERIFIED is exactly what
+-- `remove_from_iphone.policy: cloud_verified` consults before deleting from
+-- the phone.
+--
+-- This column is the claim, not the file: it is written when the name is
+-- chosen and never cleared, because the whole point is to outlive the file.
+-- It is archive-relative (`camera/2020/01-12 Home/IMG_0083.HEIC`) so that it
+-- survives a change of `archive.local_path`, the same reason `relocate` works
+-- off the pattern rather than off absolute paths.
+--
+-- Backfilling it needs the archive root and the channel rule, neither of which
+-- SQL has. `sync.backfill_archive_claims` does it in Python on every run, and
+-- a NULL here means "no claim recorded", never "this name is free".
+ALTER TABLE assets ADD COLUMN archive_claim TEXT;
+
+CREATE INDEX idx_assets_archive_claim ON assets (archive_claim);

@@ -299,3 +299,50 @@ def test_a_month_span_counts_as_a_month_not_a_name() -> None:
     assert relocate_engine._is_month_folder("09-12")
     assert not relocate_engine._is_month_folder("11-12 Cape Town")
     assert not relocate_engine._is_month_folder("Home")
+
+
+def test_a_move_never_takes_the_name_a_released_asset_still_holds(
+    tmp_path: Path, ledger: Database
+) -> None:
+    """Relocate sees only rows with a live file. The released ones still own names.
+
+    A released asset has no local_path, so it is not a mover and not a stayer
+    and nothing in the plan mentions it -- but its archive_claim is what its
+    cloud_path points at. Moving another file onto that name puts two assets on
+    one archive path and then on one remote path, which is the 2026-09-17
+    defect arriving by a different route.
+    """
+    released = _asset(
+        ledger,
+        tmp_path / "archive" / "camera" / "2019" / "IMG_1.JPG",
+        identity_key="released",
+        sha256="aaaaaaaaaaaaaaaa",
+    )
+    ledger.conn.execute(
+        "UPDATE assets SET local_status = 'RELEASED', local_path = NULL, "
+        "archive_claim = 'camera/2019/IMG_1.JPG', cloud_status = 'CLOUD_VERIFIED', "
+        "cloud_path = 'remote/2019/IMG_1.JPG' WHERE id = ?",
+        (released,),
+    )
+    (tmp_path / "archive" / "camera" / "2019" / "IMG_1.JPG").unlink()
+
+    _asset(
+        ledger,
+        tmp_path / "archive" / "2019" / "07" / "IMG_1.JPG",
+        identity_key="mover",
+        sha256="bbbbbbbbbbbbbbbb",
+        created_at_device="2019-07-04T10:00:00+00:00",
+    )
+    config = _config(tmp_path, "{source}/{year}")
+
+    result = run(config, db=ledger)
+
+    assert result.failed == 0
+    mover = ledger.conn.execute(
+        "SELECT local_path, archive_claim FROM assets WHERE identity_key = 'mover'"
+    ).fetchone()
+    assert mover["archive_claim"] != "camera/2019/IMG_1.JPG", (
+        "the mover was given the archive name a released asset still claims, so "
+        "its upload would replace that asset's only cloud copy"
+    )
+    assert Path(mover["local_path"]).exists()

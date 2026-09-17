@@ -35,7 +35,7 @@ from .db.database import Database, utcnow
 from .journal import Journal, Op
 from .logs import get_logger
 from .organize.paths import sanitize_segment, unique_filename
-from .sync import archive_path_for, event_folders
+from .sync import archive_claim_for, archive_path_for, event_folders
 
 log = get_logger("relocate")
 
@@ -145,6 +145,20 @@ def plan(config: Config, db: Database) -> tuple[list[Move], RelocateResult]:
     vacating = {str(current) for _, current, _, _ in movers}
     claimed: set[str] = set(staying)
 
+    # Names held by assets this plan says nothing about: the released ones,
+    # whose file is gone but whose claim on the name is not. Moving a file onto
+    # one of those would put two assets on one archive path, and then on one
+    # remote path. Rows with a live local_path are all above, as movers or
+    # stayers, so this is exactly the set the plan cannot see.
+    archive = config.archive.local_path
+    released_claims = {
+        str(row[0])
+        for row in db.conn.execute(
+            "SELECT archive_claim FROM assets WHERE archive_claim IS NOT NULL "
+            "AND archive_claim != '' AND (local_path IS NULL OR local_path = '')"
+        ).fetchall()
+    }
+
     for asset, current, directory, preferred in movers:
 
         def taken(candidate: Path, *, _self: str = str(current)) -> bool:
@@ -152,6 +166,8 @@ def plan(config: Config, db: Database) -> tuple[list[Move], RelocateResult]:
                 return True
             if str(candidate) == _self:
                 return False
+            if archive_claim_for(archive, candidate) in released_claims:
+                return True
             return candidate.exists() and str(candidate) not in vacating
 
         name = unique_filename(
@@ -257,7 +273,7 @@ def run(
             },
         ) as operation:
             for move in moves:
-                if _move_one(db, move, result) and on_move:
+                if _move_one(db, config.archive.local_path, move, result) and on_move:
                     on_move(move, result)
             operation.note(moved=result.moved, failed=result.failed, bytes=result.bytes_moved)
 
@@ -273,7 +289,7 @@ def run(
     return result
 
 
-def _move_one(db: Database, move: Move, result: RelocateResult) -> bool:
+def _move_one(db: Database, archive: Path, move: Move, result: RelocateResult) -> bool:
     try:
         move.destination.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -320,8 +336,16 @@ def _move_one(db: Database, move: Move, result: RelocateResult) -> bool:
     # Immediately, so an interruption never leaves the ledger pointing at a path
     # that no longer holds the file.
     db.conn.execute(
-        "UPDATE assets SET local_path = ?, updated_at = ? WHERE id = ?",
-        (str(move.destination), utcnow(), move.asset_id),
+        # The claim moves with the file. It is what stops a released asset's
+        # name being handed to another asset, so leaving it on the old path
+        # would protect a name nothing uses and free one something does.
+        "UPDATE assets SET local_path = ?, archive_claim = ?, updated_at = ? WHERE id = ?",
+        (
+            str(move.destination),
+            archive_claim_for(archive, move.destination),
+            utcnow(),
+            move.asset_id,
+        ),
     )
     result.moved += 1
     result.bytes_moved += size

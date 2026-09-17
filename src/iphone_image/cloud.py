@@ -476,6 +476,15 @@ class RcloneProvider:
         return found
 
 
+def _remote_path_owner(db: Database, cloud_path: str, asset_id: int) -> int | None:
+    """The id of another asset already recorded at this remote path, if any."""
+    row = db.conn.execute(
+        "SELECT id FROM assets WHERE cloud_path = ? AND id != ? LIMIT 1",
+        (cloud_path, asset_id),
+    ).fetchone()
+    return int(row["id"]) if row else None
+
+
 def plan(config: Config, selector: Selector, db: Database) -> list[Upload]:
     """Every archived file the selector matches that is not yet verified above."""
     where, params = selector.where()
@@ -508,6 +517,19 @@ def plan(config: Config, selector: Selector, db: Database) -> list[Upload]:
         if not asset.get("sha256"):
             log.warning("%s has no recorded hash, skipping", local)
             continue
+        destination = destination_for(config, asset.get("media_type"))
+        owner = _remote_path_owner(db, f"{destination}/{relative}", int(asset["id"]))
+        if owner is not None:
+            # Uploading here would replace a file another asset's row points at,
+            # and that row would go on reading CLOUD_VERIFIED over someone
+            # else's bytes. Refuse and say whose, rather than overwrite: this is
+            # what happened to eight pairs of photographs on 2026-09-17, and the
+            # upload is the last place it can still be caught. Migration 0004
+            # and `sync.claimed_by_another` stop the name being reused at all;
+            # this stays because a gate that only exists upstream is a gate that
+            # stops covering the day someone adds a second route in.
+            log.warning("%s would overwrite the cloud copy of asset %d, skipping", relative, owner)
+            continue
         uploads.append(
             Upload(
                 asset_id=int(asset["id"]),
@@ -516,7 +538,7 @@ def plan(config: Config, selector: Selector, db: Database) -> list[Upload]:
                 sha256=str(asset["sha256"]),
                 size_bytes=int(asset.get("size_bytes") or 0),
                 channel=channel,
-                destination=destination_for(config, asset.get("media_type")),
+                destination=destination,
             )
         )
     return uploads

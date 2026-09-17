@@ -641,3 +641,39 @@ def test_a_path_matching_no_configured_archive_is_not_silently_accepted(env) -> 
     dest, rel = cloud_engine.split_cloud_path(config, "Somewhere Else/2024/IMG_9.JPG")
     assert rel == "Somewhere Else/2024/IMG_9.JPG", "kept whole, so no lookup can match it"
     assert dest == config.cloud.destination
+
+
+# -- one remote path, one asset ----------------------------------------------
+
+
+def test_an_upload_that_would_overwrite_another_assets_cloud_copy_is_refused(env) -> None:
+    """The last place the 2026-09-17 collision could still have been caught.
+
+    A released asset's row points a cloud_path at a Drive file. If a second
+    asset is planned onto that same path, the copy replaces the first asset's
+    only cloud copy while its row keeps reading CLOUD_VERIFIED -- and
+    CLOUD_VERIFIED is what removal consults before deleting from the phone.
+    """
+    config, db = env
+    add_archived(config, db, "first", "2020/01-12 Home/IMG_0083.HEIC")
+    db.conn.execute(
+        "UPDATE assets SET local_status = 'RELEASED', local_path = NULL, "
+        "cloud_status = 'CLOUD_VERIFIED', cloud_path = ? WHERE identity_key = 'first'",
+        (f"{config.cloud.destination}/2020/01-12 Home/IMG_0083.HEIC",),
+    )
+    add_archived(config, db, "second", "2020/01-12 Home/IMG_0083.HEIC", body=b"a different photo")
+
+    assert cloud_engine.plan(config, Selector(), db) == []
+
+
+def test_an_asset_may_still_be_uploaded_to_the_path_it_already_owns(env) -> None:
+    """Re-verification is not a collision. Only *another* asset's path is."""
+    config, db = env
+    add_archived(config, db, "a", "2020/01-12 Home/IMG_0083.HEIC")
+    db.conn.execute(
+        "UPDATE assets SET cloud_path = ? WHERE identity_key = 'a'",
+        (f"{config.cloud.destination}/2020/01-12 Home/IMG_0083.HEIC",),
+    )
+    assert [u.relative for u in cloud_engine.plan(config, Selector(), db)] == [
+        "2020/01-12 Home/IMG_0083.HEIC"
+    ]
