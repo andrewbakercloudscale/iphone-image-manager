@@ -20,6 +20,12 @@ only local copy of a photograph. Four rules, and none of them is optional:
   are eligible here.
 - **The ledger is updated per file, after that file has gone**, so an
   interruption can never leave a row saying a file is present when it is not.
+
+What release deliberately does *not* ask is whether the asset is still on the
+phone. That is `Selector.for_release()`, and it exists because the shared
+`where()` used to require phone presence unconditionally, which made the
+already-removed assets -- the ones whose Mac copy is pure surplus -- the only
+ones release could never free. See that method for the measured cost.
 """
 
 from __future__ import annotations
@@ -87,7 +93,10 @@ def plan(
     provider: CloudProvider | None = None,
 ) -> tuple[list[Candidate], ReleaseResult]:
     """Everything provably safe to let go of, and why the rest is not."""
-    where, params = selector.where()
+    # Applied here, not at the call site, so no route into release can miss it.
+    # It drops the phone-presence clause release has no business asking about;
+    # everything below is unchanged and still gates on the remote.
+    where, params = selector.for_release().where()
     rows = db.conn.execute(
         f"SELECT a.* FROM assets a WHERE {where} "
         f"AND a.local_status = 'LOCAL_VERIFIED' AND a.local_path IS NOT NULL "

@@ -61,7 +61,14 @@ def env(tmp_path: Path):
     return config, db
 
 
-def archived(config, db, key, relative, *, cloud=True, body=b"photo"):
+def archived(config, db, key, relative, *, cloud=True, body=b"photo", on_phone=True):
+    """One archived asset.
+
+    `on_phone=False` is the state every fixture here was missing: archived,
+    verified, and already deleted from the phone. Release excluded that state
+    for months because no test ever produced it -- see
+    `Selector.for_release`.
+    """
     path = config.archive.local_path / "camera" / relative
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(body)
@@ -69,17 +76,20 @@ def archived(config, db, key, relative, *, cloud=True, body=b"photo"):
     db.conn.execute(
         "INSERT INTO assets (device_id, identity_key, filename, media_type, created_at_device, "
         "size_bytes, source_bundle_id, present_on_phone, subtypes, local_path, local_status, "
-        "sha256, cloud_status, cloud_path, first_seen_at, last_seen_at, created_at, updated_at) "
-        "VALUES (1, ?, ?, 'PHOTO', '2019-11-04T10:00:00+00:00', ?, 'com.apple.camera', 1, '[]', "
-        "?, 'LOCAL_VERIFIED', ?, ?, ?, ?, ?, ?, ?)",
+        "sha256, cloud_status, cloud_path, removed_from_phone_at, "
+        "first_seen_at, last_seen_at, created_at, updated_at) "
+        "VALUES (1, ?, ?, 'PHOTO', '2019-11-04T10:00:00+00:00', ?, 'com.apple.camera', ?, '[]', "
+        "?, 'LOCAL_VERIFIED', ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             key,
             Path(relative).name,
             len(body),
+            1 if on_phone else 0,
             str(path),
             digest,
             "CLOUD_VERIFIED" if cloud else "NONE",
             f"{DEST}/{relative}" if cloud else None,
+            None if on_phone else utcnow(),
             utcnow(),
             utcnow(),
             utcnow(),
@@ -156,6 +166,50 @@ def test_a_verified_asset_is_trashed_and_the_row_says_so(env, monkeypatch) -> No
     row = db.conn.execute("SELECT local_status, local_path FROM assets").fetchone()
     assert row["local_status"] == release_engine.RELEASED
     assert row["local_path"] is None
+
+
+def test_an_asset_already_off_the_phone_is_still_released(env, monkeypatch) -> None:
+    """The state that was stranding 14.16 GB on 2026-09-17.
+
+    Deleted from the phone, verified in Drive, Mac copy pure surplus -- and
+    invisible to release because the shared selector required phone presence.
+    """
+    config, db = env
+    path, digest = archived(config, db, "a", "2019/11 Cape Town/IMG_1.JPG", on_phone=False)
+    fake = FakeCloud(holds={"2019/11 Cape Town/IMG_1.JPG": digest})
+
+    trashed: list[str] = []
+    monkeypatch.setattr(
+        release_engine,
+        "_trash",
+        lambda paths, *, binary=None: (
+            trashed.extend(str(p) for p in paths),
+            {str(p): p.stat().st_size for p in paths},
+        )[1],
+    )
+    result = release_engine.run(config, Selector(), provider=fake, db=db)
+
+    assert result.released == 1 and result.failed == 0
+    assert trashed == [str(path)]
+
+
+def test_release_still_refuses_an_off_phone_asset_the_cloud_lost(env) -> None:
+    """Widening the selector must not widen what release will delete."""
+    config, db = env
+    path, _ = archived(config, db, "a", "2019/11/IMG_1.JPG", on_phone=False)
+    eligible, result = release_engine.plan(config, db, Selector(), provider=FakeCloud(holds={}))
+    assert eligible == []
+    assert result.blocks == {"not at the remote right now": 1}
+    assert path.exists(), "an asset with no phone copy and no cloud copy lost its last one"
+
+
+def test_the_phone_presence_clause_survives_for_every_other_verb(env) -> None:
+    """`for_release` must not leak into the verbs that touch the device."""
+    config, db = env
+    archived(config, db, "a", "2019/11/IMG_1.JPG", on_phone=False)
+    where, params = Selector().where()
+    assert "a.present_on_phone = 1" in where
+    assert not db.conn.execute(f"SELECT 1 FROM assets a WHERE {where}", params).fetchall()
 
 
 def test_a_released_asset_is_never_fetched_again(env) -> None:

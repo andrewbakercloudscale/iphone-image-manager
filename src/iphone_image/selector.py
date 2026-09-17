@@ -173,6 +173,14 @@ class Selector:
     #: flag can waive. Defaulting this to false put the block on the wrong verb
     #: and quietly left 4,224 of the user's photographs out of every backup.
     include_proxy_suspects: bool = True
+    #: Whether the asset has to still be on the phone. True is right for every
+    #: verb that reads or writes the device -- `sync` cannot fetch what is not
+    #: there, `remove-from-iphone` cannot delete it -- and wrong for exactly one
+    #: verb. `release` only frees Mac disk, so phone presence has no bearing on
+    #: it; an asset already off the phone is a *stronger* release candidate, not
+    #: a weaker one. This is not a CLI flag: no user asked for the old
+    #: behaviour, and `for_release` is the only thing that turns it off.
+    require_present_on_phone: bool = True
     limit: int | None = None
 
     def __post_init__(self) -> None:
@@ -199,8 +207,11 @@ class Selector:
     def where(self, *, now: datetime | None = None) -> tuple[str, list[Any]]:
         """Compile to a SQL fragment and bound parameters. Never interpolates."""
         now = now or datetime.now(UTC)
-        clauses: list[str] = ["a.present_on_phone = 1"]
+        clauses: list[str] = []
         params: list[Any] = []
+
+        if self.require_present_on_phone:
+            clauses.append("a.present_on_phone = 1")
 
         if self.source is not None:
             clause, extra = self._source_clause()
@@ -242,7 +253,11 @@ class Selector:
         if not self.include_proxy_suspects:
             clauses.append(f"a.proxy_suspicion < {PROXY_SUSPICION_BLOCK}")
 
-        return " AND ".join(clauses), params
+        # Every caller interpolates this into `WHERE {where} AND ...`, so an
+        # empty fragment is a syntax error rather than "everything". A selector
+        # with no filters at all is now reachable: `for_release()` drops the one
+        # clause that used to be unconditional.
+        return " AND ".join(clauses) if clauses else "1 = 1", params
 
     def _source_clause(self) -> tuple[str, list[Any]]:
         """Compile the channel filter.
@@ -290,6 +305,29 @@ class Selector:
         asset the scan flagged as a proxy.
         """
         return replace(self, include_proxy_suspects=False, include_favourites=False)
+
+    def for_release(self) -> Selector:
+        """The same selection, minus the phone-presence clause.
+
+        `release` deletes the Mac copy of something the cloud is holding. It
+        never touches the phone and has no reason to ask about it, but it shared
+        `where()` with the verbs that do, and that clause was unconditional.
+
+        The cost was measured, not guessed: on 2026-09-17, 5,024 photos deleted
+        from the phone earlier the same day -- every one of them
+        LOCAL_VERIFIED *and* CLOUD_VERIFIED -- were silently excluded from every
+        subsequent `release --apply`, stranding 14.16 GB on a Mac that had run
+        out of disk that afternoon. The set most eligible for release was the one
+        set release could not see.
+
+        Like `for_removal`, this is applied inside the verb rather than left to
+        the caller, so no route into release can skip it. Unlike `for_removal`
+        it widens the set, which is safe here for the one reason that matters:
+        `release`'s own guards are unchanged, and each still requires a
+        cloud-verified copy re-checked against the remote in the same
+        invocation. See `release.plan` and docs/SAFETY.md section 7.
+        """
+        return replace(self, require_present_on_phone=False)
 
     def order_by(self) -> str:
         return {

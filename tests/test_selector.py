@@ -396,6 +396,33 @@ def test_for_removal_narrows_and_changes_nothing_else() -> None:
     assert original.include_proxy_suspects is True, "for_removal must not mutate its caller"
 
 
+def test_every_verb_but_release_requires_the_asset_to_be_on_the_phone() -> None:
+    assert "a.present_on_phone = 1" in Selector().where()[0]
+    assert "a.present_on_phone = 1" in Selector().for_removal().where()[0]
+
+
+def test_for_release_drops_the_phone_presence_clause_and_nothing_else() -> None:
+    """Release frees Mac disk. Whether the phone still has it is not its question."""
+    original = Selector(source="camera", media_type="photo", older_than="1y", order="largest")
+    released = original.for_release()
+    where, _ = released.where()
+    assert "present_on_phone" not in where
+    assert (released.source, released.media_type, released.older_than, released.order) == (
+        "camera",
+        "photo",
+        "1y",
+        "largest",
+    )
+    assert original.require_present_on_phone is True, "for_release must not mutate its caller"
+
+
+def test_a_selector_with_no_clauses_left_is_still_valid_sql(db) -> None:
+    """`WHERE  AND ...` is a syntax error, and for_release can now empty the list."""
+    where, params = Selector().for_release().where()
+    assert where.strip()
+    db.conn.execute(f"SELECT COUNT(*) FROM assets a WHERE {where}", params).fetchone()
+
+
 def test_the_scanner_flags_what_removal_blocks(db) -> None:
     """One threshold. Two constants would make "flagged" and "blocked" drift."""
     from iphone_image.db.database import utcnow
