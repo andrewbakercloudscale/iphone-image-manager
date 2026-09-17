@@ -48,9 +48,42 @@ class Move:
     size_bytes: int = 0
 
 
+def _is_month_folder(folder: str) -> bool:
+    """A bare month bucket like "11", or "09-12" for a span."""
+    return bool(folder) and all(part.isdigit() for part in folder.split("-"))
+
+
+def unnaming(moves: list[Move]) -> int:
+    """Moves that would take a file out of a named folder into a bare month.
+
+    The check that should have existed before this was ever run. Place names
+    come from Photos' own reverse geocoding, read live, and that data is not
+    stable: the library here grew from 78,806 assets to 94,678 as an iCloud
+    backfill completed, and Photos had not yet analysed the arrivals, so
+    coverage fell from 69% to 24.8%. A relocate run at that moment would have
+    moved 8,590 files out of "2019/11-12 Cape Town" and into "2019/11",
+    cheerfully, because every input it had said the month was correct.
+
+    It would also have desynced the archive from the cloud, where those files
+    are already stored under the named path.
+
+    So a plan that *removes* names is refused rather than performed. Adding
+    names is normal and always allowed; taking them away means the place data
+    got worse, which is a reason to wait, not to rewrite the archive.
+    """
+    count = 0
+    for move in moves:
+        if _is_month_folder(move.destination.parent.name) and not _is_month_folder(
+            move.source.parent.name
+        ):
+            count += 1
+    return count
+
+
 @dataclass
 class RelocateResult:
     examined: int = 0
+    unnaming: int = 0
     already_in_place: int = 0
     planned: int = 0
     moved: int = 0
@@ -144,6 +177,7 @@ def plan(config: Config, db: Database) -> tuple[list[Move], RelocateResult]:
         )
 
     result.planned = len(moves)
+    result.unnaming = unnaming(moves)
     return moves, result
 
 
@@ -170,13 +204,24 @@ def prune_empty_directories(vacated: set[Path], *, keep: Path) -> int:
     return removed
 
 
+class RelocateError(Exception):
+    """Relocation cannot safely proceed."""
+
+
 def run(
     config: Config,
     *,
     db: Database | None = None,
+    allow_unnaming: bool = False,
     on_move: Callable[[Move, RelocateResult], None] | None = None,
 ) -> RelocateResult:
-    """Execute the plan."""
+    """Execute the plan, unless it would take names away.
+
+    `allow_unnaming` is the deliberate override, and it is off by default
+    because the situation it guards is indistinguishable from normal input:
+    Photos simply reports fewer places than it did, and every folder the plan
+    proposes looks correct.
+    """
     owned = db is None
     db = db or Database(config.database.path).connect()
     if owned:
@@ -184,6 +229,18 @@ def run(
 
     try:
         moves, result = plan(config, db)
+        if result.unnaming and not allow_unnaming:
+            raise RelocateError(
+                f"{result.unnaming:,} file(s) would move out of a named folder into a bare "
+                f"month, which means Photos is currently reporting fewer places than when "
+                f"the archive was filed -- not that the archive is wrong.\n"
+                f"  Place names are read live from the Photos library and its coverage moves: "
+                f"it fell from 69% to 24.8% here when an iCloud backfill added 15,000 "
+                f"unanalysed assets.\n"
+                f"  Cloud copies are already stored under the named paths, so renaming now "
+                f"would desync them. Wait for Photos to finish analysing, or pass "
+                f"allow_unnaming to override."
+            )
         if not moves:
             return result
 

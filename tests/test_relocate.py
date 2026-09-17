@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from iphone_image import relocate as relocate_engine
 from iphone_image.config import Config
 from iphone_image.db.database import Database, utcnow
 from iphone_image.relocate import plan, prune_empty_directories, run
@@ -254,3 +255,47 @@ def test_a_mover_never_takes_the_path_of_an_asset_that_is_staying(
     assert all(Path(p).exists() for p in paths)
     contents = {Path(p).read_bytes() for p in paths}
     assert contents == {b"the file that must survive", b"the file that must move"}
+
+
+# ---------------------------------------------------------------------------
+# Refusing to un-name the archive
+# ---------------------------------------------------------------------------
+
+
+def test_a_plan_that_strips_place_names_is_refused() -> None:
+    """Photos' place data is read live and is not stable.
+
+    Coverage here fell from 69% to 24.8% when an iCloud backfill added 15,000
+    assets Photos had not yet analysed. A relocate at that moment would have
+    moved 8,590 files out of "2019/11-12 Cape Town" into "2019/11" -- and the
+    cloud copies are stored under the named path, so the two would desync.
+    """
+    moves = [
+        relocate_engine.Move(
+            asset_id=1,
+            source=Path("/a/camera/2019/11-12 Cape Town/IMG_1.JPG"),
+            destination=Path("/a/camera/2019/11/IMG_1.JPG"),
+        )
+    ]
+    assert relocate_engine.unnaming(moves) == 1
+
+
+def test_giving_a_folder_a_name_is_not_un_naming() -> None:
+    """The normal direction, and it must never be blocked."""
+    moves = [
+        relocate_engine.Move(
+            asset_id=1,
+            source=Path("/a/camera/2019/11/IMG_1.JPG"),
+            destination=Path("/a/camera/2019/11-12 Cape Town/IMG_1.JPG"),
+        )
+    ]
+    assert relocate_engine.unnaming(moves) == 0
+
+
+def test_a_month_span_counts_as_a_month_not_a_name() -> None:
+    """ "09-12" is a span of months, not a place, and moving between the two
+    shapes is not a loss of information."""
+    assert relocate_engine._is_month_folder("11")
+    assert relocate_engine._is_month_folder("09-12")
+    assert not relocate_engine._is_month_folder("11-12 Cape Town")
+    assert not relocate_engine._is_month_folder("Home")
