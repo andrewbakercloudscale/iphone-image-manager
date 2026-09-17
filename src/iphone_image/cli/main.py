@@ -1073,7 +1073,7 @@ def remove_from_iphone(ctx: Context, apply_: bool, confirm: str, **kwargs: Any) 
         )
 
     try:
-        result = remove_engine.run(config, selector, on_progress=tick)
+        result = remove_engine.run(config, selector, prepared=(eligible, preview), on_progress=tick)
     except (remove_engine.RemoveError, cloud_engine.CloudError, HelperError) as exc:
         _fail(ctx.out, str(exc))
         return
@@ -1201,7 +1201,9 @@ def release(ctx: Context, apply_: bool, **kwargs: Any) -> None:
         )
 
     try:
-        result = release_engine.run(config, selector, on_progress=tick)
+        result = release_engine.run(
+            config, selector, prepared=(eligible, preview), on_progress=tick
+        )
     except (release_engine.ReleaseError, cloud_engine.CloudError, HelperError) as exc:
         _fail(ctx.out, str(exc))
         return

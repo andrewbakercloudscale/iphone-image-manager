@@ -192,9 +192,23 @@ def run(
     provider: CloudProvider | None = None,
     db: Database | None = None,
     helper: Path | None = None,
+    prepared: tuple[list[Candidate], ReleaseResult] | None = None,
     on_progress: Callable[[ReleaseResult], None] | None = None,
 ) -> ReleaseResult:
-    """Trash the local copy of everything proved to be in the cloud."""
+    """Trash the local copy of everything proved to be in the cloud.
+
+    `prepared` is a plan already computed **in this same invocation**, which is
+    what the CLI passes so the run does not plan twice. Planning twice was not
+    merely wasteful -- two full listings of a 12,000-file archive -- it made
+    the output incoherent: the preview said 6,869 eligible, the second plan
+    found 7,138 because the upload had verified more in between, and the
+    progress line read "released 7,138 of 6,869" while the blocked count and
+    its own reason list disagreed by 269. Every number now comes from one plan.
+
+    It is not a way to hand in a stale plan from somewhere else. The freshness
+    rule is unchanged: whoever computes it asks the remote in the invocation
+    that acts on it.
+    """
     if not config.safety.require_cloud_verification:
         raise ReleaseError(
             "safety.require_cloud_verification is false. Releasing a local copy "
@@ -208,7 +222,7 @@ def run(
     journal = Journal(db)
 
     try:
-        eligible, result = plan(config, db, selector, provider=provider)
+        eligible, result = prepared or plan(config, db, selector, provider=provider)
         if not eligible:
             return result
 

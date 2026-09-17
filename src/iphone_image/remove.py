@@ -351,6 +351,7 @@ def run(
     db: Database | None = None,
     helper: Helper | None = None,
     scanner: Callable[[Config], Any] | None = None,
+    prepared: tuple[list[Candidate], RemoveResult] | None = None,
     on_progress: Callable[[RemoveResult], None] | None = None,
 ) -> RemoveResult:
     """Delete from the device everything that proved it is safe to delete."""
@@ -375,8 +376,14 @@ def run(
     # is deliberately the *only* seam: there is no `scan_id` argument that
     # would let a caller skip scanning and hand in a number instead. A fresh
     # scan is the one thing this function will not be talked out of.
-    log.info("scanning the library before planning any removal")
-    scan_result = (scanner or run_scan)(config)
+    # `prepared` carries a scan and plan already made in this same invocation,
+    # which is what the CLI passes. Without it this scanned the whole 95,000
+    # asset library twice per run -- once for the preview the user reads and
+    # once here -- and the two plans could then disagree, which is how a
+    # confirmation phrase bound to the first count met a second, different one.
+    if prepared is None:
+        log.info("scanning the library before planning any removal")
+        scan_result = (scanner or run_scan)(config)
 
     owned = db is None
     db = db or Database(config.database.path).connect()
@@ -385,16 +392,19 @@ def run(
     journal = Journal(db)
 
     try:
-        eligible, result = plan(
-            config, db, selector, scan_id=scan_result.scan_id, provider=provider
-        )
+        if prepared is None:
+            eligible, result = plan(
+                config, db, selector, scan_id=scan_result.scan_id, provider=provider
+            )
+        else:
+            eligible, result = prepared
         if not eligible:
             return result
 
         with journal.operation(
             Op.REMOVE,
             command="remove-from-iphone",
-            scan_id=scan_result.scan_id,
+            scan_id=result.scan_id,
             detail={
                 "eligible": len(eligible),
                 "bytes": sum(c.size_bytes for c in eligible),

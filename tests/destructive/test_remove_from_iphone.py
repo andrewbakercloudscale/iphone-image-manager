@@ -435,3 +435,60 @@ def test_order_is_honoured(env) -> None:
     assert smallest.examined == 1
     assert biggest.blocked_assets[0]["filename"] == "IMG_1.JPG"
     assert smallest.blocked_assets[0]["filename"] == "IMG_0.JPG"
+
+
+def test_run_does_not_plan_a_second_time_when_given_a_plan(env) -> None:
+    """Planning twice is how the numbers came apart.
+
+    `release` printed "released 7,138 of 6,869" and a blocked count that
+    disagreed with its own reason list by 269, because the CLI planned for the
+    preview and `run` planned again -- and between the two, an upload had
+    verified more files. For `remove-from-iphone` the second plan also meant a
+    second full scan of a 95,000-asset library, and a confirmation phrase
+    bound to the first count meeting a second, different one.
+    """
+    config, db = env
+    on_phone(config, db, "a", "2019/11/IMG_1.JPG")
+    remote = {"2019/11/IMG_1.JPG": hashlib.sha256(b"photo").hexdigest()}
+
+    scans: list[int] = []
+
+    def counting_scanner(_config):
+        scans.append(1)
+        return ScanResult(scan_id=SCAN)
+
+    prepared = remove_engine.plan(config, db, Selector(), scan_id=SCAN, provider=FakeCloud(remote))
+    result = remove_engine.run(
+        config,
+        Selector(),
+        provider=FakeCloud(remote),
+        db=db,
+        helper=FakeHelper(),
+        scanner=counting_scanner,
+        prepared=prepared,
+    )
+
+    assert scans == [], "a plan made in this invocation must not trigger another scan"
+    assert result.removed == 1
+    assert result is prepared[1], "the numbers reported are the ones that were approved"
+
+
+def test_without_a_prepared_plan_it_still_scans_for_itself(env) -> None:
+    """The freshness rule is unchanged for every other caller."""
+    config, db = env
+    on_phone(config, db, "a", "2019/11/IMG_1.JPG")
+    scans: list[int] = []
+
+    def counting_scanner(_config):
+        scans.append(1)
+        return ScanResult(scan_id=SCAN)
+
+    remove_engine.run(
+        config,
+        Selector(),
+        provider=FakeCloud({"2019/11/IMG_1.JPG": hashlib.sha256(b"photo").hexdigest()}),
+        db=db,
+        helper=FakeHelper(),
+        scanner=counting_scanner,
+    )
+    assert scans == [1], "no plan handed in means it must take its own scan"
