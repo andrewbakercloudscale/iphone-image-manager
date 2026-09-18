@@ -68,7 +68,7 @@ it yet.
 
 The 5,032 is 5,024 + the 8 photographs section 8b had to re-fetch.
 
-334 tests pass, ruff clean. 46 commits, 0 unpushed, nothing uncommitted.
+348 tests pass, ruff clean. 48 commits, 0 unpushed, nothing uncommitted.
 
 **The figures above are corrected, and the correction is the point.** As
 written on 09-17 this block said 22,888 verified in Drive. Drive held 22,880
@@ -132,30 +132,35 @@ ledger cannot verify the ledger.**
 
 Both section-8 defects are fixed and the ledger is repaired. What is left:
 
-1. **Run `release --source camera --type photo --apply`** to free the 13.2 GiB
-   that 8a was stranding. The plan is verified and reports 5,024 safe,
-   0 blocked; the trashing step was deliberately left unrun for the user to
-   authorise. Then **empty the Trash** from Finder (`~/.Trash` is not readable
-   from a terminal -- macOS privacy -- so the terminal cannot confirm either
-   the size or that it worked).
-2. **Add the remote-vs-ledger audit to `doctor`**, section 8c. It is the only
-   check that has ever found a false CLOUD_VERIFIED, and right now it exists
-   only as something a person remembered to do by hand. It must report
-   duplicate `cloud_path` values too: that was the signal that unpicked 8b.
-3. **Decide the video job**, section 6. It cannot start today's way because
-   Photos' place-name coverage is still recovering (section 7). Options are
-   there. Note that 6 video filename collisions are already waiting in the
-   un-uploaded set -- harmless now, and a demonstration that 8b was a class of
-   defect and not an incident.
-4. **Decide what to do about screenshots, WhatsApp, and screen recordings**,
+**Done since this list was written:** 8a's release ran (5,032 files, 13.2 GB
+freed, 0 blocked, 0 failed) and the Trash has since been emptied. The audit is
+built -- see section 8d. Both were items 1 and 2.
+
+**The consequence of those two together, stated plainly: the 5,024 photos
+deleted from the phone now have exactly one copy, in Google Drive.** The
+iPhone's Recently Deleted holds them until roughly 2026-10-17 and then that is
+it. This is the design -- no external drive, the Mac is a buffer -- but it is
+the first time it has actually been true of 13 GB of photographs, and it is why
+`audit` existing matters more today than it did yesterday.
+
+1. **Run `iphone-image audit` before any removal pass.** It is the check that
+   proves Drive still holds what the ledger claims. Not a one-off: the point of
+   8b is that a false CLOUD_VERIFIED can appear at any time and nothing else
+   notices.
+2. **Decide the video job**, section 6 -- and read section 7 first, because
+   the reason it was on hold does not survive measurement. Note that 6 video
+   filename collisions are already waiting in the un-uploaded set: harmless now
+   that the fix is in, and a demonstration that 8b was a class of defect rather
+   than an incident.
+3. **Decide what to do about screenshots, WhatsApp, and screen recordings**,
    section 9 -- 74,127 items / 278 GB have no plan at all and are outside the
    12-month camera-only pipeline that exists today.
-5. **A second, larger removal pass** is now realistic: with the whole camera
-   roll in Drive, `remove-from-iphone --source camera --older-than 1y` would
-   plan against roughly 15,000 eligible photos rather than 5,024. Not run --
-   deliberately left for the user to authorise, per SAFETY section 3.
-   **Do not run this before item 2.** 8b is exactly the defect this pass turns
-   into permanent loss, and the audit is what proves there is not another one.
+4. **A second, larger removal pass** is now realistic: with the whole camera
+   roll in Drive, `remove-from-iphone --source camera --older-than 1y` plans
+   against **14,897 photos / 45.7 GiB** (measured with the real selector, not
+   the ~15,000 estimated yesterday). Not run -- deliberately left for the user
+   to authorise, per SAFETY section 3. **Run `audit` first, every time.** 8b is
+   exactly the defect this pass turns into permanent loss.
 
 ---
 
@@ -177,6 +182,10 @@ release <selector>  plan only; --apply to trash local copies the remote confirms
 remove-from-iphone <selector>   plan only; --apply --confirm "<phrase>" to delete from the phone
 relocate            re-file the archive after a layout change; --apply to run
                     refuses if it would remove a place name -- see section 3.9
+                    also refuses to move anything already in the cloud -- 8d
+audit               the ledger against what the remote actually holds.
+                    --offline for the instant, no-network half. Exits non-zero
+                    on any disagreement. Run before every removal pass -- 8d
 device | status | journal | config show|validate|init
 ```
 
@@ -232,13 +241,51 @@ Google Drive was upgraded to 5 TiB today specifically to make room for this
 (3.25 TiB free, plenty). Disk is fine at 26 GB and the cycle script proved it
 can maintain a floor unattended. The blocker is organisational: see section 7.
 
-**The user's decision, given today:** wait for place-name coverage to recover
-before running any video chunk, so trip folders come out named
-(`2024/07 Plett/`) rather than bare months (`2024/07/`). A video chunk run
-today would mostly produce bare-month folders and the `relocate` guard from
-item 9 would then block ever renaming them into place, because renaming a
-month into a name is fine but the archive-vs-cloud desync risk from section
-3.9 applies just as much to a first filing as to a re-file.
+**The decision on 09-17 was to wait** for place-name coverage to recover, so
+trip folders came out named (`2024/07 Plett/`) rather than bare months
+(`2024/07/`). **Section 7 no longer supports that**: coverage fell from 24.8% to
+17.2% within a day and 2025-2026 are at zero. There is nothing to wait for.
+
+The instinct behind it was right, though, and section 8d turned it into a real
+guard: **relocate now refuses to move any file that already has a cloud copy**,
+adding a name or removing one. So whatever folder a video lands in on upload is
+the folder it keeps in Drive, permanently. That is the actual one-way door --
+not the coverage percentage.
+
+### The pre-flight, measured rather than assumed
+
+The video destination is `Diskstation2/Family Videos`, and unlike photos it has
+**no `Andrew iPhone Archive` subfolder**: videos upload straight into a
+pre-existing family video archive of **7,168 files**, 6,188 of them named
+`IMG_*.MOV` in year folders covering 2019-2021 -- the same years and the same
+naming as the iPhone's. That asymmetry was found by `audit`'s
+`at the remote, unclaimed: 7,167` line on its first run.
+
+It is safe, and this was checked properly rather than reasoned about. Every one
+of the 1,823 target paths was computed with the real `archive_path_for` and
+intersected with a recursive listing of what is actually there:
+
+```
+existing family video files          7,168   (5,649 at year/file, 1,519 at year/sub/file)
+camera videos to upload              1,823
+collisions with existing files           0
+collisions among the videos            2   both 2025/01-12 Cape Town
+```
+
+Zero. The existing archive files as `<year>/<file>`, the tool writes
+`<year>/<event>/<file>`, and even the 1,519 existing files at the same depth
+share no path.
+
+**The 2 self-collisions are the point.** `2025/01-12 Cape Town/IMG_3308.MOV` and
+`IMG_4876.MOV` each want one name for two different videos -- section 8b
+arriving again in a new job. The 8b fix handles them: the second gets a
+hash-suffixed name. Before that fix they would have been two more silently
+overwritten files.
+
+**Still worth deciding before the run:** whether videos should go to
+`Family Videos/Andrew iPhone Archive` for the same isolation photos have. It
+costs nothing now and cannot be changed afterwards without the desync the
+relocate guard exists to refuse.
 
 **When ready:** `cycle.sh` as written will not do this -- it hardcodes
 `--type photo`. Either write a twin script with `--type video`, or generalise
@@ -270,12 +317,44 @@ Photos analyses new arrivals lazily and had not yet run its reverse-geocoding
 pass on ~15,000 of them, so overall coverage fell even though the *old*
 assets' coverage did not change.
 
-**It is recovering.** Spot-checked mid-cycle today: newly-uploaded 2022/2023
-folders were correctly named (`2022/12 Babylonstoren Road`, `2023/09 Taunton`)
-in the upload log, meaning that period's coverage has already come back.
-2024-2026 is presumably still catching up. Speeds up with the Mac plugged in,
-on wifi, screen locked -- normal Photos background-analysis conditions, no
-tool involvement needed.
+**It is not recovering. Measured again 24 hours later, it had fallen further:**
+
+```
+                 2026-09-17 (first)   2026-09-17 (late evening)
+assets not trashed        89,849                89,863
+with a place name         22,241                15,442
+coverage                   24.8%                 17.2%
+```
+
+Roughly 6,800 assets *lost* a named moment overnight while the library size
+barely moved. Photos re-clustered its moments and the new ones are untitled, so
+this number is not a monotonic recovery curve -- it goes both ways, and
+"presumably still catching up" was an assumption, not an observation.
+
+By year it is clearly not a backlog:
+
+```
+2019  19.0%     2023  36.7%
+2020  38.8%     2024  10.5%
+2021  21.7%     2025   0.0%   <- 17,003 assets, zero named
+2022  32.0%     2026   0.0%   <- 11,113 assets, zero named
+```
+
+**Zero across 28,116 assets for two whole years is not lazy analysis in
+progress.** Something is not running for recent assets. Not diagnosed --
+candidates are Photos' own analysis being blocked, or those years arriving via
+the iCloud backfill and never being moment-clustered. Whatever it is, **waiting
+for it is not a plan**, and no command measures it, so nobody would have
+noticed either way.
+
+Query used, against a copy of `Photos.sqlite` (never the live file):
+
+```sql
+SELECT strftime('%Y', a.ZDATECREATED + 978307200, 'unixepoch') yr,
+       COUNT(*), SUM(m.ZTITLE IS NOT NULL AND m.ZTITLE != '')
+FROM ZASSET a LEFT JOIN ZMOMENT m ON a.ZMOMENT = m.Z_PK
+WHERE a.ZTRASHEDSTATE = 0 GROUP BY yr;
+```
 
 **No command in this tool measures coverage.** Today's number came from a
 one-off query against a copy of `Photos.sqlite`. Worth adding to `doctor` if
@@ -406,7 +485,9 @@ actually holds and diffing it against what we claim.** That is one recursive
 22,888-file archive, and it is the only check that has ever found a
 false CLOUD_VERIFIED.
 
-Nothing in the tool does this. `doctor` is where it belongs, and the numbers to
+**This is now built — see 8d.** What follows is the reasoning that shaped it,
+kept because the reasoning is the transferable part. `doctor` is where it
+belongs, and the numbers to
 report are: files in Drive, rows claiming CLOUD_VERIFIED, and the three
 disagreement classes separately (missing, size mismatch, hash mismatch). It
 must **also** report duplicate `cloud_path` values, because that was the signal
@@ -420,6 +501,75 @@ and is **empty** — all 22,888 verified assets carry their state in
 per-asset fields are the ones every verb reads, but a reader who trusts the
 schema will conclude there are no cloud copies at all. Either populate it or
 drop it.
+
+### 8d. The guards, `4c244f6`
+
+Both defects were invisible to every check that existed. These are the two that
+would have caught them, built after the fact rather than instead of it.
+
+**`iphone-image audit`** — a new verb. Split by cost, because the expensive half
+cannot run on every invocation and the cheap half must:
+
+- **offline, instant** (`audit.conflicts`, also wired into `doctor` as
+  `check_ledger_conflicts`): two assets at one remote path, two claiming one
+  archive name, a row verified with no hash or no path to verify against. Run
+  against the pre-repair backup it finds **exactly the eight real collisions and
+  names the asset ids**; against the repaired ledger, nothing. That is what
+  would have caught 8b on the day it happened, for free.
+- **full** (`audit.remote`): one recursive listing per destination, diffed
+  against every CLOUD_VERIFIED row by hash. The only thing that can find a file
+  that has gone missing at the remote or whose bytes have changed.
+
+Its first real run, live:
+
+```
+ledger rows examined        94,681
+consistency checks run      4
+ledger contradictions       none
+destinations listed         Family Photos/Andrew iPhone Archive, Family Videos
+files at the remote         30,055
+rows claiming verified      22,888
+matched by hash             22,888
+missing / hash mismatch     0 / 0
+no hash reported            0
+at the remote, unclaimed     7,167
+```
+
+Three design points, each one a bug that was nearly written:
+
+- **A check that cannot run reports skipped, with the reason.** A ledger older
+  than migration 0004 has no `archive_claim`; that check says so and `doctor`
+  returns WARN. It does not quietly run three checks and call it a pass. This
+  was found the honest way — by running it against the backup and watching it
+  crash.
+- **`audit` exits non-zero when the remote cannot be listed.** An unavailable
+  checker fails; it never waves the ledger through.
+- **A remote entry listed without a hash is counted as `unhashed`, never as a
+  match** — an unanswered question is not a yes. And there is deliberately *no*
+  `size_mismatch` field: the provider reports SHA256 and a size difference
+  always implies a hash difference, so that field would read 0 forever and look
+  like evidence.
+
+Both halves state their coverage (`4 check(s) over 94,681 row(s)`) so a gate
+that has stopped covering anything cannot be mistaken for one that found
+nothing wrong.
+
+**`relocate` now refuses to desync the cloud.** It moves local files; nothing
+moves the remote. Re-filing an uploaded asset leaves its `cloud_path` pointing
+at the old layout, and the archive and Drive stop describing the same thing.
+Nothing reports an error — `release` re-checks the recorded path, which is
+still correct — which is precisely why it is worth refusing rather than warning
+about.
+
+The `unnaming` guard already listed cloud desync among its reasons, but it fires
+only on plans that *remove* a name and explicitly always allows adding one.
+**Adding a name desyncs just as thoroughly**, and 2026-09-17's plan was blocked
+for the other reason entirely, so the gap was never visible. There is a test for
+exactly that. `allow_cloud_desync` is the override and says what it costs; both
+refusals now appear in the plan preview rather than as a surprise at `--apply`.
+
+348 tests pass, ruff clean.
+
 
 ---
 
