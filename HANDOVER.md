@@ -192,19 +192,32 @@ device | status | journal | config show|validate|init
 Selector: `--source --type --older-than --newer-than --year --min-size
 --max-size --order --limit --no-favourites --no-proxy-suspects`.
 
-**The unattended cycle used today:**
+**The unattended cycle:**
 
 ```bash
-~/.iphone-image/cycle.sh
+~/.iphone-image/cycle.sh [photo|video] [cycles]     # defaults: photo, 12
+~/.iphone-image/cycle.sh video 25                   # the video job, started 2026-09-18
 ```
 
 Started under `nohup caffeinate -dimsu`, so it survives closing the terminal
-and keeps the Mac awake. Logs to `~/.iphone-image/cycle.log`. Loops
-release -> check-nothing-to-fetch -> check-floor -> fetch -> upload, up to 12
-times, and stops cleanly when there is nothing left to fetch. **Written for
-today's photo job specifically** (hardcoded `--type photo`); would need
-`--type video` and a size-aware batching decision to be reused for videos,
-see section 6.
+and keeps the Mac awake. Logs to `~/.iphone-image/cycle.log`, every line tagged
+with the type. Loops release -> check-nothing-to-fetch -> check-floor -> fetch
+-> upload and stops cleanly when there is nothing left to fetch.
+
+The type is an argument now and is passed to **every** verb, not only `sync`:
+an unscoped `cloud` run during a video job uploads any stray photo sitting
+LOCAL_VERIFIED, which is not wrong but makes the log unreadable against the
+plan. `release` stays deliberately unscoped -- a leftover verified photo is
+disk the video job needs.
+
+**The disk warning is the part that matters on a long job.** Released bytes sit
+in the Bin until it is emptied, so free space falls across the run even though
+every cycle releases. The script now warns at 30 GB as well as refusing at the
+15 GB floor, because emptying the Bin is a manual step and the job stalls until
+someone does it. At ~15 GB per chunk, expect to empty it roughly every three
+cycles.
+
+The previous photo-only version is kept at `cycle.sh.photo-only-backup`.
 
 `run-chunk.sh` (older, `sync`-only) still exists and still works; `cycle.sh`
 is the one that also uploads and releases.
