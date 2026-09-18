@@ -133,6 +133,25 @@ class Context:
 pass_context = click.make_pass_decorator(Context)
 
 
+def _destinations_in_play(uploads: list[Any], config: Config) -> str:
+    """The destinations this run actually writes to, not the configured default.
+
+    `config.cloud.destination` is the *photo* archive. Video goes to
+    `cloud.video_destination`, chosen per asset by `cloud.destination_for`, so
+    printing the config value labelled "destination" told the video job's whole
+    log it was uploading into the photo archive. The files were in the right
+    place and the ledger recorded the right paths; only the line a person reads
+    was wrong, which is the version of this that survives longest.
+    """
+    found = sorted({u.destination for u in uploads if u.destination})
+    if not found:
+        # Nothing planned, so nothing is in play. Say what would be used rather
+        # than inventing a destination this run did not write to.
+        default = cloud_engine.destination_for(config, None)
+        return f"{config.cloud.remote}:{default} (nothing to upload)"
+    return ", ".join(f"{config.cloud.remote}:{d}" for d in found)
+
+
 def _fail(out: Output, message: str, code: int = 1) -> None:
     out.error(message)
     sys.exit(code)
@@ -974,7 +993,7 @@ def cloud(ctx: Context, apply_: bool, **kwargs: Any) -> None:
     data: dict[str, Any] = {
         "applied": apply_,
         "remote": config.cloud.remote,
-        "destination": config.cloud.destination,
+        "destinations": sorted({u.destination for u in uploads if u.destination}),
         "planned": len(uploads),
         "plannedBytes": total_bytes,
     }
@@ -986,7 +1005,7 @@ def cloud(ctx: Context, apply_: bool, **kwargs: Any) -> None:
             ctx.out.pairs(
                 [
                     ("selector", selector.describe()),
-                    ("remote", f"{config.cloud.remote}:{config.cloud.destination}"),
+                    ("remote", _destinations_in_play(uploads, config)),
                     ("to upload", f"{len(uploads):,} files, {human_bytes(total_bytes)}"),
                 ]
             )
@@ -1034,7 +1053,7 @@ def cloud(ctx: Context, apply_: bool, **kwargs: Any) -> None:
         ctx.out.title("Cloud")
         ctx.out.pairs(
             [
-                ("destination", f"{config.cloud.remote}:{config.cloud.destination}"),
+                ("destination", _destinations_in_play(uploads, config)),
                 ("uploaded", f"{result.uploaded:,} files, {human_bytes(result.bytes_uploaded)}"),
                 ("verified by hash", f"{result.verified:,}"),
                 ("folders banked", f"{result.batches_done:,} of {result.batches:,}"),

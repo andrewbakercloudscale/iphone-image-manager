@@ -261,3 +261,57 @@ def test_sync_progress_shows_the_files_own_size_not_the_running_total(run, monke
     assert result.exit_code == 0
     assert "3.0 GB" not in result.output, "the running total leaked into the per-file line"
     assert "2.3 MB" in result.output, "the file's own size should be printed instead"
+
+
+def test_the_cloud_plan_names_the_archive_it_will_actually_write_to(tmp_path: Path) -> None:
+    """Video goes to its own remote archive. The summary used to say otherwise.
+
+    `config.cloud.destination` is the *photo* archive; video is chosen per asset
+    by `cloud.destination_for`. Printing the config value labelled "destination"
+    told the entire video job's log it was uploading into the photo archive.
+    The files went to the right place and the ledger recorded the right paths --
+    only the line a person reads was wrong, which is the version of this that
+    survives longest, because nothing ever contradicts it.
+    """
+    from iphone_image.config import load_config
+    from iphone_image.db.database import Database, utcnow
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "version: 1\n"
+        f'archive: {{local_path: "{tmp_path}/archive"}}\n'
+        f'database: {{path: "{tmp_path}/db.sqlite"}}\n'
+        f'logging: {{level: info, path: "{tmp_path}/logs"}}\n'
+        "cloud: {enabled: true, provider: google_drive, remote: gdrive, "
+        'destination: "Family Photos/Archive", video_destination: "Family Videos"}\n'
+    )
+    config = load_config(config_path)
+    db = Database(config.database.path).connect()
+    db.migrate()
+    db.conn.execute(
+        "INSERT INTO devices (id, udid, name, first_seen_at, last_seen_at, created_at, "
+        "updated_at) VALUES (1, 'lib', 'lib', ?, ?, ?, ?)",
+        (utcnow(), utcnow(), utcnow(), utcnow()),
+    )
+    video = config.archive.local_path / "camera" / "2022" / "01 Ladismith" / "IMG_1.MOV"
+    video.parent.mkdir(parents=True, exist_ok=True)
+    video.write_bytes(b"movie")
+    db.conn.execute(
+        "INSERT INTO assets (device_id, identity_key, filename, media_type, created_at_device, "
+        "size_bytes, source_bundle_id, present_on_phone, subtypes, local_path, local_status, "
+        "sha256, first_seen_at, last_seen_at, created_at, updated_at) "
+        "VALUES (1, 'v', 'IMG_1.MOV', 'VIDEO', '2022-01-04T10:00:00+00:00', 5, "
+        "'com.apple.camera', 1, '[]', ?, 'LOCAL_VERIFIED', 'abc', ?, ?, ?, ?)",
+        (str(video), utcnow(), utcnow(), utcnow(), utcnow()),
+    )
+    db.close()
+
+    result = CliRunner().invoke(
+        cli, ["--config", str(config_path), "cloud", "--type", "video"], catch_exceptions=False
+    )
+
+    assert result.exit_code == 0
+    assert "Family Videos" in result.output
+    assert "Family Photos" not in result.output, (
+        "the plan named the photo archive for a video upload"
+    )
