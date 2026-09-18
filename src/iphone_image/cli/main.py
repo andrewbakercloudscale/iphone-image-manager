@@ -16,6 +16,7 @@ from typing import Any
 import click
 
 from .. import __version__
+from .. import audit as audit_engine
 from .. import cloud as cloud_engine
 from .. import release as release_engine
 from .. import relocate as relocate_engine
@@ -678,6 +679,123 @@ def sync(ctx: Context, budget: str | None, apply_: bool, **kwargs: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
+# audit
+
+
+@cli.command()
+@click.option(
+    "--offline",
+    is_flag=True,
+    help="Only the ledger-against-itself checks. No network, instant.",
+)
+@pass_context
+def audit(ctx: Context, offline: bool) -> None:
+    """Check the ledger against what the cloud actually holds.
+
+    Every other check in this tool reads the ledger. This one does not trust
+    it. It lists the remote and compares hashes with every row that claims to
+    be verified there, which is the only way to find a CLOUD_VERIFIED row whose
+    file is missing, or whose bytes belong to a different photograph.
+
+    That has happened: on 2026-09-17 eight pairs of photographs shared one Drive
+    file each and all sixteen rows read CLOUD_VERIFIED. Nothing was lost, but
+    removal consults exactly that flag before deleting from the phone.
+
+    Run this before any removal pass. It exits non-zero on any disagreement.
+    """
+    config = ctx.config
+    db = ctx.database()
+    try:
+        conflict_report = audit_engine.conflicts(db)
+        remote_report = None
+        if not offline:
+            if not config.cloud.enabled:
+                _fail(ctx.out, "cloud backup is off, so there is no remote to audit")
+                return
+            try:
+                remote_report = audit_engine.remote(config, db)
+            except cloud_engine.CloudError as exc:
+                # An unavailable checker fails. It never waves the ledger through.
+                _fail(ctx.out, f"the remote could not be listed, so nothing was verified: {exc}")
+                return
+    finally:
+        db.close()
+
+    data: dict[str, Any] = {
+        "rowsExamined": conflict_report.rows_examined,
+        "conflicts": [
+            {"kind": c.kind, "detail": c.detail, "assetIds": c.asset_ids[:20]}
+            for c in conflict_report.conflicts
+        ],
+        "checksRun": conflict_report.ran,
+        "checksSkipped": conflict_report.skipped,
+    }
+    if remote_report is not None:
+        data.update(
+            {
+                "remoteFiles": remote_report.remote_files,
+                "claimedVerified": remote_report.claimed,
+                "matched": remote_report.matched,
+                "missing": remote_report.missing[:50],
+                "hashMismatch": remote_report.hash_mismatch[:50],
+                "unclaimedAtRemote": remote_report.unclaimed,
+                "unhashed": remote_report.unhashed,
+                "destinations": remote_report.destinations_listed,
+            }
+        )
+
+    def render() -> None:
+        ctx.out.title("Audit")
+        ctx.out.pairs(
+            [
+                ("ledger rows examined", f"{conflict_report.rows_examined:,}"),
+                ("consistency checks run", f"{len(conflict_report.ran)}"),
+            ]
+        )
+        for reason in conflict_report.skipped:
+            ctx.out.warn(f"a check did not run: {reason}")
+        if conflict_report.ok:
+            ctx.out.line("  ledger contradictions      none")
+        else:
+            ctx.out.line()
+            for conflict in conflict_report.conflicts[:20]:
+                ctx.out.line(f"    {conflict.kind}: {conflict.detail}", style="warn")
+            if len(conflict_report.conflicts) > 20:
+                extra = len(conflict_report.conflicts) - 20
+                ctx.out.line(f"    ... and {extra:,} more", style="muted")
+
+        if remote_report is None:
+            ctx.out.line()
+            ctx.out.warn("--offline: the remote was not asked what it holds.")
+            return
+
+        ctx.out.line()
+        ctx.out.pairs(
+            [
+                ("destinations listed", ", ".join(remote_report.destinations_listed)),
+                ("files at the remote", f"{remote_report.remote_files:,}"),
+                ("rows claiming verified", f"{remote_report.claimed:,}"),
+                ("matched by hash", f"{remote_report.matched:,}"),
+                ("missing at the remote", f"{len(remote_report.missing):,}"),
+                ("hash mismatch", f"{len(remote_report.hash_mismatch):,}"),
+                ("no hash reported", f"{remote_report.unhashed:,}"),
+                ("at the remote, unclaimed", f"{remote_report.unclaimed:,}"),
+            ]
+        )
+        for entry in (remote_report.missing + remote_report.hash_mismatch)[:20]:
+            ctx.out.line(f"    asset {entry['id']}: {entry['path']}", style="warn")
+        ctx.out.line()
+        if remote_report.ok and conflict_report.ok:
+            ctx.out.ok("every verified asset is at the remote with the hash the ledger records")
+        else:
+            ctx.out.line("  Do NOT run remove-from-iphone until this is resolved.", style="warn")
+
+    ctx.out.result(data, render)
+    if not conflict_report.ok or (remote_report is not None and not remote_report.ok):
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # relocate
 # ---------------------------------------------------------------------------
 
@@ -717,6 +835,8 @@ def relocate(ctx: Context, apply_: bool, show: int) -> None:
         "alreadyInPlace": preview.already_in_place,
         "planned": preview.planned,
         "missing": preview.missing,
+        "unnaming": preview.unnaming,
+        "cloudDesyncing": preview.desyncing,
         "bytes": sum(m.size_bytes for m in moves),
         "sample": [{"from": str(m.source), "to": str(m.destination)} for m in moves[:show]],
     }
@@ -754,6 +874,21 @@ def relocate(ctx: Context, apply_: bool, show: int) -> None:
                 ctx.out.warn(
                     f"{preview.missing:,} asset(s) are recorded as archived but their file "
                     f"is gone. relocate leaves them alone; the next sync fetches them again."
+                )
+            # Both of these refuse the run, so they belong in the preview rather
+            # than as a surprise at --apply.
+            if preview.unnaming:
+                ctx.out.warn(
+                    f"{preview.unnaming:,} move(s) would take a file out of a named folder "
+                    f"into a bare month. --apply will refuse: Photos is reporting fewer "
+                    f"places than when the archive was filed, which is a reason to wait."
+                )
+            if preview.desyncing:
+                ctx.out.warn(
+                    f"{preview.desyncing:,} move(s) are of files that already have a cloud "
+                    f"copy. relocate moves local files only, so the archive and the remote "
+                    f"would stop agreeing about where a photograph lives. --apply will "
+                    f"refuse."
                 )
             if not preview.planned:
                 ctx.out.ok("nothing to move, the archive already matches the configuration")

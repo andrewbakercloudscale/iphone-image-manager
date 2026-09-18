@@ -602,6 +602,72 @@ def check_cloud(config: Config) -> Check:
     return Check("cloud remote", PASS, f"{config.cloud.remote} ({config.cloud.provider})")
 
 
+def check_ledger_conflicts(config: Config) -> Check:
+    """Rows of the ledger that contradict each other.
+
+    Offline and instant, and it is the check that would have caught the
+    2026-09-17 collision on the day it happened: eight pairs of photographs
+    sharing one remote path each, every row reading CLOUD_VERIFIED. See
+    `audit.conflicts`. The full remote diff is `iphone-image audit`, which
+    costs a listing of the whole archive and so is not run from here.
+    """
+    from .audit import conflicts
+    from .db.database import Database
+
+    path = config.database.path
+    if not path.is_file():
+        return Check("ledger consistency", PASS, "no ledger yet, nothing to check")
+    try:
+        db = Database(path).connect()
+    except Exception as exc:
+        return Check(
+            "ledger consistency",
+            FAIL,
+            f"the ledger could not be opened: {exc}",
+            "A check that cannot run is not a pass. Fix the path in database.path.",
+        )
+    try:
+        report = conflicts(db)
+    finally:
+        db.close()
+
+    # The count is part of the result, not decoration: a check reporting OK
+    # over 0 rows has stopped covering anything and must not look identical to
+    # one that examined the whole ledger.
+    scope = (
+        f"{len(report.ran)} check(s) over {report.rows_examined:,} row(s)"
+        if report.rows_examined
+        else "0 rows -- the ledger is empty"
+    )
+    if report.skipped:
+        # An unavailable check is not a pass. Say which one and why.
+        return Check(
+            "ledger consistency",
+            WARN,
+            f"{len(report.skipped)} check(s) could not run, {scope}. {report.skipped[0]}",
+            "Run any command against the ledger to apply pending migrations, then re-run.",
+            {"skipped": report.skipped, "rowsExamined": report.rows_examined},
+        )
+    if report.ok:
+        return Check("ledger consistency", PASS, f"no contradictions, {scope}")
+    worst = report.conflicts[0]
+    return Check(
+        "ledger consistency",
+        FAIL,
+        f"{len(report.conflicts)} contradiction(s), {scope}. First: {worst.kind} -- {worst.detail}",
+        "Run: iphone-image audit. Do not run remove-from-iphone until this is "
+        "resolved: a duplicate cloud path means a row reads CLOUD_VERIFIED over "
+        "a file that belongs to a different photograph.",
+        {
+            "conflicts": [
+                {"kind": c.kind, "detail": c.detail, "assetIds": c.asset_ids[:20]}
+                for c in report.conflicts[:20]
+            ],
+            "rowsExamined": report.rows_examined,
+        },
+    )
+
+
 def check_logging(config: Config) -> Check:
     """Logs are the only record of what happened outside the ledger."""
     directory = config.logging.path
@@ -634,6 +700,7 @@ CHECKS: list[Callable[[Config], Check]] = [
     check_helper,
     check_photos_authorisation,
     check_cloud,
+    check_ledger_conflicts,
 ]
 
 

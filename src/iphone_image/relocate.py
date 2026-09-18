@@ -46,11 +46,39 @@ class Move:
     source: Path
     destination: Path
     size_bytes: int = 0
+    #: Where the cloud copy is, if there is one. Relocate moves local files and
+    #: nothing else, so an asset with a cloud copy cannot be re-filed without
+    #: the two disagreeing about where the photograph lives. See `desyncing`.
+    cloud_path: str = ""
 
 
 def _is_month_folder(folder: str) -> bool:
     """A bare month bucket like "11", or "09-12" for a span."""
     return bool(folder) and all(part.isdigit() for part in folder.split("-"))
+
+
+def desyncing(moves: list[Move]) -> int:
+    """Moves of assets that already have a cloud copy.
+
+    Relocate renames local files. It does not, and cannot cheaply, rename the
+    remote: `rclone` would have to move every object, and a half-finished
+    remote move is a worse state than the one being fixed. So a re-filed asset
+    keeps its old `cloud_path` and the archive and Drive stop agreeing about
+    where a photograph lives.
+
+    Nothing breaks the same day -- `release` re-checks the recorded
+    `cloud_path`, which is still correct -- which is precisely why this is
+    worth refusing rather than warning about. The damage is that the two
+    layouts silently diverge and every later reader has to know which one it is
+    looking at. `docs/SAFETY.md` makes the archive layout and the remote layout
+    the same statement; this is the only operation that can make that false.
+
+    The `unnaming` guard mentions cloud desync as one of its reasons. That
+    covered only plans that *removed* a name. Adding one -- the case that guard
+    explicitly always allows -- desyncs just as thoroughly, and 2026-09-17's
+    plan to re-file 8,590 files was blocked for the other reason entirely.
+    """
+    return sum(1 for move in moves if move.cloud_path)
 
 
 def unnaming(moves: list[Move]) -> int:
@@ -84,6 +112,7 @@ def unnaming(moves: list[Move]) -> int:
 class RelocateResult:
     examined: int = 0
     unnaming: int = 0
+    desyncing: int = 0
     already_in_place: int = 0
     planned: int = 0
     moved: int = 0
@@ -189,11 +218,13 @@ def plan(config: Config, db: Database) -> tuple[list[Move], RelocateResult]:
                 source=current,
                 destination=destination,
                 size_bytes=int(asset.get("size_bytes") or 0),
+                cloud_path=str(asset.get("cloud_path") or ""),
             )
         )
 
     result.planned = len(moves)
     result.unnaming = unnaming(moves)
+    result.desyncing = desyncing(moves)
     return moves, result
 
 
@@ -229,14 +260,17 @@ def run(
     *,
     db: Database | None = None,
     allow_unnaming: bool = False,
+    allow_cloud_desync: bool = False,
     on_move: Callable[[Move, RelocateResult], None] | None = None,
 ) -> RelocateResult:
-    """Execute the plan, unless it would take names away.
+    """Execute the plan, unless it would take names away or desync the cloud.
 
-    `allow_unnaming` is the deliberate override, and it is off by default
-    because the situation it guards is indistinguishable from normal input:
-    Photos simply reports fewer places than it did, and every folder the plan
-    proposes looks correct.
+    Both overrides are off by default because both situations are
+    indistinguishable from normal input. For `allow_unnaming`, Photos simply
+    reports fewer places than it did and every folder the plan proposes looks
+    correct. For `allow_cloud_desync`, the move itself succeeds and nothing
+    reports an error -- the archive and the remote just stop describing the
+    same layout, and no later run says so.
     """
     owned = db is None
     db = db or Database(config.database.path).connect()
@@ -256,6 +290,18 @@ def run(
                 f"  Cloud copies are already stored under the named paths, so renaming now "
                 f"would desync them. Wait for Photos to finish analysing, or pass "
                 f"allow_unnaming to override."
+            )
+        if result.desyncing and not allow_cloud_desync:
+            raise RelocateError(
+                f"{result.desyncing:,} file(s) in this plan already have a copy in the "
+                f"cloud, and relocate moves local files only.\n"
+                f"  Their cloud_path would keep pointing at the old layout, so the archive "
+                f"and the remote would stop agreeing about where a photograph lives. "
+                f"Nothing would report an error: release re-checks the recorded cloud_path, "
+                f"which is still correct.\n"
+                f"  Re-file before uploading, move the remote yourself and then re-run a "
+                f"verification, or pass allow_cloud_desync if you have decided the two "
+                f"layouts may differ."
             )
         if not moves:
             return result

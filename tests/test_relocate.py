@@ -346,3 +346,100 @@ def test_a_move_never_takes_the_name_a_released_asset_still_holds(
         "its upload would replace that asset's only cloud copy"
     )
     assert Path(mover["local_path"]).exists()
+
+
+# -- the cloud copy does not move ---------------------------------------------
+
+
+def test_re_filing_a_file_that_is_already_in_the_cloud_is_refused(
+    tmp_path: Path, ledger: Database
+) -> None:
+    """Relocate moves local files. Nothing moves the remote.
+
+    The move would succeed and report success. The archive and Drive would then
+    disagree about where the photograph lives, and no later run would say so --
+    `release` re-checks the recorded cloud_path, which is still correct.
+    """
+    _asset(
+        ledger,
+        tmp_path / "archive" / "2019" / "03" / "IMG_1.JPG",
+        identity_key="uploaded",
+        sha256="aaaaaaaaaaaaaaaa",
+        cloud_status="CLOUD_VERIFIED",
+        cloud_path="remote/2019/03/IMG_1.JPG",
+    )
+    config = _config(tmp_path, "{source}/{year}")
+
+    _moves, preview = plan(config, ledger)
+    assert preview.planned == 1
+    assert preview.desyncing == 1
+
+    with pytest.raises(relocate_engine.RelocateError, match="already have a copy in the cloud"):
+        run(config, db=ledger)
+
+    assert (tmp_path / "archive" / "2019" / "03" / "IMG_1.JPG").exists(), "it moved anyway"
+
+
+def test_an_asset_with_no_cloud_copy_still_relocates(tmp_path: Path, ledger: Database) -> None:
+    """The guard must not stop the ordinary case: re-file before uploading."""
+    _asset(
+        ledger,
+        tmp_path / "archive" / "2019" / "03" / "IMG_1.JPG",
+        identity_key="local only",
+        sha256="aaaaaaaaaaaaaaaa",
+    )
+    config = _config(tmp_path, "{source}/{year}")
+
+    result = run(config, db=ledger)
+
+    assert result.desyncing == 0
+    assert result.moved == 1 and result.failed == 0
+
+
+def test_the_override_exists_and_says_what_it_costs(tmp_path: Path, ledger: Database) -> None:
+    """A deliberate decision to let the two layouts differ is allowed, loudly."""
+    _asset(
+        ledger,
+        tmp_path / "archive" / "2019" / "03" / "IMG_1.JPG",
+        identity_key="uploaded",
+        sha256="aaaaaaaaaaaaaaaa",
+        cloud_status="CLOUD_VERIFIED",
+        cloud_path="remote/2019/03/IMG_1.JPG",
+    )
+    config = _config(tmp_path, "{source}/{year}")
+
+    result = run(config, db=ledger, allow_cloud_desync=True)
+
+    assert result.moved == 1
+    row = ledger.conn.execute("SELECT local_path, cloud_path FROM assets").fetchone()
+    assert "camera" in row["local_path"], "the local file moved"
+    assert row["cloud_path"] == "remote/2019/03/IMG_1.JPG", (
+        "the cloud path is unchanged, which is exactly the desync the guard names"
+    )
+
+
+def test_adding_a_place_name_desyncs_just_as_thoroughly_as_removing_one(
+    tmp_path: Path, ledger: Database
+) -> None:
+    """The unnaming guard always allows adding a name. That was the gap.
+
+    2026-09-17's blocked plan was blocked for the other reason; a plan that only
+    *added* names would have sailed through and desynced 8,590 uploaded files.
+    """
+    _asset(
+        ledger,
+        tmp_path / "archive" / "camera" / "2019" / "03" / "IMG_1.JPG",
+        identity_key="uploaded",
+        sha256="aaaaaaaaaaaaaaaa",
+        cloud_status="CLOUD_VERIFIED",
+        cloud_path="remote/2019/03/IMG_1.JPG",
+    )
+    config = _config(tmp_path, "{source}/{year}/{event}")
+
+    _moves, preview = plan(config, ledger)
+    # Whatever the event folder resolves to, this is not an un-naming move.
+    assert preview.unnaming == 0
+    if preview.planned:
+        assert preview.desyncing == preview.planned
+        with pytest.raises(relocate_engine.RelocateError, match="already have a copy in the cloud"):
+            run(config, db=ledger)
