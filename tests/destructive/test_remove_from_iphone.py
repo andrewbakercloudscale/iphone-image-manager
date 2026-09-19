@@ -164,6 +164,22 @@ def on_phone(
     return path, digest
 
 
+def released(config, db, key, relative, *, body=b"photo", **kw):
+    """An asset whose Mac copy was let go because Drive verified it.
+
+    The state 14,729 real camera photos were in on 2026-09-19: on the phone,
+    verified in the cloud, and no file on the Mac -- which is what `release`
+    is for, and which removal used to treat as "no verified local copy".
+    """
+    path, digest = on_phone(config, db, key, relative, body=body, **kw)
+    path.unlink()
+    db.conn.execute(
+        "UPDATE assets SET local_status = 'RELEASED', local_path = NULL WHERE identity_key = ?",
+        (key,),
+    )
+    return digest
+
+
 def plan(config, db, cloud: FakeCloud | None = None, **kw):
     return remove_engine.plan(
         config, db, Selector(), scan_id=SCAN, provider=cloud or FakeCloud(), **kw
@@ -306,6 +322,155 @@ def test_every_refusal_reaches_the_device_never(env) -> None:
 
     assert result.removed == 0
     assert helper.asked == [], "nothing may reach the library"
+
+
+# -- released assets: removable on the strength of the remote alone ------------
+#
+# The owner's decision on 2026-09-19, recorded in docs/SAFETY.md 1b: an asset
+# that was released from the Mac *because Drive verified it* may be removed from
+# the phone if Drive's hash is re-checked in the same invocation. It is narrow,
+# and every test below is a way it could quietly become wider.
+
+
+def test_a_released_asset_is_removable_on_a_fresh_remote_hash(env) -> None:
+    config, db = env
+    digest = released(config, db, "a", "2019/11/IMG_1.JPG")
+
+    eligible, result = plan(config, db, FakeCloud({"2019/11/IMG_1.JPG": digest}))
+
+    assert result.eligible == 1
+    [candidate] = eligible
+    assert candidate.local_path is None, "there is no Mac copy, and saying so is not a Path('')"
+    assert candidate.evidence["remote_hash_confirmed"] is True
+    assert candidate.evidence["local_hash_rechecked"] is False
+    assert candidate.evidence["basis"] == "remote_hash_only"
+
+
+def test_a_released_asset_is_still_refused_when_the_remote_lost_it(env) -> None:
+    """Without a Mac copy the remote is the ONLY evidence, so it cannot be wrong."""
+    config, db = env
+    released(config, db, "a", "2019/11/IMG_1.JPG")
+    eligible, result = plan(config, db, FakeCloud({}))
+    assert eligible == []
+    assert result.blocks == {"not at the remote right now": 1}
+
+
+def test_a_released_asset_is_still_refused_on_the_wrong_remote_hash(env) -> None:
+    """The 2026-09-17 collision, in the state where nothing else could catch it."""
+    config, db = env
+    released(config, db, "a", "2019/11/IMG_1.JPG")
+    eligible, result = plan(config, db, FakeCloud({"2019/11/IMG_1.JPG": "0" * 64}))
+    assert eligible == []
+    assert result.blocks == {"the remote copy does not match the recorded hash": 1}
+
+
+def test_a_remote_that_reports_no_hash_is_not_a_match_for_a_ledger_with_none(env) -> None:
+    """Empty equals empty, and an unanswered question is not a yes.
+
+    With the Mac copy gone, a missing ledger hash and a missing remote hash
+    would compare equal and pass. Neither side has said anything.
+
+    Two guards cover this -- one on the ledger side in `plan` step 2, one on the
+    remote side in step 6 -- and either alone is enough, so removing just one
+    changes nothing and no test could tell. Removing *both* is what lets
+    `"" == ""` through, and that is the mutation this fails on. They are
+    deliberately redundant: the ledger-side one gives the clearer reason, the
+    remote-side one holds if a future change reaches step 6 by another road.
+    """
+    config, db = env
+    released(config, db, "a", "2019/11/IMG_1.JPG")
+    db.conn.execute("UPDATE assets SET sha256 = NULL")
+    eligible, result = plan(config, db, FakeCloud({"2019/11/IMG_1.JPG": ""}))
+    assert eligible == []
+    assert result.eligible == 0
+
+
+def test_a_released_asset_with_no_cloud_copy_is_never_removed(env) -> None:
+    """RELEASED alone is not the evidence. Drive holding it is."""
+    config, db = env
+    released(config, db, "a", "2019/11/IMG_1.JPG", cloud=False)
+    eligible, result = plan(config, db, FakeCloud({}))
+    assert eligible == []
+    assert result.blocks == {"not verified in the cloud": 1}
+
+
+def test_only_released_assets_get_the_exception_not_any_asset_missing_a_file(env) -> None:
+    """A LOCAL_VERIFIED row whose file vanished is a surprise, not a release."""
+    config, db = env
+    path, digest = on_phone(config, db, "a", "2019/11/IMG_1.JPG")
+    path.unlink()
+
+    eligible, result = plan(config, db, FakeCloud({"2019/11/IMG_1.JPG": digest}))
+
+    assert eligible == []
+    assert result.blocks == {"the local copy is missing": 1}
+
+
+def test_a_never_fetched_asset_gets_no_exception(env) -> None:
+    config, db = env
+    _path, digest = on_phone(config, db, "a", "2019/11/IMG_1.JPG", local_verified=False)
+    eligible, result = plan(config, db, FakeCloud({"2019/11/IMG_1.JPG": digest}))
+    assert eligible == []
+    assert result.blocks == {"no verified local copy": 1}
+
+
+def test_the_exception_exists_only_under_the_cloud_policy(env) -> None:
+    """`local_verified` promises a Mac copy, and a released asset has none."""
+    config, db = env
+    config = config.model_copy(
+        update={
+            "remove_from_iphone": config.remove_from_iphone.model_copy(
+                update={"policy": "local_verified"}
+            )
+        }
+    )
+    digest = released(config, db, "a", "2019/11/IMG_1.JPG")
+    eligible, result = plan(config, db, FakeCloud({"2019/11/IMG_1.JPG": digest}))
+    assert eligible == []
+    assert result.blocks == {"no verified local copy": 1}
+
+
+def test_a_released_asset_that_is_a_suspected_proxy_is_still_never_removed(env) -> None:
+    """The exception waives the Mac copy. It waives nothing else."""
+    config, db = env
+    released(config, db, "a", "2019/11/IMG_1.JPG", proxy=0.9)
+    eligible, _result = plan(config, db, FakeCloud({"2019/11/IMG_1.JPG": "x"}))
+    assert eligible == []
+
+
+def test_a_released_asset_missing_from_the_fresh_scan_is_never_removed(env) -> None:
+    config, db = env
+    digest = released(config, db, "a", "2019/11/IMG_1.JPG", scan_id=SCAN - 1)
+    eligible, result = plan(config, db, FakeCloud({"2019/11/IMG_1.JPG": digest}))
+    assert eligible == []
+    assert result.blocks == {"not present in the scan taken just now": 1}
+
+
+def test_running_a_released_removal_deletes_it_and_touches_no_local_file(env) -> None:
+    """End to end, and nothing on the Mac is asked about -- there is nothing there."""
+    config, db = env
+    digest = released(config, db, "a", "2019/11/IMG_1.JPG")
+    remote = {"2019/11/IMG_1.JPG": digest}
+    helper = FakeHelper()
+
+    result = remove_engine.run(
+        config,
+        Selector(),
+        provider=FakeCloud(remote),
+        db=db,
+        helper=helper,
+        scanner=lambda _config: ScanResult(scan_id=SCAN),
+    )
+
+    assert result.removed == 1
+    assert helper.asked == ["a/L0/001"]
+    row = db.conn.execute(
+        "SELECT present_on_phone, removed_from_phone_at, local_status FROM assets"
+    ).fetchone()
+    assert (row[0], row[2]) == (0, "RELEASED")
+    assert row[1] is not None
+    event = json.loads(db.conn.execute("SELECT evidence FROM deletion_events").fetchone()[0])
+    assert event["basis"] == "remote_hash_only", "the journal must say why this was allowed"
 
 
 # -- what it does, and what it records --------------------------------------

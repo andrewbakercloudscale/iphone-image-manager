@@ -74,7 +74,9 @@ class Candidate:
     asset_id: int
     local_identifier: str
     filename: str
-    local_path: Path
+    #: None when the Mac copy was released on purpose. Never `Path('')`, which
+    #: is the current directory and would look like a file that exists.
+    local_path: Path | None
     sha256: str
     size_bytes: int
     cloud_path: str
@@ -218,8 +220,36 @@ def plan(
             result.block(asset, "already recorded as removed")
             continue
 
-        # 2. A local copy that exists and still hashes to what we recorded.
-        if config.safety.require_local_verification:
+        # 2. A local copy that exists and still hashes to what we recorded --
+        #    or, for one deliberately released, the cloud copy and nothing else.
+        #
+        #    docs/SAFETY.md 1b required a Mac copy with "no exceptions", and the
+        #    owner made one on 2026-09-19. The cycle releases the Mac copy the
+        #    moment Drive verifies it (the Mac has no room to hold a library), so
+        #    14,729 old camera photos were on the phone, verified in Drive, and
+        #    unremovable: the tool cannot fetch a RELEASED asset again, and
+        #    re-downloading 45 GiB to satisfy a check the release step had
+        #    already made redundant was the cost the exception avoids.
+        #
+        #    It is narrow on purpose, and each edge is a test:
+        #      - only the `cloud_verified` policy, since `local_verified` promises
+        #        a Mac copy and this asset has none;
+        #      - only RELEASED, never a LOCAL_VERIFIED row whose file vanished,
+        #        which is a surprise rather than a decision;
+        #      - and it makes the remote the *only* evidence, so step 6 below is
+        #        no longer a second opinion. It cannot be skipped, guessed at, or
+        #        satisfied by an empty hash.
+        released_on_cloud_evidence = (
+            policy == RemovalPolicy.CLOUD_VERIFIED and asset.get("local_status") == "RELEASED"
+        )
+        if released_on_cloud_evidence:
+            if not asset.get("sha256"):
+                # With the Mac copy gone the ledger hash is all there is to
+                # compare the remote against. Without it nothing can be proved.
+                result.block(asset, "no hash recorded, so the remote copy cannot be compared")
+                continue
+            local = None
+        elif config.safety.require_local_verification:
             if asset.get("local_status") != "LOCAL_VERIFIED":
                 result.block(asset, "no verified local copy")
                 continue
@@ -242,7 +272,7 @@ def plan(
                 result.block(asset, "the local copy no longer matches its recorded hash")
                 continue
         else:
-            local = Path(asset.get("local_path") or "")
+            local = Path(asset["local_path"]) if asset.get("local_path") else None
 
         # 3. Proxy suspicion. The selector already excludes these and cannot be
         #    told not to, so reaching here means something changed underneath.
@@ -281,7 +311,15 @@ def plan(
                 evidence={
                     "scan_id": scan_id,
                     "local_status": asset.get("local_status"),
-                    "local_hash_rechecked": bool(config.safety.require_local_verification),
+                    "local_hash_rechecked": bool(
+                        config.safety.require_local_verification and not released_on_cloud_evidence
+                    ),
+                    # Written into the journal so that a deletion made without a
+                    # Mac copy says so, and why it was allowed, for as long as
+                    # the ledger exists.
+                    "basis": (
+                        "remote_hash_only" if released_on_cloud_evidence else "local_and_remote"
+                    ),
                     "cloud_status": asset.get("cloud_status"),
                     "policy": str(policy),
                 },
@@ -313,6 +351,11 @@ def plan(
         asset_row = {"id": candidate.asset_id, "filename": candidate.filename}
         if digest is None:
             result.block(asset_row, "not at the remote right now")
+            continue
+        if not digest:
+            # Empty is not a hash. Without a Mac copy this is the only evidence
+            # there is, and "" == "" would otherwise read as agreement.
+            result.block(asset_row, "the remote reported no hash to compare")
             continue
         if digest != candidate.sha256:
             result.block(asset_row, "the remote copy does not match the recorded hash")
