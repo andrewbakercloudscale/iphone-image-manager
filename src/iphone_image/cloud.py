@@ -254,6 +254,7 @@ class RcloneProvider:
         stats_interval: str = DEFAULT_STATS_INTERVAL,
         batch_timeout: float = 7200,
         stall_timeout: float = 900,
+        no_progress_timeout: float = 1800,
         tps_limit: float = 0.0,
     ) -> None:
         self.remote = remote.rstrip(":")
@@ -265,6 +266,7 @@ class RcloneProvider:
         self.stats_interval = stats_interval
         self.batch_timeout = batch_timeout
         self.stall_timeout = stall_timeout
+        self.no_progress_timeout = no_progress_timeout
         self.tps_limit = tps_limit
         self.last_transfer_bytes: int | None = None
 
@@ -287,7 +289,14 @@ class RcloneProvider:
                 f"Create one with: rclone config"
             )
 
-    def _run(self, args: list[str], *, timeout: float, stall_timeout: float | None = None) -> str:
+    def _run(
+        self,
+        args: list[str],
+        *,
+        timeout: float,
+        stall_timeout: float | None = None,
+        no_progress_timeout: float | None = None,
+    ) -> str:
         """Run rclone and return its stdout, reporting stderr as it arrives.
 
         `capture_output` hands back stderr only once the process has exited,
@@ -306,6 +315,15 @@ class RcloneProvider:
         which cannot tell a slow transfer from a dead one and killed a real
         upload at 62% for the crime of being throttled. Silence is the signal:
         rclone is asked for stats every 30s and prints them even at 0 B/s.
+
+        Silence turned out not to be the *only* signal. `no_progress_timeout`
+        kills a process that is still talking and still has its byte count
+        frozen -- the state a real run sat in for 14h45m at 1.732 GiB after a
+        night of the laptop sleeping. It arms itself only once a byte count has
+        actually been parsed, because a stats format we cannot read would
+        otherwise look exactly like a transfer moving nothing, and killing
+        healthy uploads over an unreadable line is the same error in the other
+        direction. When it cannot arm, it says so rather than disappearing.
         """
         command = [self.binary, *args, *self.extra]
         log.debug("running %s", " ".join(command[:6]))
@@ -326,9 +344,16 @@ class RcloneProvider:
             return "..." + joined[-self.DIAGNOSTIC_CHARS :]
 
         last_output = time.monotonic()
+        last_progress = time.monotonic()
+        #: The high-water mark of bytes rclone says it has sent. Compared
+        #: rather than assigned: rclone's total can drop when it discovers more
+        #: files mid-run, and treating that as movement would re-arm the clock
+        #: on a transfer going nowhere.
+        best_sent = -1
+        armed = False
 
         def drain(stream: IO[str]) -> None:
-            nonlocal last_output
+            nonlocal last_output, last_progress, best_sent, armed
             for raw in stream:
                 line = raw.rstrip("\n")
                 if not line:
@@ -337,6 +362,10 @@ class RcloneProvider:
                 sent = _transferred_bytes(line)
                 if sent is not None:
                     self.last_transfer_bytes = sent
+                    armed = True
+                    if sent > best_sent:
+                        best_sent = sent
+                        last_progress = time.monotonic()
                 tail.append(line)
                 if self.on_progress:
                     self.on_progress(line)
@@ -354,7 +383,14 @@ class RcloneProvider:
             pump = threading.Thread(target=drain, args=(process.stderr,), daemon=True)
             pump.start()
             try:
-                code = self._wait(process, timeout, stall_timeout, lambda: last_output)
+                code = self._wait(
+                    process,
+                    timeout,
+                    stall_timeout,
+                    lambda: last_output,
+                    no_progress_timeout,
+                    lambda: last_progress if armed else None,
+                )
             except _Expired as expiry:
                 process.kill()
                 process.wait()
@@ -378,21 +414,45 @@ class RcloneProvider:
         timeout: float,
         stall_timeout: float | None,
         last_output: Callable[[], float],
+        no_progress_timeout: float | None = None,
+        last_progress: Callable[[], float | None] | None = None,
     ) -> int:
-        """Wait for rclone, watching both the clock and its silence."""
+        """Wait for rclone, watching the clock, its silence, and its progress.
+
+        Three different deaths, and each needs its own question. Running too
+        long is not the same as going quiet, and going quiet is not the same as
+        talking steadily while moving nothing.
+        """
         deadline = time.monotonic() + timeout
+        # Look up often enough to enforce the shortest deadline in play. A
+        # fixed 5s tick means a 1s timeout is really a 5s one, which is only
+        # invisible because production timeouts are 900s and 1800s -- the
+        # tick was silently the real threshold for anything shorter.
+        tick = _WAIT_TICK
+        for limit in (stall_timeout, no_progress_timeout):
+            if limit is not None:
+                tick = min(tick, max(limit / 4, 0.05))
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise _Expired(f"did not finish within {timeout:.0f}s")
             try:
-                return process.wait(timeout=min(remaining, _WAIT_TICK))
+                return process.wait(timeout=min(remaining, tick))
             except subprocess.TimeoutExpired:
                 pass
             if stall_timeout is not None:
                 silent = time.monotonic() - last_output()
                 if silent >= stall_timeout:
                     raise _Expired(f"said nothing for {silent:.0f}s")
+            if no_progress_timeout is not None and last_progress is not None:
+                since = last_progress()
+                # None means no byte count has ever been parsed, so there is
+                # nothing to compare and the check stays disarmed rather than
+                # guessing that an unreadable stats line means a dead transfer.
+                if since is not None:
+                    frozen = time.monotonic() - since
+                    if frozen >= no_progress_timeout:
+                        raise _Expired(f"kept talking but moved no bytes for {frozen:.0f}s")
 
     def upload(self, root: Path, relatives: list[str], destination: str) -> None:
         # Cleared per call: a stale figure from the previous folder would be
@@ -437,6 +497,7 @@ class RcloneProvider:
                 ],
                 timeout=self.batch_timeout,
                 stall_timeout=self.stall_timeout,
+                no_progress_timeout=self.no_progress_timeout,
             )
         finally:
             Path(listing).unlink(missing_ok=True)
@@ -575,6 +636,7 @@ def run(
         on_progress=note,
         batch_timeout=config.cloud.batch_timeout_seconds,
         stall_timeout=config.cloud.stall_timeout_seconds,
+        no_progress_timeout=config.cloud.no_progress_timeout_seconds,
         tps_limit=config.cloud.tps_limit,
     )
     provider.check()

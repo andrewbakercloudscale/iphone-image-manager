@@ -492,6 +492,106 @@ def test_a_slow_transfer_that_keeps_talking_is_left_alone(tmp_path: Path) -> Non
     assert len(seen) == 6, "it talked the whole way through and was not killed"
 
 
+def test_a_transfer_that_talks_but_moves_nothing_is_killed(tmp_path: Path) -> None:
+    """The third death, found the expensive way on 2026-09-18.
+
+    After a night of the laptop sleeping, rclone stayed alive printing a stats
+    line every 30 seconds with its byte count frozen at 1.732 GiB -- for
+    14h45m. It was never silent, so `stall_timeout` never fired.
+    `batch_timeout` did not save it either: `time.monotonic()` does not advance
+    while macOS sleeps, so 14 hours of wall clock was well under its two.
+    """
+    binary = _fake_rclone(
+        tmp_path,
+        "i=0\nwhile [ $i -lt 40 ]; do\n"
+        # The byte count never moves. Everything else does.
+        '  echo "NOTICE:     1.732 GiB / 5.000 GiB, 34%, $i KiB/s, ETA 9h" >&2\n'
+        "  sleep 0.1\n  i=$((i+1))\ndone\nexit 0\n",
+    )
+    provider = cloud_engine.RcloneProvider("gdrive", binary=binary)
+
+    with pytest.raises(cloud_engine.CloudError, match="moved no bytes for") as caught:
+        provider._run(["copy", "x"], timeout=3600, stall_timeout=600, no_progress_timeout=1)
+    assert "1.732 GiB" in str(caught.value)
+
+
+def test_a_slow_transfer_that_is_still_moving_is_left_alone(tmp_path: Path) -> None:
+    """The floor is about zero progress, never slow progress.
+
+    4 KiB/s is working. The cap that killed a real upload at 62% for being
+    throttled is the mistake this must not reintroduce in a new costume.
+    """
+    binary = _fake_rclone(
+        tmp_path,
+        "i=1\nwhile [ $i -lt 12 ]; do\n"
+        '  echo "NOTICE:     $i.000 KiB / 5.000 GiB, 0%, 4 KiB/s, ETA 9h" >&2\n'
+        "  sleep 0.1\n  i=$((i+1))\ndone\nexit 0\n",
+    )
+    seen: list[str] = []
+    provider = cloud_engine.RcloneProvider("gdrive", binary=binary, on_progress=seen.append)
+
+    provider._run(["copy", "x"], timeout=3600, stall_timeout=600, no_progress_timeout=0.4)
+    assert len(seen) == 11, "a transfer that crept forward the whole way was killed"
+
+
+def test_a_total_that_shrinks_is_not_treated_as_progress(tmp_path: Path) -> None:
+    """rclone's denominator grows as it discovers files; the numerator can dip.
+
+    Comparing against a high-water mark rather than the previous line keeps a
+    frozen transfer frozen. Assigning instead of comparing would re-arm the
+    clock on every wobble and the check would never fire.
+    """
+    binary = _fake_rclone(
+        tmp_path,
+        # Long enough to outlive a wait tick: the check is only consulted once
+        # `process.wait` has timed out, so a fake that exits first proves
+        # nothing either way.
+        "i=0\nwhile [ $i -lt 40 ]; do\n"
+        "  if [ $((i % 2)) -eq 0 ]; then n=1.732; else n=1.700; fi\n"
+        '  echo "NOTICE:     $n GiB / 5.000 GiB, 34%, 0 B/s, ETA -" >&2\n'
+        "  sleep 0.1\n  i=$((i+1))\ndone\nexit 0\n",
+    )
+    provider = cloud_engine.RcloneProvider("gdrive", binary=binary)
+
+    with pytest.raises(cloud_engine.CloudError, match="moved no bytes for"):
+        provider._run(["copy", "x"], timeout=3600, stall_timeout=600, no_progress_timeout=1)
+
+
+def test_an_unreadable_stats_line_disarms_the_check_rather_than_killing(tmp_path: Path) -> None:
+    """Never confuse "we cannot read it" with "it is not moving".
+
+    If rclone's stats format changes, nothing parses, and a check that treated
+    that as zero progress would kill every healthy upload. It stays disarmed
+    and `stall_timeout` remains the backstop -- the safe direction.
+    """
+    binary = _fake_rclone(
+        tmp_path,
+        "i=0\nwhile [ $i -lt 10 ]; do\n"
+        '  echo "NOTICE: transferring, nothing here parses as a byte count" >&2\n'
+        "  sleep 0.1\n  i=$((i+1))\ndone\nexit 0\n",
+    )
+    provider = cloud_engine.RcloneProvider("gdrive", binary=binary)
+
+    provider._run(["copy", "x"], timeout=3600, stall_timeout=600, no_progress_timeout=0.2)
+
+
+def test_the_upload_passes_the_progress_floor_through(tmp_path: Path) -> None:
+    """A setting the engine never hands to the runner is a setting that does nothing."""
+    binary = _fake_rclone(
+        tmp_path,
+        "i=0\nwhile [ $i -lt 40 ]; do\n"
+        '  echo "NOTICE:     1.732 GiB / 5.000 GiB, 34%, 0 B/s, ETA -" >&2\n'
+        "  sleep 0.1\n  i=$((i+1))\ndone\nexit 0\n",
+    )
+    provider = cloud_engine.RcloneProvider(
+        "gdrive", binary=binary, batch_timeout=3600, stall_timeout=600, no_progress_timeout=1
+    )
+    (tmp_path / "root").mkdir()
+
+    with pytest.raises(cloud_engine.CloudError, match="moved no bytes for"):
+        provider.upload(tmp_path / "root", ["a.JPG"], "Dest")
+
+
 # ---------------------------------------------------------------------------
 # Rates that measure what they claim to
 #

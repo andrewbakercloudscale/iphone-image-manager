@@ -200,6 +200,21 @@ class CloudConfig(Strict):
     #: rather than a slow one. Being throttled still prints stats.
     stall_timeout_seconds: int = Field(default=900, ge=60)
 
+    #: Kill a transfer that is still talking but has moved no bytes at all for
+    #: this long. `stall_timeout_seconds` watches for silence, and on
+    #: 2026-09-18 that turned out not to be the only way a transfer dies: after
+    #: a night of the laptop sleeping, rclone stayed alive printing a stats
+    #: line every 30s with its byte count frozen at 1.732 GiB, for 14h45m. It
+    #: was never silent, so nothing caught it, and `batch_timeout_seconds` did
+    #: not fire either because `time.monotonic()` does not advance while macOS
+    #: sleeps -- 14 hours of wall clock was well under its two.
+    #:
+    #: The threshold is about *zero* progress, never slow progress. A throttled
+    #: transfer moving 4 KiB/s is working and must be left alone; the earlier
+    #: cap that killed a real upload at 62% for being slow is the mistake this
+    #: must not repeat. Half an hour without a single byte is not slow.
+    no_progress_timeout_seconds: int = Field(default=1800, ge=60)
+
     #: rclone transactions per second, 0 to let rclone pace itself. Google
     #: Drive answered `rateLimitExceeded` after six hours at 16 transfers and
     #: the throughput fell sixfold, so the knob is here -- but the default is
