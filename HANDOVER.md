@@ -128,6 +128,82 @@ ledger cannot verify the ledger.**
 
 ---
 
+## 3b. 2026-09-19: what changed since the section above was written
+
+Read this before section 4. Four things happened, and one of them reversed a
+rule this document called absolute.
+
+**1. Deletion is gated on Google Drive, not on the Mac.** `docs/SAFETY.md` 1b
+said nothing leaves the phone that is not already on the Mac, "no exceptions".
+That stopped being achievable by design: the cycle releases the Mac copy the
+moment Drive verifies it, so all 14,729 camera photos older than a year (45.5
+GiB) were on the phone, verified in Drive, and unremovable -- and the tool cannot
+fetch a RELEASED asset again. The owner's rule, verbatim: **"the deletion should
+require gdrive verification, not mac verification."** Under `cloud_verified` the
+Drive hash is re-read in the same invocation and must match the ledger; the Mac
+copy is not consulted at all, and a perfect Mac copy cannot vouch for a wrong
+Drive one (both directions are tests, mutation-checked). `local_verified` keeps
+its meaning. Every deletion's journal evidence says `"basis": "remote_hash_only"`.
+Commits `5a4366c`, `34e18a7`. SAFETY.md 1b is rewritten and quotes the owner.
+
+**2. The first real removal of the older photos.** After a clean `audit`
+(23,301 verified rows, 0 missing, 0 mismatched) the plan was:
+
+```
+scan #9                        assets examined   14,729
+                               safe to remove    13,013   42.7 GB
+                               blocked            1,716
+                                  1,266  flagged as a suspected iCloud proxy
+                                    436  Live Photo whose motion half is not archived
+                                     14  burst with unarchived frames
+```
+
+Applied with `--confirm "remove 13013 photos from my iphone"`; the outcome is in
+the run's own output, not repeated here. **The 1,716 blocked are a to-do, not a
+verdict**: the 436 Live Photos need their `.MOV` halves archived (the same 528-
+photo problem section 3 recorded), and the 1,266 proxies can never be removed and
+are backed up like anything else.
+
+**3. Screenshots have a destination.** `cloud.screenshot_destination` sends the
+screenshot channel to `.../Andrew iPhone Archive/screenshots`, nested inside the
+photo archive as the owner asked, and files them `<year>/<month>/`. 11,312
+screenshots are older than a year (12.8 GiB, one chunk, ~1.3 h to fetch); 2,899
+of them are suspected proxies. Routing is by *channel*, not media type, because a
+screenshot is a PHOTO by type. Nesting is where this can fail silently, so three
+places are pinned by tests: `split_cloud_path` matches longest-first;
+`backfill_archive_claims` used to iterate a *set* of destinations, whose order is
+arbitrary, and would strip the parent prefix first; and `audit.remote` excludes a
+parent's nested files so each screenshot is not counted twice. Commit `8b76cd2`.
+It runs automatically after the video job (`~/.iphone-image/after-video.sh`).
+
+**4. The video job was killed by a sleeping laptop, and the tool could not tell.**
+On battery `caffeinate` does not prevent system sleep (`PreventSystemSleep 0`,
+19 "Maintenance Sleep" events overnight). rclone stayed alive printing stats every
+30 s with its byte count frozen at 1.732 GiB for **14h45m**. `stall_timeout`
+watches for silence and it was never silent; `batch_timeout` (2 h) did not fire
+because `time.monotonic()` does not advance while macOS sleeps. **`no_progress_
+timeout_seconds` (default 1800) now kills a process that is talking but has moved
+no bytes** -- zero progress only, never slow progress, armed only once a byte
+count has parsed, compared against a high-water mark so rclone's dipping
+numerator cannot re-arm it. Commit `0f7789c`. **Plug the Mac in for any long job.**
+
+Also fixed on the way: the cloud summary printed the *photo* destination for
+every video upload (`6f0d1aa`, display only, ledger was right); and `cycle.sh`'s
+`to_fetch` counted only `DISCOVERED`, so a run whose last stragglers were FAILED
+would report "nothing left to fetch" and never retry them (fixed in the new
+`cycle.sh`; **the video job started before the fix and runs the old copy**, so
+run `sync --source camera --type video --apply` once when it finishes).
+
+### The video job, as it stands
+
+Started 2026-09-18 10:56, restarted 2026-09-19 08:44 after the overnight sleep.
+Measured end to end, chunk 1 took 2h09m; the first restart cycle took 5h37m
+because it also cleared a 167-video backlog. `~/.iphone-image/cycle.sh video 40`.
+Log: `~/.iphone-image/cycle.log` (the previous one is
+`cycle.log.through-2026-09-19-0800`). Old script versions are kept next to it.
+
+---
+
 ## 4. What to do next, in order
 
 Both section-8 defects are fixed and the ledger is repaired. What is left:
@@ -155,12 +231,26 @@ the first time it has actually been true of 13 GB of photographs, and it is why
 3. **Decide what to do about screenshots, WhatsApp, and screen recordings**,
    section 9 -- 74,127 items / 278 GB have no plan at all and are outside the
    12-month camera-only pipeline that exists today.
-4. **A second, larger removal pass** is now realistic: with the whole camera
-   roll in Drive, `remove-from-iphone --source camera --older-than 1y` plans
-   against **14,897 photos / 45.7 GiB** (measured with the real selector, not
-   the ~15,000 estimated yesterday). Not run -- deliberately left for the user
-   to authorise, per SAFETY section 3. **Run `audit` first, every time.** 8b is
-   exactly the defect this pass turns into permanent loss.
+4. **The second removal pass ran** (section 3b): 13,013 old camera photos, on
+   Drive evidence alone. What remains from it: **436 Live Photos** whose motion
+   half was never archived (a photo archived as the still only is not
+   removable, and this is the 528-photo problem from 09-17 again), and **14
+   bursts**. Neither is a verdict -- archive the missing halves and they become
+   eligible. The 1,266 suspected proxies can never be removed.
+5. **When the video job finishes:** run `sync --source camera --type video
+   --apply` once (its old script never retries FAILED stragglers), then
+   `iphone-image audit`, then `remove-from-iphone --source camera --type video
+   --older-than 1y` for the ~1,525 old videos (146.6 GiB). Same rule, same typed
+   phrase, same macOS dialog.
+6. **When the screenshot job finishes** (it starts itself behind the video job):
+   `audit`, then `remove-from-iphone --source screenshot --older-than 1y`. Expect
+   ~8,400 of the 11,312 to be removable; 2,899 are suspected proxies.
+7. **Drive object IDs are not stored.** `assets.cloud_path` records the full
+   Drive path, verification time and hash for all 23,301 verified assets, but
+   `cloud_objects` -- which has an `object_id` column -- is empty, and `rclone
+   lsjson` already returns each file's ID. Populating it would make a record
+   survive a rename or move in Drive and let a row link straight to its file.
+   Not done; the path is what every verb reads today.
 
 ---
 
@@ -195,7 +285,8 @@ Selector: `--source --type --older-than --newer-than --year --min-size
 **The unattended cycle:**
 
 ```bash
-~/.iphone-image/cycle.sh [photo|video] [cycles]     # defaults: photo, 12
+~/.iphone-image/cycle.sh [photo|video] [cycles] [source] [older-than]   # defaults: photo 12 camera
+RELEASE=0 ~/.iphone-image/cycle.sh ...              # hold the Mac copy; nothing needs it now (see 3b)
 ~/.iphone-image/cycle.sh video 25                   # the video job, started 2026-09-18
 ```
 
@@ -236,7 +327,7 @@ chunking:
 
 ---
 
-## 6. The video job -- measured, not started
+## 6. The video job -- RUNNING since 2026-09-18 (see 3b); measurements below are the pre-flight
 
 ```
 camera video            1,823 files    181.1 GB
@@ -586,7 +677,7 @@ refusals now appear in the plan preview rather than as a surprise at `--apply`.
 
 ---
 
-## 9. What still has no plan
+## 9. What still has no plan (screenshots now do -- see 3b; WhatsApp and screen recordings do not)
 
 ```
 still on the phone, no upload/delete pipeline exists for any of these:
