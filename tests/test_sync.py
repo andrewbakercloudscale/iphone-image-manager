@@ -691,3 +691,35 @@ def test_a_backfilled_claim_and_a_fetched_claim_are_the_same_kind_of_string(env)
         f"a backfilled claim ({backfilled}) and a fetched claim ({fetched}) "
         f"describe the same folder differently, so neither can ever match the other"
     )
+
+
+def test_the_backfill_strips_the_nested_destination_not_its_parent(env) -> None:
+    """Screenshots live inside the photo archive, so prefix order decides the claim.
+
+    The backfill used to iterate a *set* of {photo, video} destinations. With a
+    destination nested in another, arbitrary order can strip the parent prefix
+    first and leave `screenshots/` glued to the front of the claim -- a claim
+    for a folder that does not exist, which then protects nothing.
+    """
+    config, db = env
+    parent = "Family Photos/Andrew iPhone Archive"
+    config = config.model_copy(
+        update={
+            "organization": config.organization.model_copy(
+                update={"pattern": "{source}/{year}/{event}"}
+            ),
+            "cloud": config.cloud.model_copy(
+                update={"destination": parent, "screenshot_destination": f"{parent}/screenshots"}
+            ),
+        }
+    )
+    add_asset(db, "s", size=MB, filename="IMG_1.PNG", source="com.apple.springboard")
+    db.conn.execute(
+        "UPDATE assets SET local_status = 'RELEASED', cloud_status = 'CLOUD_VERIFIED', "
+        "cloud_path = ?, archive_claim = NULL",
+        (f"{parent}/screenshots/2021/07/IMG_1.PNG",),
+    )
+
+    assert sync_engine.backfill_archive_claims(config, db) == 1
+    claim = db.conn.execute("SELECT archive_claim FROM assets").fetchone()["archive_claim"]
+    assert claim == str(Path("screenshot") / "2021" / "07" / "IMG_1.PNG"), claim

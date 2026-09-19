@@ -777,3 +777,83 @@ def test_an_asset_may_still_be_uploaded_to_the_path_it_already_owns(env) -> None
     assert [u.relative for u in cloud_engine.plan(config, Selector(), db)] == [
         "2020/01-12 Home/IMG_0083.HEIC"
     ]
+
+
+# -- screenshots get their own folder, inside the photo archive ---------------
+
+PHOTOS = "Family Photos/Andrew iPhone Archive"
+SHOTS = "Family Photos/Andrew iPhone Archive/screenshots"
+
+
+def _with_screenshots(config: Config) -> Config:
+    return config.model_copy(
+        update={
+            "cloud": config.cloud.model_copy(
+                update={"destination": PHOTOS, "screenshot_destination": SHOTS}
+            )
+        }
+    )
+
+
+def test_a_screenshot_is_routed_by_channel_not_by_media_type(env) -> None:
+    """A screenshot is a PHOTO by type, so the type cannot tell it from a camera photo."""
+    config = _with_screenshots(env[0])
+    assert cloud_engine.destination_for(config, "PHOTO", "screenshot") == SHOTS
+    assert cloud_engine.destination_for(config, "PHOTO", "camera") == PHOTOS
+    assert cloud_engine.destination_for(config, "PHOTO") == PHOTOS
+
+
+def test_without_a_screenshot_destination_nothing_changes(env) -> None:
+    """The old behaviour is the default. Existing installs must not move."""
+    config, _db = env
+    assert cloud_engine.destination_for(config, "PHOTO", "screenshot") == config.cloud.destination
+
+
+def test_a_nested_destination_wins_the_prefix_match(env) -> None:
+    """The destination sits *inside* the photo one, so order is the whole game.
+
+    Matched the other way round, a screenshot's recorded path resolves to the
+    photo archive with `screenshots/` glued to the front of its relative part.
+    Release then looks for that key in the wrong listing, finds nothing, and
+    blocks every screenshot as "not at the remote" -- or, worse, matches an
+    unrelated file that happens to share the name.
+    """
+    config = _with_screenshots(env[0])
+    assert cloud_engine.destinations(config)[0] == SHOTS, "longest must come first"
+    assert cloud_engine.split_cloud_path(config, f"{SHOTS}/2024/03/IMG_1.PNG") == (
+        SHOTS,
+        "2024/03/IMG_1.PNG",
+    )
+    assert cloud_engine.split_cloud_path(config, f"{PHOTOS}/2024/03/IMG_1.JPG") == (
+        PHOTOS,
+        "2024/03/IMG_1.JPG",
+    )
+
+
+def test_a_screenshot_upload_lands_in_the_screenshot_folder(env) -> None:
+    config, db = env
+    config = _with_screenshots(config)
+    path = config.archive.local_path / "screenshot" / "2024" / "03" / "IMG_1.PNG"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"png")
+    db.conn.execute(
+        "INSERT INTO assets (device_id, identity_key, filename, media_type, created_at_device, "
+        "size_bytes, source_bundle_id, present_on_phone, subtypes, local_path, local_status, "
+        "sha256, first_seen_at, last_seen_at, created_at, updated_at) "
+        "VALUES (1, 's', 'IMG_1.PNG', 'PHOTO', '2024-03-04T10:00:00+00:00', 3, "
+        "'com.apple.springboard', 1, '[]', ?, 'LOCAL_VERIFIED', ?, ?, ?, ?, ?)",
+        (str(path), hashlib.sha256(b"png").hexdigest(), utcnow(), utcnow(), utcnow(), utcnow()),
+    )
+
+    [upload] = cloud_engine.plan(config, Selector(source="screenshot"), db)
+
+    assert upload.destination == SHOTS
+    assert upload.relative == "2024/03/IMG_1.PNG", "the channel level is dropped locally"
+    assert upload.channel == "screenshot"
+
+
+def test_a_parents_listing_does_not_claim_its_nested_destinations_files(env) -> None:
+    """A recursive listing of the photo archive also contains every screenshot."""
+    config = _with_screenshots(env[0])
+    assert cloud_engine.nested_destinations(config, PHOTOS) == ["screenshots"]
+    assert cloud_engine.nested_destinations(config, SHOTS) == []

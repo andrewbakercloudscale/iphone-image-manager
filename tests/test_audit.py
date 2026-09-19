@@ -207,3 +207,42 @@ def test_files_at_the_remote_that_no_row_claims_are_counted_not_hidden(env) -> N
     assert report.ok, "an orphan at the remote is not a failure"
     assert report.unclaimed == 1
     assert report.remote_files == 2 and report.claimed == 1
+
+
+# -- a destination nested inside another ---------------------------------------
+
+SHOTS = f"{DEST}/screenshots"
+
+
+def test_nested_destination_files_are_not_double_counted(env) -> None:
+    """A recursive listing of the photo archive contains every screenshot too.
+
+    Left in, each screenshot is one file at the remote for the screenshot
+    destination *and* an unclaimed file at the photo one, and the two counts the
+    audit exists to reconcile stop adding up for a reason nobody can see.
+    """
+    config, db = env
+    config = config.model_copy(
+        update={
+            "cloud": config.cloud.model_copy(update={"screenshot_destination": SHOTS}),
+        }
+    )
+    photo = verified(db, "p", "2020/01/IMG_1.JPG")
+    shot = verified(db, "s", "2020/01/IMG_2.PNG", body=b"png", destination=SHOTS)
+    fake = FakeCloud(
+        {
+            DEST: {
+                "2020/01/IMG_1.JPG": photo,
+                # What the recursive listing of DEST also returns:
+                "screenshots/2020/01/IMG_2.PNG": shot,
+            },
+            SHOTS: {"2020/01/IMG_2.PNG": shot},
+        }
+    )
+
+    report = audit.remote(config, db, provider=fake)
+
+    assert report.ok
+    assert report.matched == 2
+    assert report.remote_files == 2, "each file counted once, at the destination that owns it"
+    assert report.unclaimed == 0, "a screenshot must not look like an orphan in the photo archive"

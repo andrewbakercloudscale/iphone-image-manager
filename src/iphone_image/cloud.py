@@ -45,7 +45,14 @@ class CloudError(Exception):
     """The mirror cannot safely proceed."""
 
 
-def destination_for(config: Config, media_type: str | None) -> str:
+#: The channel that `--source screenshot` names. Kept here as a constant rather
+#: than compared as a bare string in three places: a typo in a comparison that
+#: silently never matches would file every screenshot with the photographs and
+#: report success.
+SCREENSHOT_CHANNEL = "screenshot"
+
+
+def destination_for(config: Config, media_type: str | None, channel: str | None = None) -> str:
     """Where this asset belongs on the remote.
 
     One function, used by every verb. `cloud` writes to what it returns,
@@ -55,6 +62,10 @@ def destination_for(config: Config, media_type: str | None) -> str:
     found missing, and the asset is blocked -- or worse, found *present*
     because some unrelated file shares the name.
     """
+    # Channel before media type. A screenshot is a PHOTO by type, so the type
+    # alone cannot tell it from a camera photograph.
+    if channel == SCREENSHOT_CHANNEL and config.cloud.screenshot_destination:
+        return config.cloud.screenshot_destination
     if str(media_type or "").upper() == "VIDEO" and config.cloud.video_destination:
         return config.cloud.video_destination
     return config.cloud.destination
@@ -71,7 +82,24 @@ def destinations(config: Config) -> list[str]:
     found = {config.cloud.destination}
     if config.cloud.video_destination:
         found.add(config.cloud.video_destination)
+    if config.cloud.screenshot_destination:
+        found.add(config.cloud.screenshot_destination)
     return sorted(found, key=len, reverse=True)
+
+
+def nested_destinations(config: Config, parent: str) -> list[str]:
+    """Destinations that live inside `parent`, as paths relative to it.
+
+    A listing of `parent` is recursive, so it contains everything under a nested
+    destination too. Anything that counts or diffs a listing has to know which
+    of those files belong to somebody else.
+    """
+    prefix = parent.rstrip("/") + "/"
+    return [
+        d[len(prefix) :].rstrip("/")
+        for d in destinations(config)
+        if d != parent and d.startswith(prefix)
+    ]
 
 
 def split_cloud_path(config: Config, cloud_path: str) -> tuple[str, str]:
@@ -578,7 +606,7 @@ def plan(config: Config, selector: Selector, db: Database) -> list[Upload]:
         if not asset.get("sha256"):
             log.warning("%s has no recorded hash, skipping", local)
             continue
-        destination = destination_for(config, asset.get("media_type"))
+        destination = destination_for(config, asset.get("media_type"), channel)
         owner = _remote_path_owner(db, f"{destination}/{relative}", int(asset["id"]))
         if owner is not None:
             # Uploading here would replace a file another asset's row points at,

@@ -39,7 +39,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .cloud import CloudProvider, RcloneProvider, destinations, split_cloud_path
+from .cloud import (
+    CloudProvider,
+    RcloneProvider,
+    destinations,
+    nested_destinations,
+    split_cloud_path,
+)
 from .config import Config
 from .db.database import Database
 from .logs import get_logger
@@ -207,7 +213,17 @@ def remote(
     holdings: dict[str, dict[str, str]] = {}
     for destination in destinations(config):
         log.info("listing %s", destination)
-        holdings[destination] = provider.hashes(destination)
+        listing = provider.hashes(destination)
+        # A recursive listing of a parent contains its nested destinations'
+        # files. Left in, every screenshot is counted twice as a file at the
+        # remote and once as "unclaimed" at the photo archive, which makes the
+        # two counts the audit exists to reconcile look inexplicable.
+        inner = [n + "/" for n in nested_destinations(config, destination)]
+        holdings[destination] = {
+            path: digest
+            for path, digest in listing.items()
+            if not any(path.startswith(n) for n in inner)
+        }
         report.destinations_listed.append(destination)
         report.remote_files += len(holdings[destination])
 

@@ -314,9 +314,14 @@ def backfill_archive_claims(config: Config, db: Database) -> int:
 
 def _cloud_tail(config: Config, cloud_path: str) -> str | None:
     """`cloud_path` with its remote destination stripped off."""
-    from .cloud import destination_for  # local: cloud imports nothing from sync
+    from .cloud import destinations  # local: cloud imports nothing from sync
 
-    for destination in {destination_for(config, "PHOTO"), destination_for(config, "VIDEO")}:
+    # Longest first, and every configured destination rather than a photo/video
+    # pair. One destination can sit inside another (screenshots inside the photo
+    # archive), so a set, whose order is arbitrary, would strip the *parent*
+    # prefix off a screenshot's path and leave "screenshots/" glued to the front
+    # of a claim it does not belong to.
+    for destination in destinations(config):
         prefix = destination.rstrip("/") + "/"
         if cloud_path.startswith(prefix):
             return cloud_path[len(prefix) :]

@@ -185,6 +185,21 @@ class CloudConfig(Strict):
     #: another, which is the one way this could destroy data quietly.
     video_destination: str = ""
 
+    #: Where screenshots go, when they should not be mixed in with photographs.
+    #: Empty means they follow the photo destination, which is what every
+    #: earlier version did. Screenshots share `media_type = PHOTO` with camera
+    #: photos, so this cannot be keyed off the media type the way video is: it
+    #: is chosen by *channel*, the same notion `--source screenshot` uses.
+    #:
+    #: It may sit *inside* the photo destination (`.../Andrew iPhone Archive/
+    #: screenshots`), and that is deliberate rather than a hazard: paths are
+    #: split by longest matching destination first (`destinations`), so a
+    #: recorded cloud path resolves to the nested folder and never to the parent
+    #: with a `screenshots/` prefix glued to its relative part. The same
+    #: agreement between upload, release and removal that `video_destination`
+    #: exists to protect; a per-run flag would break it.
+    screenshot_destination: str = ""
+
     #: How long one folder's upload may take before it is abandoned. This is a
     #: backstop, not a prediction: `stall_timeout_seconds` is what normally
     #: catches a wedged transfer, and a slow one is left alone to be slow. The
