@@ -34,50 +34,48 @@ The strongest rule in the project. It has no exceptions.
 `--discard` flag that would have skipped step 1 for junk categories was proposed
 and rejected.
 
-### The one exception, decided by the owner on 2026-09-19
+### Drive is the evidence, not the Mac (owner's decision, 2026-09-19)
 
-This section said "no exceptions" and it was true for as long as the Mac copy
+This section said "no exceptions", and it was true for as long as the Mac copy
 outlived the removal. It stopped being true by design: the cycle *releases* the
 Mac copy the moment Drive verifies it, because the Mac has no room to hold a
 library and there is no external drive. By the time removal was first run over
 the older photos, 14,729 of them (45.5 GiB) were on the phone, verified in
 Drive, and had no Mac copy -- and the tool cannot fetch a RELEASED asset again,
-so "already on the Mac" could only be satisfied by re-downloading all of it
-purely to have something to delete, and then releasing it again.
+so "already on the Mac" could only be met by re-downloading all of it purely to
+have something to delete, and then releasing it again.
 
-The owner chose to trust a fresh Drive hash instead. It is narrow, and each
-edge below is a test in `tests/destructive/test_remove_from_iphone.py`:
+The owner's rule, in their words: **"the deletion should require gdrive
+verification, not mac verification."** So under the `cloud_verified` policy:
 
-- **Only under `cloud_verified`.** `local_verified` promises a Mac copy, and a
-  released asset has none.
-- **Only for RELEASED assets.** A LOCAL_VERIFIED row whose file has vanished is a
-  surprise, not a decision, and is still refused ("the local copy is missing").
-  A never-fetched asset is still refused ("no verified local copy").
-- **The remote becomes the only evidence, so it cannot be skipped or guessed
-  at.** The hash is re-read from Drive in the same invocation as the deletion,
-  it must match the ledger, and an empty hash on either side is not a match --
-  with nothing else to compare, `"" == ""` would otherwise read as agreement.
+- **Google Drive is the evidence, and the only evidence.** The hash is re-read
+  from the remote in the same invocation as the deletion, and it must match the
+  hash the ledger recorded when the file was fetched from the phone.
+- **The Mac copy is not consulted.** Not required, not re-hashed, not looked
+  for. A Mac copy that is corrupt says nothing about whether Drive holds the
+  photograph, and neither does one that has gone; refusing on either would block
+  a deletion the actual evidence supports. A *perfect* Mac copy likewise cannot
+  vouch for an asset whose Drive copy is wrong -- both directions are tests.
+- **An empty hash is not a match.** With nothing else to compare against,
+  `"" == ""` would otherwise read as agreement. Two overlapping guards refuse
+  it, one on the ledger side and one on the remote side; either alone suffices,
+  and the test fails only when both are removed.
+- **`local_verified` keeps its old meaning.** It promises a Mac copy, so under
+  that policy the Mac checks still apply and `require_local_verification` still
+  governs them. The change is to what `cloud_verified` *means*, not a toggle.
 - **Nothing else is waived.** The fresh scan (section 7), proxy and favourite
-  protection (sections 2 and 6), Live Photo and burst completeness, and the
-  typed confirmation phrase all still apply, and the macOS confirmation dialog
-  is still Apple's, not ours.
+  protection (sections 2 and 6), Live Photo and burst completeness, the typed
+  confirmation phrase, and Apple's own macOS dialog all still apply.
 - **It says so afterwards.** Every deletion's `deletion_events.evidence` carries
-  `"basis": "remote_hash_only"` (or `"local_and_remote"`) and
-  `"local_hash_rechecked": false`, so a photograph deleted without a Mac copy
-  states that, and why it was allowed, for as long as the ledger exists.
+  `"basis": "remote_hash_only"` and `"local_hash_rechecked": false`, so a
+  photograph removed without consulting the Mac states that, and why it was
+  allowed, for as long as the ledger exists.
 
-What this gives up, stated plainly: for those assets the *only* copies are
+What this gives up, stated plainly: for these assets the *only* copies are
 Google Drive and, for 30 days, the phone's Recently Deleted. The Mac copy was
-already gone before removal ran; the exception does not remove it, it stops
-pretending it is there. `iphone-image audit` is the check that proves Drive
-still holds what the ledger says, and should be run before any removal pass.
-
-Step 4 is why bulk categories do not pollute the archive. WhatsApp media removed
-from the phone lands in the recycle bin, not the archive, so it is never mirrored
-to cloud storage and it ages out after the retention window rather than being
-kept forever. An asset that should be both archived and removed is `sync`ed
-first; whether its recycle bin entry keeps the bytes then depends on the cloud
-copy, per section 5.
+already gone before removal ran in most cases; the rule does not remove it, it
+stops pretending it is there. `iphone-image audit` is the check that proves
+Drive still holds what the ledger says, and is run before every removal pass.
 
 ---
 

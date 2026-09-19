@@ -164,6 +164,17 @@ def on_phone(
     return path, digest
 
 
+def under_local_policy(config):
+    """`local_verified` promises a Mac copy, so the Mac checks still apply there."""
+    return config.model_copy(
+        update={
+            "remove_from_iphone": config.remove_from_iphone.model_copy(
+                update={"policy": "local_verified"}
+            )
+        }
+    )
+
+
 def released(config, db, key, relative, *, body=b"photo", **kw):
     """An asset whose Mac copy was let go because Drive verified it.
 
@@ -252,23 +263,23 @@ def test_an_asset_missing_from_the_fresh_scan_is_never_removed(env) -> None:
     assert result.blocks == {"not present in the scan taken just now": 1}
 
 
-def test_a_local_copy_that_no_longer_matches_its_hash_is_never_removed(env) -> None:
-    """A verified copy that has since been corrupted is not a copy."""
+def test_a_corrupted_mac_copy_blocks_removal_only_where_the_mac_copy_is_the_evidence(env) -> None:
+    """Under `local_verified` a Mac copy is promised, and a corrupted one is not a copy."""
     config, db = env
     path, _ = on_phone(config, db, "a", "2019/11/IMG_1.JPG")
     path.write_bytes(b"something else entirely")
 
-    eligible, result = plan(config, db)
+    eligible, result = plan(under_local_policy(config), db)
 
     assert eligible == []
     assert result.blocks == {"the local copy no longer matches its recorded hash": 1}
 
 
-def test_a_missing_local_copy_is_never_removed(env) -> None:
+def test_a_missing_mac_copy_blocks_removal_only_where_the_mac_copy_is_the_evidence(env) -> None:
     config, db = env
     path, _ = on_phone(config, db, "a", "2019/11/IMG_1.JPG")
     path.unlink()
-    eligible, result = plan(config, db)
+    eligible, result = plan(under_local_policy(config), db)
     assert eligible == []
     assert result.blocks == {"the local copy is missing": 1}
 
@@ -326,10 +337,11 @@ def test_every_refusal_reaches_the_device_never(env) -> None:
 
 # -- released assets: removable on the strength of the remote alone ------------
 #
-# The owner's decision on 2026-09-19, recorded in docs/SAFETY.md 1b: an asset
-# that was released from the Mac *because Drive verified it* may be removed from
-# the phone if Drive's hash is re-checked in the same invocation. It is narrow,
-# and every test below is a way it could quietly become wider.
+# The owner's decision on 2026-09-19, recorded in docs/SAFETY.md 1b: under
+# `cloud_verified` the evidence is Google Drive, and only Drive -- its hash
+# re-read in the same invocation must match the ledger. The Mac copy is not
+# consulted, whether it exists or not. Every test below is a way that could
+# quietly become weaker than it sounds.
 
 
 def test_a_released_asset_is_removable_on_a_fresh_remote_hash(env) -> None:
@@ -394,24 +406,40 @@ def test_a_released_asset_with_no_cloud_copy_is_never_removed(env) -> None:
     assert result.blocks == {"not verified in the cloud": 1}
 
 
-def test_only_released_assets_get_the_exception_not_any_asset_missing_a_file(env) -> None:
-    """A LOCAL_VERIFIED row whose file vanished is a surprise, not a release."""
+def test_the_mac_copy_is_not_consulted_when_drive_is_the_evidence(env) -> None:
+    """The owner's rule, 2026-09-19: "require gdrive verification, not mac verification".
+
+    A Mac copy that is corrupt says nothing about whether Drive holds the
+    photograph, and neither does one that has gone. Refusing on either would
+    block a deletion the actual evidence supports.
+    """
     config, db = env
-    path, digest = on_phone(config, db, "a", "2019/11/IMG_1.JPG")
-    path.unlink()
+    corrupt, digest = on_phone(config, db, "corrupt", "2019/11/IMG_1.JPG")
+    corrupt.write_bytes(b"something else entirely")
+    gone, digest2 = on_phone(config, db, "gone", "2019/11/IMG_2.JPG", body=b"other")
+    gone.unlink()
+    remote = {"2019/11/IMG_1.JPG": digest, "2019/11/IMG_2.JPG": digest2}
 
-    eligible, result = plan(config, db, FakeCloud({"2019/11/IMG_1.JPG": digest}))
+    eligible, result = plan(config, db, FakeCloud(remote))
 
-    assert eligible == []
-    assert result.blocks == {"the local copy is missing": 1}
+    assert sorted(c.filename for c in eligible) == ["IMG_1.JPG", "IMG_2.JPG"]
+    assert result.blocks == {}
+    assert all(c.evidence["basis"] == "remote_hash_only" for c in eligible)
+    assert all(c.evidence["local_hash_rechecked"] is False for c in eligible)
 
 
-def test_a_never_fetched_asset_gets_no_exception(env) -> None:
+def test_a_healthy_mac_copy_does_not_rescue_a_drive_copy_that_is_wrong(env) -> None:
+    """The other direction, and the one that matters: Drive decides, in both.
+
+    A perfect Mac copy with the wrong bytes at Drive must still be refused. If
+    the Mac copy could vouch for the asset, dropping the Mac requirement would
+    have weakened the rule instead of moving it.
+    """
     config, db = env
-    _path, digest = on_phone(config, db, "a", "2019/11/IMG_1.JPG", local_verified=False)
-    eligible, result = plan(config, db, FakeCloud({"2019/11/IMG_1.JPG": digest}))
+    on_phone(config, db, "a", "2019/11/IMG_1.JPG")
+    eligible, result = plan(config, db, FakeCloud({"2019/11/IMG_1.JPG": "0" * 64}))
     assert eligible == []
-    assert result.blocks == {"no verified local copy": 1}
+    assert result.blocks == {"the remote copy does not match the recorded hash": 1}
 
 
 def test_the_exception_exists_only_under_the_cloud_policy(env) -> None:

@@ -220,35 +220,38 @@ def plan(
             result.block(asset, "already recorded as removed")
             continue
 
-        # 2. A local copy that exists and still hashes to what we recorded --
-        #    or, for one deliberately released, the cloud copy and nothing else.
+        # 2. What proves the copy exists.
         #
-        #    docs/SAFETY.md 1b required a Mac copy with "no exceptions", and the
-        #    owner made one on 2026-09-19. The cycle releases the Mac copy the
-        #    moment Drive verifies it (the Mac has no room to hold a library), so
-        #    14,729 old camera photos were on the phone, verified in Drive, and
-        #    unremovable: the tool cannot fetch a RELEASED asset again, and
-        #    re-downloading 45 GiB to satisfy a check the release step had
-        #    already made redundant was the cost the exception avoids.
+        #    Under `cloud_verified` the evidence is Google Drive, and only Drive:
+        #    the hash is re-read from the remote in this same invocation (step 6)
+        #    and must match the ledger. The Mac copy is not consulted -- not
+        #    required, not re-hashed, not even looked for.
         #
-        #    It is narrow on purpose, and each edge is a test:
-        #      - only the `cloud_verified` policy, since `local_verified` promises
-        #        a Mac copy and this asset has none;
-        #      - only RELEASED, never a LOCAL_VERIFIED row whose file vanished,
-        #        which is a surprise rather than a decision;
-        #      - and it makes the remote the *only* evidence, so step 6 below is
-        #        no longer a second opinion. It cannot be skipped, guessed at, or
-        #        satisfied by an empty hash.
-        released_on_cloud_evidence = (
-            policy == RemovalPolicy.CLOUD_VERIFIED and asset.get("local_status") == "RELEASED"
-        )
-        if released_on_cloud_evidence:
+        #    This was decided by the owner on 2026-09-19, twice in one day, and
+        #    docs/SAFETY.md 1b records it. First for assets already released
+        #    from the Mac (14,729 old camera photos were on the phone, verified
+        #    in Drive, and unremovable because the cycle releases the Mac copy
+        #    the moment Drive verifies it -- the Mac has no room for a library),
+        #    then for all of them: "the deletion should require gdrive
+        #    verification, not mac verification". A Mac copy that is missing or
+        #    corrupt says nothing about whether Drive holds the photograph, and
+        #    refusing on it would block a deletion the evidence supports.
+        #
+        #    So the remote is the *only* evidence here and step 6 is no longer a
+        #    second opinion: it cannot be skipped, guessed at, or satisfied by
+        #    an empty hash. `local_verified` keeps its own meaning -- it
+        #    promises a Mac copy -- and `require_local_verification` still
+        #    governs it.
+        cloud_is_the_evidence = policy == RemovalPolicy.CLOUD_VERIFIED
+        if cloud_is_the_evidence:
             if not asset.get("sha256"):
-                # With the Mac copy gone the ledger hash is all there is to
-                # compare the remote against. Without it nothing can be proved.
+                # The ledger hash is all there is to compare the remote against.
+                # Without it nothing can be proved.
                 result.block(asset, "no hash recorded, so the remote copy cannot be compared")
                 continue
-            local = None
+            # Informational only, and never used for a file operation: a
+            # released asset has none, and `Path('')` is the current directory.
+            local = Path(asset["local_path"]) if asset.get("local_path") else None
         elif config.safety.require_local_verification:
             if asset.get("local_status") != "LOCAL_VERIFIED":
                 result.block(asset, "no verified local copy")
@@ -312,14 +315,12 @@ def plan(
                     "scan_id": scan_id,
                     "local_status": asset.get("local_status"),
                     "local_hash_rechecked": bool(
-                        config.safety.require_local_verification and not released_on_cloud_evidence
+                        config.safety.require_local_verification and not cloud_is_the_evidence
                     ),
                     # Written into the journal so that a deletion made without a
                     # Mac copy says so, and why it was allowed, for as long as
                     # the ledger exists.
-                    "basis": (
-                        "remote_hash_only" if released_on_cloud_evidence else "local_and_remote"
-                    ),
+                    "basis": "remote_hash_only" if cloud_is_the_evidence else "local_and_remote",
                     "cloud_status": asset.get("cloud_status"),
                     "policy": str(policy),
                 },
