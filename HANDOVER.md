@@ -2,27 +2,36 @@
 
 Started 2026-09-17 (the day the camera photo roll finished uploading), updated
 2026-09-17 late evening (section 8), 2026-09-19 (section 3b) and **2026-09-20
-08:40, which is the section immediately below and the only one to trust for
+09:10, which is the section immediately below and the only one to trust for
 current state.** Everything is measured or recorded, not assumed -- and section
 8c is about the difference between those two words.
 
 ---
 
-## START HERE -- state at 2026-09-20 08:40
+## START HERE -- state at 2026-09-20 09:10
 
-**Nothing is running.** The Mac is on mains (100%, charged). The terminal is being
-restarted, not the Mac, so files and the ledger are untouched. Git is clean and
-pushed (`980c6a5`); 372 tests pass, ruff clean.
+**The video job is RUNNING** (restarted 09:05, `cycle.sh video 40`, PID in
+`pgrep -f "cycle.sh video"`), with `after-video.sh` waiting to start screenshots
+and `watch-video.sh` writing an ALIVE line every 10 minutes to
+`~/.iphone-image/watch.log`. **The Mac is on battery** (100% at start); plug it
+in -- on battery it has slept through `caffeinate` before, and a sleeping laptop
+wedges rclone.
 
-**The video job stopped last night and nobody noticed for ~12 hours.** At 20:40 the
-disk fell to 16 GB free. `cycle.sh` only stopped below 15 GB, but `sync` itself
-refuses to start a chunk without ~26 GB (15 GiB chunk + 10 GB floor), so at 16 GB
-the script waved the loop through, `sync` exited instantly every time, and **all
-40 cycles were spent in 90 seconds doing nothing.** The chain script noticed and
-declined to start screenshots; nothing told a human. **Fixed this morning** in
-`~/.iphone-image/cycle.sh` (not in git): it now stops at the real requirement
-(26 GB) with `EMPTY THE BIN`, and stops after two cycles with no progress instead
-of spinning. Tested against the real disk: it exits 2 with the right message.
+**What changed this morning.** The 08:36 restart refused with "25GB free, a chunk
+needs 26GB" while the Bin was already empty: the wrapper compared round GB
+numbers against `df -g` (GiB) and `sync` measures bytes, so the two disagreed by
+2 GB. Three fixes, all in `~/.iphone-image/` and copied to `scripts/`:
+- `cycle.sh` now reads `chunk_bytes + free_space_floor` from the config and
+  measures free space the way `sync` does (`shutil.disk_usage`). One unit.
+- `chunk_bytes` is **13GB** (was 15GB, backed up as `config.yaml.bak-20260920-*`).
+  With 27 GB free, 15 GiB + the 10 GiB floor left a 150 MB margin.
+- **The Bin empties itself, with a guard.** When a chunk will not fit, `cycle.sh`
+  lists the Bin through Finder (the shell cannot read `~/.Trash`) and empties it
+  only if every item's name matches a RELEASED ledger row (`filename` or the
+  basename of `archive_claim`). One foreign item and it leaves the Bin alone and
+  exits 2 as before. Tested: a stray `.txt` blocks it, a released name empties.
+  Finder's `empty trash` shows no dialog. `EMPTY_BIN=0` turns this off.
+  This means the job no longer stalls every chunk waiting for a human.
 
 ### Numbers (ledger, 2026-09-20)
 
@@ -32,43 +41,39 @@ removed from the phone     18,037     5,024 (09-17) + 13,013 (09-19)
                                       Recently Deleted expires ~2026-10-17 and ~2026-10-19
 camera video               1,823      168.6 GiB
    in Drive                  698      73.8 GiB    38%
-   still to fetch          1,125      94.8 GiB    about 6 chunks, ~13 h on mains
+   still to fetch          1,125      94.8 GiB    about 8 chunks of 13 GiB, ~2.7 h each, ~21 h on mains
    FAILED                      0
 screenshots, older than 1y 11,313     12.8 GiB    not started (2,899 are suspected proxies)
-Mac disk free                25 GB    BELOW the 26 GB a chunk needs -- the Bin holds released videos
+Mac disk free                27 GB    (decimal) with the Bin empty; a 13 GiB chunk + 10 GiB floor needs 24.7 GB
 ```
 
 ### First actions, in order
 
-1. **Empty the Bin in Finder.** `~/.Trash` is unreadable from a terminal (macOS
-   privacy), so the terminal cannot show its size; `df -g /` after emptying is the
-   check, and it needs to read **26 or more**. Nothing this tool put there is needed:
-   every released file was hash-verified in Drive. (Look before emptying if the Bin
-   also holds anything of the user's own.)
-2. **Restart the video job:**
+1. **Plug the Mac in.** Then `tail -3 ~/.iphone-image/watch.log`: the last line
+   must say `alive` with a recent timestamp. `JOB GONE` means read the last
+   camera/video lines in `cycle.log` and re-run the restart command below.
+2. **If the job is gone**, restart it (it resumes from the ledger):
    ```bash
    cd ~ && nohup caffeinate -dimsu ~/.iphone-image/cycle.sh video 40 \
      > ~/.iphone-image/cycle-video.out 2>&1 & disown
+   nohup ~/.iphone-image/after-video.sh > ~/.iphone-image/after-video.out 2>&1 & disown
+   nohup ~/.iphone-image/watch-video.sh > /dev/null 2>&1 & disown
    ```
-   It resumes from the ledger. Expect a Bin-empty stop roughly every 2 chunks --
-   released bytes sit in the Bin, so free space falls across the run even though
-   every cycle releases. Exit code 2 means exactly that: empty the Bin, re-run the
-   same command.
-3. **Remove the 693 old videos now** (73.4 GiB, verified in Drive, still on the
-   phone). This does not need the video job to finish:
+   Exit 2 now means the Bin holds something that is not ours: look, empty it by
+   hand, re-run. Exit 4 means two cycles without progress: read the sync errors.
+3. **Remove the 693 old videos** (73.4 GiB, verified in Drive, still on the
+   phone). Needs a human at the Mac: the macOS dialog is Apple's. Runs alongside
+   the fetch (did on 09-19):
    ```bash
    cd ~/Desktop/github/iphone-image-manager && export PYTHONPATH=src
    ./.venv/bin/python -m iphone_image audit                     # ~5 min, must exit 0
    ./.venv/bin/python -m iphone_image remove-from-iphone --source camera --type video --older-than 1y
    # read the plan, then re-run it with the --apply --confirm "<phrase>" it prints
    ```
-   The macOS dialog is Apple's and only the user can click it. Removal ran
-   alongside the video fetch on 09-19 without incident.
-4. **When videos finish**, screenshots do NOT start themselves: `after-video.sh`
-   gave up at 20:48. Start them with `~/.iphone-image/cycle.sh photo 4 screenshot 1y`
-   (one chunk, ~1.3 h), or launch `after-video.sh` again *while the video job is
-   running* and it will wait. Then `audit`, then `remove-from-iphone --source
-   screenshot --older-than 1y`; expect ~8,400 of the 11,313 to be removable.
+4. **Screenshots start themselves** this time: `after-video.sh` is waiting and
+   runs `cycle.sh photo 4 screenshot 1y` when the video job ends with "nothing
+   left to fetch". Then `audit`, then `remove-from-iphone --source screenshot
+   --older-than 1y`; expect ~8,400 of the 11,313 to be removable.
 
 ### Do not repeat these
 
@@ -83,7 +88,7 @@ Mac disk free                25 GB    BELOW the 26 GB a chunk needs -- the Bin h
   the old inode). The operational scripts live in `~/.iphone-image/` and are **not
   in git**; consider copying them under `scripts/` in the repo.
 - **On battery the Mac sleeps despite `caffeinate`** (`PreventSystemSleep 0`), and
-  a sleeping laptop wedges rclone with a frozen byte count. It is on mains now.
+  a sleeping laptop wedges rclone with a frozen byte count. It was on BATTERY at the 09:05 restart.
   `no_progress_timeout_seconds` (30 min) now kills such a transfer, but the job
   still loses the time.
 - **One PhotoKit exporter at a time** for fetches. Two syncs on one library is a
