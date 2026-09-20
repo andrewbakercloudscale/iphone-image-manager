@@ -63,6 +63,49 @@ say() { echo "[$(date '+%m-%d %H:%M:%S')] [$TAG] $*" | tee -a "$LOG"; }
 # Same measurement sync makes: the volume the archive lives on.
 free_b() { $PY -c "import shutil,os; print(shutil.disk_usage(os.path.expanduser('~/Desktop/iphone')).free)"; }
 
+# Network. An outage is not a failure of the job, and treating it as one burned
+# cycles 3-5 in forty seconds on 2026-09-20 (13:40) and stopped the run. curl
+# exits 0 on any HTTP answer, which is all "reachable" needs to mean here.
+net_ok() { curl -s -o /dev/null -m 8 https://www.googleapis.com/; }
+NET_WAITED=0
+wait_for_net() {
+  net_ok && return 0
+  NET_WAITED=1
+  say "network is down. Waiting for it (up to 3h) instead of spending a cycle."
+  local t=0
+  while ! net_ok; do
+    sleep 30; t=$((t + 30))
+    if [ "$t" -ge 10800 ]; then say "network still down after 3h. STOPPING."; exit 5; fi
+  done
+  say "network is back after ${t}s"
+}
+# Did the output written since byte offset $1 show a network failure? The fetch
+# and upload can fail on it and return before net_ok is asked, because the
+# outage may end in between: iCloud says -1009 / PHPhotosErrorDomain 3169 and
+# rclone says dial tcp / no such host.
+net_hit_since() {
+  tail -c +"$(($1 + 1))" "$LOG" | grep -qE "NSURLErrorDomain -100[0-9]|PHPhotosErrorDomain 3169|dial tcp|no such host|i/o timeout"
+}
+log_bytes() { wc -c < "$LOG" | tr -d ' '; }
+
+# Verified on the Mac but not yet in Drive: disk this job cannot release.
+unuploaded() {
+  $PY -c "
+import sqlite3
+c=sqlite3.connect('file:$DB?mode=ro',uri=True)
+print(c.execute(\"SELECT COUNT(*) FROM assets WHERE local_status='LOCAL_VERIFIED' AND cloud_status!='CLOUD_VERIFIED'\").fetchone()[0])" 2>/dev/null || echo 0
+}
+
+upload_now() {
+  wait_for_net
+  say "uploading what landed"
+  local mark; mark=$(log_bytes)
+  if ! $PY -m iphone_image cloud "${SEL[@]}" --apply >> "$LOG" 2>&1; then
+    say "cloud returned non-zero"
+    if net_hit_since "$mark"; then NET_WAITED=1; wait_for_net; fi
+  fi
+}
+
 releasable() {
   $PY -c "
 import sqlite3
@@ -125,6 +168,7 @@ say "starting: $CYCLES cycle(s), $(to_fetch) left to fetch, $(gb "$(free_b)") GB
 prev_left=-1
 stalled=0
 for cycle in $(seq 1 "$CYCLES"); do
+  NET_WAITED=0
   say "=== cycle $cycle/$CYCLES: $(gb "$(free_b)") GB free, $(to_fetch) left to fetch ==="
 
   # 1. Release anything already safe in the cloud. Always first: it is the
@@ -141,6 +185,13 @@ for cycle in $(seq 1 "$CYCLES"); do
     say "release is OFF: Mac copies are held so remove-from-iphone can run first"
   fi
 
+  # 1b. Upload any backlog before fetching more. Unuploaded bytes sit on the Mac
+  #     and cannot be released, so fetching on top of them only spends the disk.
+  if [ "$(unuploaded)" -gt 0 ]; then
+    say "$(unuploaded) file(s) on the Mac not yet in Drive: uploading them before fetching"
+    upload_now
+  fi
+
   # 2. Stop if there is nothing left to do.
   left=$(to_fetch)
   if [ "$left" -eq 0 ]; then say "nothing left to fetch. done."; break; fi
@@ -148,7 +199,7 @@ for cycle in $(seq 1 "$CYCLES"); do
   # A loop that makes no progress must stop, not spin. One cycle of no change is
   # normal (it may only have uploaded a backlog); two in a row means whatever is
   # failing will fail again, and burning the remaining cycles hides it.
-  if [ "$left" -eq "$prev_left" ]; then stalled=$((stalled + 1)); else stalled=0; fi
+  if [ "$left" -eq "$prev_left" ] && [ "$NET_WAITED" -eq 0 ]; then stalled=$((stalled + 1)); else stalled=0; fi
   prev_left=$left
   if [ "$stalled" -ge 2 ]; then
     say "no progress: $left left to fetch, unchanged for $stalled cycles. STOPPING. See the sync errors above."
@@ -174,12 +225,16 @@ for cycle in $(seq 1 "$CYCLES"); do
   fi
 
   # 4. Fetch the next chunk, then mirror it.
+  wait_for_net
   say "fetching the next chunk"
+  mark=$(log_bytes)
   $PY -m iphone_image sync "${SEL[@]}" --apply >> "$LOG" 2>&1 \
     || say "sync returned non-zero; continuing to upload what landed"
-  say "uploading what landed"
-  $PY -m iphone_image cloud "${SEL[@]}" --apply >> "$LOG" 2>&1 \
-    || say "cloud returned non-zero; next cycle will retry"
+  if net_hit_since "$mark"; then
+    NET_WAITED=1
+    say "the fetch hit network errors; waiting for the network before uploading"
+  fi
+  upload_now
 done
 
 say "cycle finished: $(gb "$(free_b)") GB free, $(to_fetch) still to fetch"

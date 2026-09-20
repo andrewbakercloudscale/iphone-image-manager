@@ -2,13 +2,13 @@
 
 Started 2026-09-17 (the day the camera photo roll finished uploading), updated
 2026-09-17 late evening (section 8), 2026-09-19 (section 3b) and **2026-09-20
-12:50, which is the section immediately below and the only one to trust for
+18:30, which is the section immediately below and the only one to trust for
 current state.** Everything is measured or recorded, not assumed -- and section
 8c is about the difference between those two words.
 
 ---
 
-## START HERE -- state at 2026-09-20 12:50
+## START HERE -- state at 2026-09-20 18:30
 
 **The video job is RUNNING** (restarted 12:48, `cycle.sh video 40`), with
 `after-video.sh` waiting to start screenshots and `watch-video.sh` writing an ALIVE
@@ -32,6 +32,20 @@ on `doctor` would still cost ~10 GB transiently each time.
 Also fixed this morning (see `scripts/`): `cycle.sh` measures the requirement in
 bytes the way `sync` does and **empties the Bin itself** when every item is a
 released asset (a foreign file blocks it, exit 2); `chunk_bytes` is 13GB.
+
+**Outages and sleep (added 18:30).** The job stopped twice on 09-20 for reasons that
+were not its fault: the internet dropped 13:05-13:41 (fetch `-1009`, upload `dial
+tcp`), and the Mac slept on battery 14:30-17:53 despite `caffeinate` (macOS ignores
+the system-sleep assertion on battery; a closed lid sleeps regardless). The 13:41
+stop was the stall guard reading an outage as "no progress". `cycle.sh` now:
+- waits for `www.googleapis.com` (30 s polls, gives up after 3 h, exit 5) before
+  every fetch and upload, instead of spending a cycle on it;
+- does not count a cycle as stalled if the network was down during it, detected
+  from the output (`NSURLErrorDomain -100x`, `PHPhotosErrorDomain 3169`, `dial tcp`);
+- **uploads any backlog before fetching more** (files verified on the Mac but not in
+  Drive cannot be released, so fetching on top of them only spends disk).
+The job survived the 3.5 h sleep by itself once the Mac woke. **Sleep on battery is
+not fixable in software here: plug the Mac in and keep the lid open.**
 
 **Still open:** the Photos library's `originals` grew 10/32/48/14 GB on 09-17..20 as
 PhotoKit fetched. Optimize Mac Storage should evict them under pressure, but this
@@ -65,7 +79,7 @@ Mac disk free                47.7 GB  after removing the leaked doctor copies; a
    nohup ~/.iphone-image/watch-video.sh > /dev/null 2>&1 & disown
    ```
    Exit 2 now means the Bin holds something that is not ours: look, empty it by
-   hand, re-run. Exit 4 means two cycles without progress: read the sync errors.
+   hand, re-run. Exit 4 means two cycles without progress that were not the network: read the sync errors. Exit 5 means the network stayed down for 3 h.
 3. **Remove the 693 old videos** (73.4 GiB, verified in Drive, still on the
    phone). Needs a human at the Mac: the macOS dialog is Apple's. Runs alongside
    the fetch (did on 09-19):
