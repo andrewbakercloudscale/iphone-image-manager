@@ -2,36 +2,41 @@
 
 Started 2026-09-17 (the day the camera photo roll finished uploading), updated
 2026-09-17 late evening (section 8), 2026-09-19 (section 3b) and **2026-09-20
-09:10, which is the section immediately below and the only one to trust for
+12:50, which is the section immediately below and the only one to trust for
 current state.** Everything is measured or recorded, not assumed -- and section
 8c is about the difference between those two words.
 
 ---
 
-## START HERE -- state at 2026-09-20 09:10
+## START HERE -- state at 2026-09-20 12:50
 
-**The video job is RUNNING** (restarted 09:05, `cycle.sh video 40`, PID in
-`pgrep -f "cycle.sh video"`), with `after-video.sh` waiting to start screenshots
-and `watch-video.sh` writing an ALIVE line every 10 minutes to
-`~/.iphone-image/watch.log`. **The Mac is on battery** (100% at start); plug it
-in -- on battery it has slept through `caffeinate` before, and a sleeping laptop
-wedges rclone.
+**The video job is RUNNING** (restarted 12:48, `cycle.sh video 40`), with
+`after-video.sh` waiting to start screenshots and `watch-video.sh` writing an ALIVE
+line every 10 minutes to `~/.iphone-image/watch.log`. 47.7 GB free at restart, a
+chunk needs 24.7 GB. Chunk 1 (131 videos) landed and verified this morning:
+829 of 1,823 videos are now in Drive, 994 to go. **The Mac was on battery (84%)**;
+plug it in.
 
-**What changed this morning.** The 08:36 restart refused with "25GB free, a chunk
-needs 26GB" while the Bin was already empty: the wrapper compared round GB
-numbers against `df -g` (GiB) and `sync` measures bytes, so the two disagreed by
-2 GB. Three fixes, all in `~/.iphone-image/` and copied to `scripts/`:
-- `cycle.sh` now reads `chunk_bytes + free_space_floor` from the config and
-  measures free space the way `sync` does (`shutil.disk_usage`). One unit.
-- `chunk_bytes` is **13GB** (was 15GB, backed up as `config.yaml.bak-20260920-*`).
-  With 27 GB free, 15 GiB + the 10 GiB floor left a 150 MB margin.
-- **The Bin empties itself, with a guard.** When a chunk will not fit, `cycle.sh`
-  lists the Bin through Finder (the shell cannot read `~/.Trash`) and empties it
-  only if every item's name matches a RELEASED ledger row (`filename` or the
-  basename of `archive_claim`). One foreign item and it leaves the Bin alone and
-  exits 2 as before. Tested: a stray `.txt` blocks it, a released name empties.
-  Finder's `empty trash` shows no dialog. `EMPTY_BIN=0` turns this off.
-  This means the job no longer stalls every chunk waiting for a human.
+**The disk was not full of Bin files. It was full of our own leak.** The 12:18 stop
+("13 GB free, needs 24.7") happened with the Bin already empty, and the earlier
+notes blaming "released bytes sit in the Bin" were wrong. `doctor` copies the Photos
+database and its WAL to a temp dir on every call (the WAL alone is 7.7 GB) and
+**never removed the copy**: 1,748 `iim-doctor-*` dirs, 23 GB, plus a stray 10 GB WAL
+copy from 09-17. Deleted, and `doctor.py` now removes its copy at exit, on a failed
+copy, and sweeps any over an hour old (tests in `tests/test_doctor_temp_copies.py`).
+Disk went 14 -> 47.7 GB. **Unexplained:** who ran `doctor` ~580 times. Nothing in
+`~/.iphone-image` or launchd does. Check `ls /private/var/folders/*/*/T | grep -c
+iim-doctor` if free space falls again; the sweep now caps it, but a caller looping
+on `doctor` would still cost ~10 GB transiently each time.
+
+Also fixed this morning (see `scripts/`): `cycle.sh` measures the requirement in
+bytes the way `sync` does and **empties the Bin itself** when every item is a
+released asset (a foreign file blocks it, exit 2); `chunk_bytes` is 13GB.
+
+**Still open:** the Photos library's `originals` grew 10/32/48/14 GB on 09-17..20 as
+PhotoKit fetched. Optimize Mac Storage should evict them under pressure, but this
+has not been observed. Watch free space across chunk 2: if it falls ~13 GB per
+chunk with the Bin empty, that is the next leak.
 
 ### Numbers (ledger, 2026-09-20)
 
@@ -40,11 +45,11 @@ verified in Drive          23,586     22,888 photos 68.7 GiB   698 videos 73.8 G
 removed from the phone     18,037     5,024 (09-17) + 13,013 (09-19)
                                       Recently Deleted expires ~2026-10-17 and ~2026-10-19
 camera video               1,823      168.6 GiB
-   in Drive                  698      73.8 GiB    38%
-   still to fetch          1,125      94.8 GiB    about 8 chunks of 13 GiB, ~2.7 h each, ~21 h on mains
+   in Drive                  829      ~87 GiB     45%   (698 old ones still on the phone: 693 removable)
+   still to fetch            994      ~82 GB      about 7 chunks of 13 GiB
    FAILED                      0
 screenshots, older than 1y 11,313     12.8 GiB    not started (2,899 are suspected proxies)
-Mac disk free                27 GB    (decimal) with the Bin empty; a 13 GiB chunk + 10 GiB floor needs 24.7 GB
+Mac disk free                47.7 GB  after removing the leaked doctor copies; a chunk needs 24.7 GB
 ```
 
 ### First actions, in order

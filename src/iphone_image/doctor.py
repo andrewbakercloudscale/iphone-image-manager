@@ -10,6 +10,7 @@ check that cannot run reports FAIL with the reason. None of them pass by default
 
 from __future__ import annotations
 
+import atexit
 import json
 import plistlib
 import shutil
@@ -46,16 +47,51 @@ class Check:
         return self.status != FAIL
 
 
+_COPY_PREFIX = "iim-doctor-"
+_STALE_AFTER_SECONDS = 3600
+
+
+def _sweep_stale_copies(*, now: float | None = None, root: Path | None = None) -> int:
+    """Remove copies a killed process left behind. Returns how many went.
+
+    Every call copies the Photos database and its WAL, which was 2.8 GB plus
+    7.7 GB on the day this was written. Nothing ever removed them: by 2026-09-20
+    there were 1,748 of them holding 23 GB, and they were what had filled the
+    disk the video job needed. An hour is far longer than any check runs, so a
+    copy that old belongs to a process that is gone; a younger one may belong to
+    a run that is still reading it and is left alone.
+    """
+    import time
+
+    root = root or Path(tempfile.gettempdir())
+    cutoff = (time.time() if now is None else now) - _STALE_AFTER_SECONDS
+    removed = 0
+    for path in root.glob(f"{_COPY_PREFIX}*"):
+        try:
+            if path.is_dir() and path.stat().st_mtime < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+                removed += 1
+        except OSError:
+            continue
+    return removed
+
+
 def _copy_photos_db(library: Path) -> Path | None:
     """Copy the Photos database and its WAL so counts are current.
 
     Never opens the live file: Photos writes to it constantly and a reader that
     holds a lock on someone's photo library is a bad neighbour.
+
+    The copy is temporary and is removed when the process exits, or at once if
+    copying fails part way (a full disk leaves a partial copy, which is the
+    worst time to leave one).
     """
     source = library / "database" / "Photos.sqlite"
     if not source.is_file():
         return None
-    target_dir = Path(tempfile.mkdtemp(prefix="iim-doctor-"))
+    _sweep_stale_copies()
+    target_dir = Path(tempfile.mkdtemp(prefix=_COPY_PREFIX))
+    atexit.register(shutil.rmtree, target_dir, ignore_errors=True)
     target = target_dir / "Photos.sqlite"
     try:
         shutil.copy2(source, target)
@@ -64,6 +100,7 @@ def _copy_photos_db(library: Path) -> Path | None:
             if extra.exists():
                 shutil.copy2(extra, target.with_name(target.name + suffix))
     except OSError:
+        shutil.rmtree(target_dir, ignore_errors=True)
         return None
     return target
 
