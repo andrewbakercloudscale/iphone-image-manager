@@ -2,13 +2,13 @@
 
 Started 2026-09-17 (the day the camera photo roll finished uploading), updated
 2026-09-17 late evening (section 8), 2026-09-19 (section 3b) and **2026-09-20
-2026-09-21 14:05, which is the section immediately below and the only one to trust for
+2026-09-21 15:10, which is the section immediately below and the only one to trust for
 current state.** Everything is measured or recorded, not assumed -- and section
 8c is about the difference between those two words.
 
 ---
 
-## START HERE -- state at 2026-09-21 14:05
+## START HERE -- state at 2026-09-21 15:10
 
 **The video job is RUNNING** (restarted 12:48, `cycle.sh video 40`), with
 `after-video.sh` waiting to start screenshots and `watch-video.sh` writing an ALIVE
@@ -55,6 +55,18 @@ released after it. `release` is now `do_release`, called at the top of each cycl
 AND straight after a backlog upload. Nothing tells a human when the job stops:
 `watch-video.sh` only writes a file, so **check `watch.log` for `JOB GONE`
 yourself, or add a push notification.**
+
+**Disk is the real constraint (09-21 15:00).** With the archive dir empty and the Bin
+empty, 17-18 GB was free and would not rise. The Photos library is 141 GB (originals
+114 GB, +18 GB since 09-20 although 33 GB was fetched that day): PhotoKit downloads each
+original *into the library* and Optimise Mac Storage evicts them only under pressure,
+about half so far. So a chunk costs its size in disk long after upload and release.
+`chunk_bytes` is now **6GB**, sized to free space minus the 10 GiB floor; it will stop
+with exit 2 when free < chunk + floor. About 741 videos (~60 GB) remain, so **the job
+cannot finish on the current disk unless ~25 GB more is freed or macOS evicts more.**
+The user's own files that would do it (not touched): `~/Downloads` 22 GB (Raspberry Pi
+images, backup zips), rancher-desktop 16 GB, Claude app data 12 GB. `watch-video.sh`
+now also raises a macOS notification with a sound when the job stops.
 
 **Still open:** the Photos library's `originals` grew 10/32/48/14 GB on 09-17..20 as
 PhotoKit fetched. Optimize Mac Storage should evict them under pressure, but this
