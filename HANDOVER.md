@@ -68,6 +68,12 @@ The user's own files that would do it (not touched): `~/Downloads` 22 GB (Raspbe
 images, backup zips), rancher-desktop 16 GB, Claude app data 12 GB. `watch-video.sh`
 now also raises a macOS notification with a sound when the job stops.
 
+**Old videos removed from the phone, 2026-09-21.** Audit clean first (24,000 verified rows,
+0 missing, 0 mismatched). `remove-from-iphone --source camera --type video --older-than 1y`:
+**1,105 removed, 109.6 GB, 0 failed.** Recently Deleted expires about 2026-10-21. 415 stay
+on the phone: 370 with no hash recorded, 45 not verified in Drive. Re-run it as the video
+job uploads more; each run plans against a fresh scan.
+
 **Still open:** the Photos library's `originals` grew 10/32/48/14 GB on 09-17..20 as
 PhotoKit fetched. Optimize Mac Storage should evict them under pressure, but this
 has not been observed. Watch free space across chunk 2: if it falls ~13 GB per
