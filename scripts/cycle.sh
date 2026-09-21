@@ -160,6 +160,26 @@ for line in sys.stdin:
   [ "$left" = "0" ]
 }
 
+# Release anything already safe in the cloud. It is the only step that gives disk
+# back, so it runs first in every cycle AND straight after a backlog upload:
+# on 2026-09-20 the backlog upload succeeded, the loop went on to the free-space
+# check with those 253 files still held, found 23 GB against 24.7 needed and
+# stopped, leaving 19 GB that was already safe in Drive sitting on the disk for
+# fifteen hours.
+# Deliberately unscoped: a leftover verified file is disk this job needs.
+do_release() {
+  if [ "$RELEASE" = "1" ]; then
+    local n; n=$(releasable)
+    if [ "$n" -gt 0 ]; then
+      say "releasing $n file(s) already verified in Drive"
+      $PY -m iphone_image release --apply >> "$LOG" 2>&1 || { say "release failed, stopping"; exit 1; }
+      say "after release: $(gb "$(free_b)") GB free (the Bin still holds it until emptied)"
+    fi
+  else
+    say "release is OFF: Mac copies are held so remove-from-iphone can run first"
+  fi
+}
+
 # Wait for anything already running.
 while pgrep -f 'iphone_image cloud' >/dev/null || pgrep -f 'iphone_image sync' >/dev/null; do sleep 60; done
 
@@ -171,25 +191,14 @@ for cycle in $(seq 1 "$CYCLES"); do
   NET_WAITED=0
   say "=== cycle $cycle/$CYCLES: $(gb "$(free_b)") GB free, $(to_fetch) left to fetch ==="
 
-  # 1. Release anything already safe in the cloud. Always first: it is the
-  #    only step that gives disk back, and the fetch below needs room.
-  #    Deliberately unscoped: a leftover verified file is disk this job needs.
-  if [ "$RELEASE" = "1" ]; then
-    n=$(releasable)
-    if [ "$n" -gt 0 ]; then
-      say "releasing $n file(s) already verified in Drive"
-      $PY -m iphone_image release --apply >> "$LOG" 2>&1 || { say "release failed, stopping"; exit 1; }
-      say "after release: $(gb "$(free_b)") GB free (the Bin still holds it until emptied)"
-    fi
-  else
-    say "release is OFF: Mac copies are held so remove-from-iphone can run first"
-  fi
+  do_release
 
   # 1b. Upload any backlog before fetching more. Unuploaded bytes sit on the Mac
   #     and cannot be released, so fetching on top of them only spends the disk.
   if [ "$(unuploaded)" -gt 0 ]; then
     say "$(unuploaded) file(s) on the Mac not yet in Drive: uploading them before fetching"
     upload_now
+    do_release
   fi
 
   # 2. Stop if there is nothing left to do.
