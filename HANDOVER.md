@@ -1,179 +1,172 @@
 # Handover
 
-Started 2026-09-17 (the day the camera photo roll finished uploading), updated
-2026-09-17 late evening (section 8), 2026-09-19 (section 3b) and **2026-09-20
-2026-09-21 15:10, which is the section immediately below and the only one to trust for
-current state.** Everything is measured or recorded, not assumed -- and section
-8c is about the difference between those two words.
+Started 2026-09-17 (the day the camera photo roll finished uploading). Updated
+2026-09-22 09:15, which is the section immediately below and the only one to
+trust for current state. Older material was folded into "Recent history" and
+the sections after it; **treat any date-stamped claim outside this section as
+history, not current state.**
 
 ---
 
-## START HERE -- state at 2026-09-21 15:10
+## START HERE -- state at 2026-09-22 09:15
 
-**The video job is RUNNING** (restarted 12:48, `cycle.sh video 40`), with
-`after-video.sh` waiting to start screenshots and `watch-video.sh` writing an ALIVE
-line every 10 minutes to `~/.iphone-image/watch.log`. 47.7 GB free at restart, a
-chunk needs 24.7 GB. Chunk 1 (131 videos) landed and verified this morning:
-829 of 1,823 videos are now in Drive, 994 to go. **The Mac was on battery (84%)**;
-plug it in.
+**Nothing is running.** The video job stopped at 23:29 on 09-21 on a genuine
+error (below), not disk, network or the stall guard -- **this one needs a human
+decision, not just a restart.** The Mac is on mains, 27% and charging. Git is
+clean and pushed (`af30ffc`); 375 tests pass, ruff clean.
 
-**The disk was not full of Bin files. It was full of our own leak.** The 12:18 stop
-("13 GB free, needs 24.7") happened with the Bin already empty, and the earlier
-notes blaming "released bytes sit in the Bin" were wrong. `doctor` copies the Photos
-database and its WAL to a temp dir on every call (the WAL alone is 7.7 GB) and
-**never removed the copy**: 1,748 `iim-doctor-*` dirs, 23 GB, plus a stray 10 GB WAL
-copy from 09-17. Deleted, and `doctor.py` now removes its copy at exit, on a failed
-copy, and sweeps any over an hour old (tests in `tests/test_doctor_temp_copies.py`).
-Disk went 14 -> 47.7 GB. **Unexplained:** who ran `doctor` ~580 times. Nothing in
-`~/.iphone-image` or launchd does. Check `ls /private/var/folders/*/*/T | grep -c
-iim-doctor` if free space falls again; the sweep now caps it, but a caller looping
-on `doctor` would still cost ~10 GB transiently each time.
+### Why it stopped, and what to do about it
 
-Also fixed this morning (see `scripts/`): `cycle.sh` measures the requirement in
-bytes the way `sync` does and **empties the Bin itself** when every item is a
-released asset (a foreign file blocks it, exit 2); `chunk_bytes` is 13GB.
-
-**Outages and sleep (added 18:30).** The job stopped twice on 09-20 for reasons that
-were not its fault: the internet dropped 13:05-13:41 (fetch `-1009`, upload `dial
-tcp`), and the Mac slept on battery 14:30-17:53 despite `caffeinate` (macOS ignores
-the system-sleep assertion on battery; a closed lid sleeps regardless). The 13:41
-stop was the stall guard reading an outage as "no progress". `cycle.sh` now:
-- waits for `www.googleapis.com` (30 s polls, gives up after 3 h, exit 5) before
-  every fetch and upload, instead of spending a cycle on it;
-- does not count a cycle as stalled if the network was down during it, detected
-  from the output (`NSURLErrorDomain -100x`, `PHPhotosErrorDomain 3169`, `dial tcp`);
-- **uploads any backlog before fetching more** (files verified on the Mac but not in
-  Drive cannot be released, so fetching on top of them only spends disk).
-The job survived the 3.5 h sleep by itself once the Mac woke. **Sleep on battery is
-not fixable in software here: plug the Mac in and keep the lid open.**
-
-**Stopped 22:44 on 09-20, found 14:02 on 09-21 (15 h lost).** The backlog upload
-finished (253 videos, 19 GB, all verified in Drive), but `cycle.sh` went straight to
-the free-space check without releasing them: 23.2 GB against 24.7 needed, exit 2.
-My 09-20 change had moved the backlog upload ahead of the release step and never
-released after it. `release` is now `do_release`, called at the top of each cycle
-AND straight after a backlog upload. Nothing tells a human when the job stops:
-`watch-video.sh` only writes a file, so **check `watch.log` for `JOB GONE`
-yourself, or add a push notification.**
-
-**Disk is the real constraint (09-21 15:00).** With the archive dir empty and the Bin
-empty, 17-18 GB was free and would not rise. The Photos library is 141 GB (originals
-114 GB, +18 GB since 09-20 although 33 GB was fetched that day): PhotoKit downloads each
-original *into the library* and Optimise Mac Storage evicts them only under pressure,
-about half so far. So a chunk costs its size in disk long after upload and release.
-`chunk_bytes` is now **6GB**, sized to free space minus the 10 GiB floor; it will stop
-with exit 2 when free < chunk + floor. About 741 videos (~60 GB) remain, so **the job
-cannot finish on the current disk unless ~25 GB more is freed or macOS evicts more.**
-The user's own files that would do it (not touched): `~/Downloads` 22 GB (Raspberry Pi
-images, backup zips), rancher-desktop 16 GB, Claude app data 12 GB. `watch-video.sh`
-now also raises a macOS notification with a sound when the job stops.
-
-**Old videos removed from the phone, 2026-09-21.** Audit clean first (24,000 verified rows,
-0 missing, 0 mismatched). `remove-from-iphone --source camera --type video --older-than 1y`:
-**1,105 removed, 109.6 GB, 0 failed.** Recently Deleted expires about 2026-10-21. 415 stay
-on the phone: 370 with no hash recorded, 45 not verified in Drive. Re-run it as the video
-job uploads more; each run plans against a fresh scan.
-
-**Still open:** the Photos library's `originals` grew 10/32/48/14 GB on 09-17..20 as
-PhotoKit fetched. Optimize Mac Storage should evict them under pressure, but this
-has not been observed. Watch free space across chunk 2: if it falls ~13 GB per
-chunk with the Bin empty, that is the next leak.
-
-### Numbers (ledger, 2026-09-20)
+`release` failed with a Google Drive API error while re-verifying 39 videos
+before trashing their Mac copies:
 
 ```
-verified in Drive          23,586     22,888 photos 68.7 GiB   698 videos 73.8 GiB
-removed from the phone     18,037     5,024 (09-17) + 13,013 (09-19)
-                                      Recently Deleted expires ~2026-10-17 and ~2026-10-19
-camera video               1,823      168.6 GiB
-   in Drive                  829      ~87 GiB     45%   (698 old ones still on the phone: 693 removable)
-   still to fetch            994      ~82 GB      about 7 chunks of 13 GiB
-   FAILED                      0
-screenshots, older than 1y 11,313     12.8 GiB    not started (2,899 are suspected proxies)
-Mac disk free                47.7 GB  after removing the leaked doctor copies; a chunk needs 24.7 GB
+error: rclone lsjson exited 1: ... "quota_metric": "drive.googleapis.com/default" ...
 ```
+
+That is a **Google Drive API quota/rate-limit error**, not a disk or network
+problem -- confirmed by testing `rclone lsjson gdrive:Diskstation2` right after,
+which succeeded immediately. `cycle.sh` treats a release failure as fatal by
+design (`do_release` calls `exit 1` rather than guessing whether it is safe to
+retry a step that is about to trash local files), so it stopped rather than
+loop against a rate limit. **This failure mode has no retry/backoff yet** --
+unlike the fetch/upload path, which now waits out a network outage.  If this
+becomes a recurring first-thing-in-the-morning problem, `do_release` needs the
+same "wait and retry" treatment `wait_for_net` gives fetch/upload, keyed off
+this error text (`quota_metric`, http 403/429) rather than network-error text.
+Nothing was lost: no partial state, the ledger and phone agree (checked below).
+
+**To resume:** just restart it (command in "First actions"). Nothing to clean
+up -- the failed release never got as far as trashing anything.
+
+### Numbers (ledger + a fresh Drive check, both just run)
+
+```
+camera video, all-time            1,823     181.1 GB
+  verified in Drive                1,275     135.6 GB   70%
+    of which released (Mac copy gone)  1,236   129.3 GB
+    of which awaiting release             39     6.3 GB   <- stuck here when it stopped
+  still to fetch                      548      45.4 GB   about 8 chunks of 6 GB
+  removed from the phone            1,105     109.6 GB   2026-09-21, audit clean first
+                                              Recently Deleted expires ~2026-10-21
+  newly removable now (fresh plan)    109      11.5 GB   re-run remove-from-iphone
+  blocked, no hash yet                260                will clear as sync fetches them
+
+camera photos                      22,888     released, 100% done (finished 09-17)
+screenshots, older than 1y         11,313     12.8 GiB   not started
+Mac disk free                        17.8 GB  the floor is 10 GiB; a 6 GB chunk needs 16.7 GB
+Bin                                    124 items   not checked whether all ours -- see below
+```
+
+Audit ran clean at 20:44 on 09-21 (24,054 verified rows, 0 missing, 0
+mismatched) and again just now implicitly via the fresh `rclone lsjson` test.
+Re-run `audit` (not `--offline`) before any removal pass regardless -- it is
+cheap insurance and the rule that has caught real problems before.
 
 ### First actions, in order
 
-1. **Plug the Mac in.** Then `tail -3 ~/.iphone-image/watch.log`: the last line
-   must say `alive` with a recent timestamp. `JOB GONE` means read the last
-   camera/video lines in `cycle.log` and re-run the restart command below.
-2. **If the job is gone**, restart it (it resumes from the ledger):
+1. **Check the Bin before restarting.** It holds 124 items; the ones I sampled
+   (`IMG_4245.MOV` .. `IMG_4250.MOV`) look like released videos, but I did not
+   check all 124. `cycle.sh` will only empty it itself if every name matches a
+   released ledger row -- if it refuses (exit 2, "Bin: holds N item(s) but M
+   are NOT..."), look at what it flagged before emptying by hand.
+2. **Restart the video job** (it resumes from the ledger):
    ```bash
    cd ~ && nohup caffeinate -dimsu ~/.iphone-image/cycle.sh video 40 \
      > ~/.iphone-image/cycle-video.out 2>&1 & disown
    nohup ~/.iphone-image/after-video.sh > ~/.iphone-image/after-video.out 2>&1 & disown
    nohup ~/.iphone-image/watch-video.sh > /dev/null 2>&1 & disown
    ```
-   Exit 2 now means the Bin holds something that is not ours: look, empty it by
-   hand, re-run. Exit 4 means two cycles without progress that were not the network: read the sync errors. Exit 5 means the network stayed down for 3 h.
-3. **Remove the 693 old videos** (73.4 GiB, verified in Drive, still on the
-   phone). Needs a human at the Mac: the macOS dialog is Apple's. Runs alongside
-   the fetch (did on 09-19):
+   Exit codes: **1** release failed (a real error -- read `cycle.log`, do not
+   just re-run blindly if it repeats); **2** disk floor, Bin needs emptying (it
+   tries itself first); **4** two cycles with no progress that were not the
+   network; **5** network down for 3h straight. `watch-video.sh` also raises a
+   macOS notification with a sound on any of these, so you do not need to poll
+   `watch.log` yourself if you are at the Mac.
+3. **Remove the 109 videos already verified in Drive** (11.5 GB). Needs a human
+   at the Mac -- Apple's confirmation dialog can only be clicked there, and it
+   silently times out (25 min) with nothing removed if nobody does:
    ```bash
    cd ~/Desktop/github/iphone-image-manager && export PYTHONPATH=src
    ./.venv/bin/python -m iphone_image audit                     # ~5 min, must exit 0
    ./.venv/bin/python -m iphone_image remove-from-iphone --source camera --type video --older-than 1y
-   # read the plan, then re-run it with the --apply --confirm "<phrase>" it prints
+   # read the plan (numbers will have moved on), then re-run with the
+   # --apply --confirm "<phrase>" it prints, and click the dialog when it appears
    ```
-4. **Screenshots start themselves** this time: `after-video.sh` is waiting and
-   runs `cycle.sh photo 4 screenshot 1y` when the video job ends with "nothing
-   left to fetch". Then `audit`, then `remove-from-iphone --source screenshot
-   --older-than 1y`; expect ~8,400 of the 11,313 to be removable.
+4. **Screenshots start themselves** once the video job finishes cleanly:
+   `after-video.sh` runs `cycle.sh photo 4 screenshot 1y` when the log shows
+   "nothing left to fetch" for camera/video. Then `audit`, then
+   `remove-from-iphone --source screenshot --older-than 1y`.
+
+### Recent history (compressed; each of these cost real hours -- read before
+changing `cycle.sh` again, do not just re-diagnose from scratch)
+
+- **09-20 leaked disk (23 GB):** `doctor` copied the Photos database + WAL to a
+  temp dir on every call and never deleted it. Fixed: removed at exit, swept if
+  stale. Who called `doctor` ~580 times was never found; the sweep caps the
+  damage either way.
+- **09-20 network outages + battery sleep:** the stall guard once misread a
+  network outage as "no progress" and stopped. `cycle.sh` now waits out an
+  outage (30s polls, 3h cap) before every fetch/upload instead of spending a
+  cycle on it. Sleep on battery is not fixable in software -- keep the Mac
+  plugged in with the lid open.
+- **09-20/21 a fixed bug re-broke recovery:** moving the backlog-upload step
+  ahead of release (to fix the outage misread) skipped the release call that
+  used to run unconditionally at the top of the loop, so 15 hours were lost
+  overnight with 19 GB sitting safely verified in Drive but never released.
+  `release` is now `do_release`, called both at the top of every cycle and
+  right after a backlog upload.
+- **09-21 the real disk constraint:** the Bin and archive folder being empty is
+  not enough -- PhotoKit downloads each fetched original *into the Photos
+  library itself*, and macOS only evicts them under storage pressure, slowly.
+  `chunk_bytes` was cut from 15GB to 6GB so a chunk fits in whatever headroom
+  exists rather than overshooting the floor.
+- **09-21 old videos removed:** 1,105 removed from the phone (109.6 GB), audit
+  clean first. A same-day retry of 54 more timed out waiting for the
+  confirmation dialog (nobody was at the Mac) -- nothing was removed, no side
+  effects, and 109 are removable now (the 54 plus new ones the job verified).
 
 ### Do not repeat these
 
-- **Watch for the job DYING, not only for events.** A watcher that greps the log for
-  `WARNING:` is silent when the process is gone, which is how 12 hours were lost.
-  Poll `pgrep -f "cycle.sh video"` in the same loop. And **never
-  `tail -n +"$(wc -l < f)"`** -- macOS `wc -l` pads with spaces, `tail` rejects the
-  offset (`illegal offset`), and the grep never runs. That silently disabled a
-  monitor for 15 hours on 09-18.
-- **Never edit `cycle.sh` in place while a job runs from it.** Bash reads scripts
-  incrementally. Write `cycle.sh.new` and `mv` it over (the running process keeps
-  the old inode). The operational scripts live in `~/.iphone-image/` and are **not
-  in git**; consider copying them under `scripts/` in the repo.
-- **On battery the Mac sleeps despite `caffeinate`** (`PreventSystemSleep 0`), and
-  a sleeping laptop wedges rclone with a frozen byte count. It was on BATTERY at the 09:05 restart.
-  `no_progress_timeout_seconds` (30 min) now kills such a transfer, but the job
-  still loses the time.
-- **One PhotoKit exporter at a time** for fetches. Two syncs on one library is a
-  device-stability risk this project has always avoided. (A removal alongside a
-  fetch has been fine.)
-- **Do not trust the ledger to verify the ledger.** `audit` last ran clean on
-  09-19 (23,301 rows, 0 missing, 0 mismatched). It has not run since 285 more
-  videos were verified. Run it before every removal pass.
+- **Watch for the job DYING, not only for events.** A watcher that greps for
+  `WARNING:` is silent when the process is gone. Poll `pgrep -f "cycle.sh
+  video"` in the same loop -- `watch-video.sh` already does, and now also
+  raises a macOS notification.
+- **Never edit `cycle.sh` in place while a job runs from it.** Bash reads
+  scripts incrementally. Write `cycle.sh.new` and `mv` it over. Copies live in
+  `scripts/` in this repo; the running copy is `~/.iphone-image/cycle.sh` and
+  is **not in git** -- copy back after editing.
+- **On battery the Mac sleeps despite `caffeinate`.** Keep it plugged in with
+  the lid open; this has cost hours more than once.
+- **One PhotoKit exporter at a time** for fetches -- device-stability risk.
+  (Removal alongside a fetch is fine.)
+- **Do not trust the ledger to verify the ledger.** Run `audit` (not
+  `--offline`) before every removal pass, not just once a week.
 
 ### Decisions the user has made (durable)
 
-- **Deletion is gated on Google Drive, never on the Mac.** Verbatim: "the deletion
-  should require gdrive verification, not mac verification." Section 3b and
-  `docs/SAFETY.md` 1b. Under `cloud_verified` the Drive hash is re-read in the
-  same run and must match; the Mac copy is not consulted.
+- **Deletion is gated on Google Drive, never on the Mac.** Verbatim: "the
+  deletion should require gdrive verification, not mac verification." Section
+  3b and `docs/SAFETY.md` 1b. Under `cloud_verified` the Drive hash is re-read
+  in the same run and must match; the Mac copy is not consulted.
 - **Videos go straight into the existing `Diskstation2/Family Videos` year
-  folders**, not a subfolder (verified collision-free against the 7,168 files
-  already there).
+  folders**, not a subfolder (verified collision-free).
 - **Screenshots go to `.../Andrew iPhone Archive/screenshots`**, filed by
-  year/month. Goal for everything: **12 months on the phone, all older uploaded
-  and removed.**
+  year/month. Goal for everything: **12 months on the phone, all older
+  uploaded and removed.**
 - No external drive, ever. The Mac is a buffer; Drive is the archive.
 
 ### Open questions for the user
 
-- **Google Photos for search.** Asked 2026-09-19, answered but not started. Facts
-  checked against current docs: Drive does not sync to Photos; Photos' importer
-  (Add -> Google Drive) is manual and its docs list photo types only (video
-  unconfirmed); rclone's Google Photos backend can upload at original quality and
-  create albums from paths, but since 2025 can only see what it uploaded itself.
-  It is a *second copy* counting against the same 5 TiB. Needs the user to run
-  `rclone config` (browser login). Suggested: trial one folder with the importer
-  first. Nothing built.
-- **Drive object IDs.** `assets.cloud_path` stores the full Drive path, verify time
-  and hash for all 23,586 verified assets; `cloud_objects` (which has an
-  `object_id` column) is empty and `rclone lsjson` already returns IDs. Offered,
-  not done.
-- **436 Live Photos + 14 bursts** are blocked from removal because their motion
-  halves / frames were never archived. Archive them, or leave them on the phone.
+- **Google Photos for search.** Asked 2026-09-19, answered but not started.
+  Drive does not sync to Photos; Photos' importer is manual; rclone's Google
+  Photos backend would be a *second copy* against the same 5 TiB quota and
+  needs a browser login (`rclone config`). Suggested: trial one folder with
+  the importer first. Nothing built.
+- **Drive object IDs.** `cloud_objects.object_id` is empty though
+  `rclone lsjson` already returns IDs. Offered, not done.
+- **436 Live Photos + 14 bursts** are blocked from removal because their
+  motion halves / frames were never archived. Archive them, or leave them.
 - **WhatsApp and screen recordings** still have no pipeline (section 9).
 
 ### Where things live
@@ -184,8 +177,8 @@ Mac disk free                47.7 GB  after removing the leaked doctor copies; a
 | run it | `export PYTHONPATH=src; ./.venv/bin/python -m iphone_image <verb>` |
 | ledger | `~/Desktop/iphone/iphone-image.sqlite` (backup `...backup-20260917-215225`, pre-repair) |
 | config | `~/.iphone-image/config.yaml` (backups alongside) |
-| jobs | `~/.iphone-image/cycle.sh [photo\|video] [cycles] [source] [older-than]`, `after-video.sh` |
-| logs | `~/.iphone-image/cycle.log` (rolled 09-19: `cycle.log.through-2026-09-19-0800`) |
+| jobs | `~/.iphone-image/cycle.sh [photo\|video] [cycles] [source] [older-than]`, `after-video.sh`, `watch-video.sh` -- not in git; copies tracked in `scripts/` |
+| logs | `~/.iphone-image/cycle.log` (rolled 09-19: `cycle.log.through-2026-09-19-0800`), `~/.iphone-image/watch.log` |
 | verbs | `doctor scan list sync cloud release remove-from-iphone relocate audit status` |
 
 ---
