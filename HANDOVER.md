@@ -23,8 +23,11 @@ and `watch-video.sh`). Mac on mains.
 - At restart: **154 videos left to fetch**, 15 on the Mac awaiting upload
   (uploaded first), 35.9 GB free, Drive reachable, 27 items in the Bin (cycle.sh
   checks them against the ledger before emptying).
-- Still pending from 09-22: remove the verified videos from the phone (step 3
-  below; needs a human at the Mac for Apple's dialog).
+- **09-28 14:20: 252 more old videos removed from the phone (20.0 GB)**, 0
+  failed, audit clean first (24,582 verified, 0 missing, 0 mismatched). In
+  Recently Deleted until ~2026-10-28. Re-run step 3 below as the job verifies
+  more; the user is fine clicking Apple's dialog but does not want to be asked
+  to do anything "manual" -- just say "click Delete when the dialog appears".
 - **09-28: release now retries** Drive quota errors (backoff 2->30 min, exit 6
   after 3h) and network drops (`release_with_retry` in `cycle.sh`). Installed to
   `~/.iphone-image/cycle.sh`, but the job started at 13:02 runs the OLD copy
