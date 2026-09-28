@@ -8,7 +8,25 @@ history, not current state.**
 
 ---
 
-## START HERE -- state at 2026-09-28 13:05 (supersedes the 09-22 section below)
+## START HERE -- state at 2026-09-28 20:10 (supersedes everything below)
+
+- **Camera videos: DONE.** The video job finished cleanly at 20:03 ("nothing
+  left to fetch"); every camera video is verified in Drive. A fresh removal
+  plan for videos older than 1y examines 0 assets: 1,105 (09-21) + 252 (09-28)
+  were removed, and the rest are under a year old and stay on the phone by
+  design. Re-run that plan periodically as videos age past a year.
+- **Screenshots older than 1y: RUNNING**, started 20:05 by `after-video.sh`
+  (`cycle.sh photo 4 screenshot 1y`): 11,354 to fetch. **Only 4 cycles** with a
+  2GB chunk, so it will stop long before finishing; restart it with more
+  cycles (e.g. 40) when it ends. Then `audit`, then
+  `remove-from-iphone --source screenshot --older-than 1y`.
+- `watch-video.sh` only watches `cycle.sh video`, so **nothing is watching the
+  screenshot job**. Check `cycle.log` by hand.
+- The Mac was on battery again from ~16:47 (55% at 20:04). Keep it plugged in.
+
+---
+
+## START HERE -- state at 2026-09-28 13:05 (history now)
 
 **Video job is RUNNING again** (restarted 13:02 on 09-28, with `after-video.sh`
 and `watch-video.sh`). Mac on mains.
