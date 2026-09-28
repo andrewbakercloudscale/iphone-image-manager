@@ -8,6 +8,27 @@ history, not current state.**
 
 ---
 
+## START HERE -- state at 2026-09-28 13:05 (supersedes the 09-22 section below)
+
+**Video job is RUNNING again** (restarted 13:02 on 09-28, with `after-video.sh`
+and `watch-video.sh`). Mac on mains.
+
+- Between 09-22 and 09-24 a session restarted the job several times and cut
+  `chunk_bytes` 6GB -> 3GB -> **2GB** in `~/.iphone-image/config.yaml` (not in
+  git): with ~13.8 GB free, a chunk plus the 10 GiB floor kept missing by a few
+  hundred MB. This handover was not updated at the time.
+- The job then died at around 08:29 on 09-24 while waiting out a network
+  outage, **on battery** (watch.log shows 'Battery Power' throughout), which is
+  the known sleep problem again. Nothing was lost.
+- At restart: **154 videos left to fetch**, 15 on the Mac awaiting upload
+  (uploaded first), 35.9 GB free, Drive reachable, 27 items in the Bin (cycle.sh
+  checks them against the ledger before emptying).
+- Still pending from 09-22: remove the verified videos from the phone (step 3
+  below; needs a human at the Mac for Apple's dialog), and `do_release` still
+  has no retry for Drive quota errors.
+
+---
+
 ## START HERE -- state at 2026-09-22 09:15
 
 **Nothing is running.** The video job stopped at 23:29 on 09-21 on a genuine
