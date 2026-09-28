@@ -167,12 +167,45 @@ for line in sys.stdin:
 # stopped, leaving 19 GB that was already safe in Drive sitting on the disk for
 # fifteen hours.
 # Deliberately unscoped: a leftover verified file is disk this job needs.
+# Did the output written since byte offset $1 show Drive refusing on quota?
+# rclone reports it as rateLimitExceeded / RATE_LIMIT_EXCEEDED with a
+# quota_metric, or plain HTTP 403/429 with "Quota exceeded".
+quota_hit_since() {
+  tail -c +"$(($1 + 1))" "$LOG" | grep -qE "rateLimitExceeded|RATE_LIMIT_EXCEEDED|userRateLimitExceeded|quota_metric|Quota exceeded|Error 429"
+}
+
+# Release, waiting out a Drive quota refusal or a network drop instead of
+# stopping. On 2026-09-21 (23:29) the job stopped overnight on a per-minute
+# quota error from the re-verification listing that clears on its own.
+# Retrying is safe: release re-plans from a fresh Drive listing every call and
+# only trashes a file after that listing re-proves its hash, and it failed in
+# that listing, before trashing anything. Any other error still stops (exit 1).
+# Quota: backoff 2, 4, 8, 16, then 30 min, stop after 3h (exit 6).
+release_with_retry() {
+  local mark wait=120 waited=0
+  while :; do
+    mark=$(log_bytes)
+    $PY -m iphone_image release --apply >> "$LOG" 2>&1 && return 0
+    if quota_hit_since "$mark"; then
+      if [ "$waited" -ge 10800 ]; then say "release: Drive still over quota after 3h. STOPPING."; exit 6; fi
+      say "release: Drive quota/rate limit hit. Waiting $((wait / 60)) min and retrying."
+      sleep "$wait"; waited=$((waited + wait))
+      wait=$((wait * 2)); [ "$wait" -gt 1800 ] && wait=1800
+    elif net_hit_since "$mark"; then
+      say "release: network failure. Waiting for it and retrying."
+      NET_WAITED=1; wait_for_net
+    else
+      say "release failed, stopping"; exit 1
+    fi
+  done
+}
+
 do_release() {
   if [ "$RELEASE" = "1" ]; then
     local n; n=$(releasable)
     if [ "$n" -gt 0 ]; then
       say "releasing $n file(s) already verified in Drive"
-      $PY -m iphone_image release --apply >> "$LOG" 2>&1 || { say "release failed, stopping"; exit 1; }
+      release_with_retry
       say "after release: $(gb "$(free_b)") GB free (the Bin still holds it until emptied)"
     fi
   else

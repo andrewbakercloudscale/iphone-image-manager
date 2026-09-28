@@ -24,8 +24,11 @@ and `watch-video.sh`). Mac on mains.
   (uploaded first), 35.9 GB free, Drive reachable, 27 items in the Bin (cycle.sh
   checks them against the ledger before emptying).
 - Still pending from 09-22: remove the verified videos from the phone (step 3
-  below; needs a human at the Mac for Apple's dialog), and `do_release` still
-  has no retry for Drive quota errors.
+  below; needs a human at the Mac for Apple's dialog).
+- **09-28: release now retries** Drive quota errors (backoff 2->30 min, exit 6
+  after 3h) and network drops (`release_with_retry` in `cycle.sh`). Installed to
+  `~/.iphone-image/cycle.sh`, but the job started at 13:02 runs the OLD copy
+  until it is next restarted.
 
 ---
 
@@ -98,7 +101,9 @@ cheap insurance and the rule that has caught real problems before.
    nohup ~/.iphone-image/after-video.sh > ~/.iphone-image/after-video.out 2>&1 & disown
    nohup ~/.iphone-image/watch-video.sh > /dev/null 2>&1 & disown
    ```
-   Exit codes: **1** release failed (a real error -- read `cycle.log`, do not
+   Exit codes: **6** Drive quota still refused after 3h of release retries
+   (added 09-28; quota and network errors in release now back off and retry);
+   **1** release failed (a real error -- read `cycle.log`, do not
    just re-run blindly if it repeats); **2** disk floor, Bin needs emptying (it
    tries itself first); **4** two cycles with no progress that were not the
    network; **5** network down for 3h straight. `watch-video.sh` also raises a
