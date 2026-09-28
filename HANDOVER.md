@@ -15,13 +15,11 @@ history, not current state.**
   plan for videos older than 1y examines 0 assets: 1,105 (09-21) + 252 (09-28)
   were removed, and the rest are under a year old and stay on the phone by
   design. Re-run that plan periodically as videos age past a year.
-- **Screenshots older than 1y: RUNNING**, started 20:05 by `after-video.sh`
-  (`cycle.sh photo 4 screenshot 1y`): 11,354 to fetch. **Only 4 cycles** with a
-  2GB chunk, so it will stop long before finishing; restart it with more
-  cycles (e.g. 40) when it ends. Then `audit`, then
-  `remove-from-iphone --source screenshot --older-than 1y`.
-- `watch-video.sh` only watches `cycle.sh video`, so **nothing is watching the
-  screenshot job**. Check `cycle.log` by hand.
+- **Screenshots older than 1y: RUNNING.** Restarted 21:53 on 09-28 as
+  `caffeinate -dimsu cycle.sh photo 40 screenshot 1y` (the chain had started it
+  with 4 cycles and no caffeinate). About 10,300 to fetch, ~1,000 per 1h40m.
+  Watched by `watch-screenshot.sh` (in `scripts/`), which notifies on stop.
+  When done: `audit`, then `remove-from-iphone --source screenshot --older-than 1y`.
 - The Mac was on battery again from ~16:47 (55% at 20:04). Keep it plugged in.
 
 ---
