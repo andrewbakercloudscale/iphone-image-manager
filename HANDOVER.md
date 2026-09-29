@@ -1,74 +1,77 @@
 # Handover
 
-Started 2026-09-17 (the day the camera photo roll finished uploading). Updated
-2026-09-22 09:15, which is the section immediately below and the only one to
-trust for current state. Older material was folded into "Recent history" and
-the sections after it; **treat any date-stamped claim outside this section as
-history, not current state.**
+Started 2026-09-17. Updated **2026-09-29 12:05** -- the section immediately
+below is the only one to trust for current state. Everything after it is
+history, except the durable rules/decisions in the 09-22 section.
 
 ---
 
-## START HERE -- state at 2026-09-28 20:10 (supersedes everything below)
+## START HERE -- state at 2026-09-29 12:05
 
-- **Camera videos: DONE.** The video job finished cleanly at 20:03 ("nothing
-  left to fetch"); every camera video is verified in Drive. A fresh removal
-  plan for videos older than 1y examines 0 assets: 1,105 (09-21) + 252 (09-28)
-  were removed, and the rest are under a year old and stay on the phone by
-  design. Re-run that plan periodically as videos age past a year.
-- **Screenshots older than 1y: RUNNING.** Restarted 21:53 on 09-28 as
-  `caffeinate -dimsu cycle.sh photo 40 screenshot 1y` (the chain had started it
-  with 4 cycles and no caffeinate). About 10,300 to fetch, ~1,000 per 1h40m.
-  Watched by `watch-screenshot.sh` (in `scripts/`), which notifies on stop.
-  When done: `audit`, then `remove-from-iphone --source screenshot --older-than 1y`.
-- **09-29: hotspot guard.** `cycle.sh` now pauses (no time limit) while the Mac
-  is on the iPhone hotspot (gateway 172.20.10.x or macOS IsExpensive), and a
-  side loop kills an in-flight sync/upload if it switches mid-transfer. At
-  11:33 the screenshot job was started and is PAUSED on the hotspot: 3,669 to
-  fetch, 1,846 fetched and awaiting upload. It resumes by itself on wifi.
-- **WhatsApp media (owner's decision 09-29): back up, then remove.** Older than
-  18 months goes to ONE flat folder `.../Andrew iPhone Archive/WhatsApp Media`
-  (`cloud.whatsapp_destination`, `organization.flat_channels`), clashing names
-  numbered `IMG_1 (1).jpg`. Removal stays Drive-gated as for everything else;
-  favourites and items in the owner's own albums are kept
-  (`remove_from_iphone.keep_user_album_channels`; album list in remove.py
-  AUTOMATIC_ALBUMS -- an unknown name keeps the item). In scope: 32,242 photos
-  (4.6 GB, 626 proxies that can never be removed) + ~2,200 videos (~16 GB).
-  `after-screenshot.sh` (running) starts `cycle.sh photo 40 whatsapp 18m`,
-  then `video 40 whatsapp 18m`, once screenshots finish cleanly;
-  `watch-job.sh whatsapp 18m` watches it. Then `audit`, then
-  `remove-from-iphone --source whatsapp --older-than 18m` (both types).
-- The Mac was on battery again from ~16:47 (55% at 20:04). Keep it plugged in.
+**Jobs are RUNNING but PAUSED**: the Mac is on the iPhone hotspot, and
+`cycle.sh` now refuses to transfer on it. They resume by themselves on normal
+wifi. Nothing to do except get the Mac on wifi, on mains, lid open.
+
+| process | what |
+|---|---|
+| `cycle.sh photo 40 screenshot 1y` (+caffeinate) | screenshots older than 1y. Paused on hotspot since 11:33. 3,669 to fetch; 1,846 fetched, awaiting upload. ~1,000 per 1h40m once running |
+| `watch-screenshot.sh` | notifies (sound) when the screenshot job stops |
+| `after-screenshot.sh` | when screenshots FINISH cleanly: `cycle.sh photo 40 whatsapp 18m`, then `video 40 whatsapp 18m`; starts `watch-job.sh whatsapp 18m` |
+
+**If the Mac rebooted / processes are gone**, restart (each resumes from the ledger):
+```bash
+cd ~ && nohup caffeinate -dimsu ~/.iphone-image/cycle.sh photo 40 screenshot 1y > ~/.iphone-image/cycle-screenshot.out 2>&1 & disown
+nohup ~/.iphone-image/watch-screenshot.sh > /dev/null 2>&1 & disown
+nohup ~/.iphone-image/after-screenshot.sh > ~/.iphone-image/after-screenshot.out 2>&1 & disown
+```
+Check `pgrep -fl "cycle.sh|after-|watch-"` first -- never two exporters at once.
+
+### Where each category stands
+
+| | status |
+|---|---|
+| camera photos | done 09-17 |
+| camera videos | **done 09-28 20:03**; all in Drive. Phone: 1,105 (09-21) + 252 (09-28, 20.0 GB) older than 1y removed; a fresh plan finds 0 more. Re-run periodically as videos age past 1y |
+| screenshots > 1y | ~5,800 of 11,354 in Drive (`.../Andrew iPhone Archive/screenshots`). Owner "generally deletes screenshots" but agreed to finish the backup, then remove |
+| WhatsApp > 18 months | **new pipeline, not started** (queued behind screenshots). 32,242 photos (4.6 GB; 626 proxies, never removable) + ~2,200 videos (~16 GB) -> ONE flat folder `.../Andrew iPhone Archive/WhatsApp Media` |
+| screen recordings | no pipeline, no decision |
+| Live Photos / bursts | 436 + 14 blocked from removal (motion halves / frames never archived); open question |
+
+### Next actions, in order
+
+1. Wait for the screenshot job (needs wifi). If `watch-screenshot.sh` reports a stop, read the last `[screenshot/photo]` lines in `~/.iphone-image/cycle.log`.
+2. When screenshots finish: `audit` (must exit clean), then
+   `remove-from-iphone --source screenshot --older-than 1y`, then `--apply --confirm "<phrase>"`.
+   The owner clicks Delete on Apple's dialog. Do NOT describe that as "manual
+   removal" -- they objected; just ask them to click Delete when it appears.
+3. When WhatsApp finishes (both types): `audit`, then
+   `remove-from-iphone --source whatsapp --older-than 18m` (photo) and again with `--type video`.
+   Expect blocks: 6 favourites, 626 proxies, and anything in the owner's own albums.
+
+### What changed 09-28/29 (all committed; see git log for detail)
+
+- **Release retries** Drive quota (backoff 2->30 min, **exit 6** after 3h) and network errors (`release_with_retry`).
+- **Hotspot guard**: `metered()` = gateway 172.20.10.x OR macOS `IsExpensive`. `wait_off_metered` pauses with no time cap; `metered_guard` (background) kills an in-flight sync/upload within 20s of switching. Both safe to kill (hash-banked uploads; `.partial` fetches swept).
+- **Bin check** recognises Finder's timestamp renames (`IMG_0001.PNG 02-49-53-988.PNG`) -- screenshots reuse names across years; 1,114 such names stopped the job at 02:50 on 09-29 (~6h lost).
+- **WhatsApp feature**: `cloud.whatsapp_destination`; `organization.flat_channels` (flat folder, `IMG_1 (1).jpg` numbering); `remove_from_iphone.keep_user_album_channels` (keeps items in any album not in `remove.py` `AUTOMATIC_ALBUMS`, ignoring the "WhatsApp" source album; unknown names keep). All three set in `~/.iphone-image/config.yaml` (backup alongside). Tests: `tests/test_whatsapp.py`.
+- Scripts added (copies in `scripts/`, live in `~/.iphone-image/`): `watch-screenshot.sh`, `watch-job.sh <source> [older]`, `after-screenshot.sh`.
+- `chunk_bytes` is **2GB** (config comment explains). Needs chunk + 10 GiB floor free; 15 GiB free at handover.
+- The job died on battery 09-24 (sleep) and ran on battery again 09-28 -- **keep it on mains**.
+
+### Known issues
+
+- `tests/test_cloud.py::test_a_slow_transfer_that_keeps_talking_is_left_alone` fails in the full suite (timing) but passes alone -- **pre-existing**, fails identically without the 09-29 changes. 388 pass.
+- `ruff check .` flags `spikes/` (pre-existing); `ruff check src tests` is clean.
+- Unrelated to this repo: the `claude-burst` GitHub description was changed 09-28 ("arbitrages" -> "aggregates", owner's request).
+
+### Git
+
+`main`; last push was `d308a0a` (09-28). Commits after that are **local only**
+-- the owner pushes on request ("push once done" was for the 09-28 batch).
 
 ---
 
-## START HERE -- state at 2026-09-28 13:05 (history now)
-
-**Video job is RUNNING again** (restarted 13:02 on 09-28, with `after-video.sh`
-and `watch-video.sh`). Mac on mains.
-
-- Between 09-22 and 09-24 a session restarted the job several times and cut
-  `chunk_bytes` 6GB -> 3GB -> **2GB** in `~/.iphone-image/config.yaml` (not in
-  git): with ~13.8 GB free, a chunk plus the 10 GiB floor kept missing by a few
-  hundred MB. This handover was not updated at the time.
-- The job then died at around 08:29 on 09-24 while waiting out a network
-  outage, **on battery** (watch.log shows 'Battery Power' throughout), which is
-  the known sleep problem again. Nothing was lost.
-- At restart: **154 videos left to fetch**, 15 on the Mac awaiting upload
-  (uploaded first), 35.9 GB free, Drive reachable, 27 items in the Bin (cycle.sh
-  checks them against the ledger before emptying).
-- **09-28 14:20: 252 more old videos removed from the phone (20.0 GB)**, 0
-  failed, audit clean first (24,582 verified, 0 missing, 0 mismatched). In
-  Recently Deleted until ~2026-10-28. Re-run step 3 below as the job verifies
-  more; the user is fine clicking Apple's dialog but does not want to be asked
-  to do anything "manual" -- just say "click Delete when the dialog appears".
-- **09-28: release now retries** Drive quota errors (backoff 2->30 min, exit 6
-  after 3h) and network drops (`release_with_retry` in `cycle.sh`). Installed to
-  `~/.iphone-image/cycle.sh`, but the job started at 13:02 runs the OLD copy
-  until it is next restarted.
-
----
-
-## START HERE -- state at 2026-09-22 09:15
+## State at 2026-09-22 09:15 (HISTORY -- but "Do not repeat these", "Decisions" and "Where things live" below are still current)
 
 **Nothing is running.** The video job stopped at 23:29 on 09-21 on a genuine
 error (below), not disk, network or the stall guard -- **this one needs a human
