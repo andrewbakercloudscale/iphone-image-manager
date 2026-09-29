@@ -67,8 +67,44 @@ free_b() { $PY -c "import shutil,os; print(shutil.disk_usage(os.path.expanduser(
 # cycles 3-5 in forty seconds on 2026-09-20 (13:40) and stopped the run. curl
 # exits 0 on any HTTP answer, which is all "reachable" needs to mean here.
 net_ok() { curl -s -o /dev/null -m 8 https://www.googleapis.com/; }
+# Metered connection (the iPhone's Personal Hotspot). On 2026-09-29 the job ran
+# on the hotspot unnoticed: to it, any answer from Google is "network is up".
+# Two signals, either is enough: an iPhone hotspot always hands out
+# 172.20.10.0/28 with the phone at .1, and macOS flags the link IsExpensive.
+metered() {
+  local ifc gw
+  ifc=$(route -n get default 2>/dev/null | awk '/interface:/{print $2}')
+  gw=$(route -n get default 2>/dev/null | awk '/gateway:/{print $2}')
+  case "$gw" in 172.20.10.*) return 0 ;; esac
+  [ -n "$ifc" ] && ipconfig getsummary "$ifc" 2>/dev/null | grep -q "IsExpensive : TRUE"
+}
+# Pause, without a time limit, until the Mac is off the hotspot. Not capped like
+# an outage: being on the hotspot is the user's choice, not a fault.
+wait_off_metered() {
+  metered || return 0
+  NET_WAITED=1
+  say "on a metered connection (phone hotspot). PAUSED until back on normal wifi."
+  local t=0
+  while metered; do sleep 60; t=$((t + 60)); done
+  say "off the hotspot after $((t / 60)) min. Resuming."
+}
+# Runs beside the job: a switch to the hotspot mid-transfer stops the transfer
+# at once instead of at the next step. Both are safe to kill: an upload keeps
+# what is hash-verified, and sync writes .partial files it sweeps on restart.
+# The job then notices on its next wait_off_metered and pauses.
+metered_guard() {
+  while kill -0 "$$" 2>/dev/null; do
+    if metered && pgrep -f "iphone_image (sync|cloud)" >/dev/null; then
+      say "switched to the phone hotspot mid-transfer: stopping the transfer"
+      pkill -f "iphone_image (sync|cloud)"; pkill -x rclone
+    fi
+    sleep 20
+  done
+}
+
 NET_WAITED=0
 wait_for_net() {
+  wait_off_metered
   net_ok && return 0
   NET_WAITED=1
   say "network is down. Waiting for it (up to 3h) instead of spending a cycle."
@@ -208,6 +244,7 @@ do_release() {
   if [ "$RELEASE" = "1" ]; then
     local n; n=$(releasable)
     if [ "$n" -gt 0 ]; then
+      wait_off_metered   # release re-lists Drive to re-verify: small, but still data
       say "releasing $n file(s) already verified in Drive"
       release_with_retry
       say "after release: $(gb "$(free_b)") GB free (the Bin still holds it until emptied)"
@@ -219,6 +256,9 @@ do_release() {
 
 # Wait for anything already running.
 while pgrep -f 'iphone_image cloud' >/dev/null || pgrep -f 'iphone_image sync' >/dev/null; do sleep 60; done
+
+metered_guard & GUARD_PID=$!
+trap 'kill "$GUARD_PID" 2>/dev/null' EXIT
 
 say "starting: $CYCLES cycle(s), $(to_fetch) left to fetch, $(gb "$(free_b)") GB free, a chunk needs $(gb "$NEED_B") GB, release=$RELEASE, empty_bin=$EMPTY_BIN"
 

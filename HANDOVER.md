@@ -20,6 +20,14 @@ history, not current state.**
   with 4 cycles and no caffeinate). About 10,300 to fetch, ~1,000 per 1h40m.
   Watched by `watch-screenshot.sh` (in `scripts/`), which notifies on stop.
   When done: `audit`, then `remove-from-iphone --source screenshot --older-than 1y`.
+- **09-29: hotspot guard.** `cycle.sh` now pauses (no time limit) while the Mac
+  is on the iPhone hotspot (gateway 172.20.10.x or macOS IsExpensive), and a
+  side loop kills an in-flight sync/upload if it switches mid-transfer. At
+  11:33 the screenshot job was started and is PAUSED on the hotspot: 3,669 to
+  fetch, 1,846 fetched and awaiting upload. It resumes by itself on wifi.
+- **WhatsApp media: no pipeline.** 44,256 photos (7.7 GB) + 3,122 videos
+  (22.6 GB); older than 1y: 36,989 + 2,574 (24.7 GB). Asked the user whether
+  to back it up or just delete (they delete screenshots); unanswered.
 - The Mac was on battery again from ~16:47 (55% at 20:04). Keep it plugged in.
 
 ---
