@@ -146,7 +146,11 @@ for line in sys.stdin:
     if not n: continue
     # Finder renames a second copy 'IMG_1 2.MOV'; match on the original name.
     base=re.sub(r' \d+(\.[^.]+)$', r'\1', n)
-    if n not in ours and base not in ours: print(n)
+    # In the Bin it can also append the time instead: 'IMG_0001.PNG 02-49-53-988.PNG'.
+    # Screenshots reuse names across years, so on 2026-09-29 1,114 of 2,115
+    # released in one batch came back like this and stopped the job at 02:50.
+    stamped=re.sub(r' \d{2}-\d{2}-\d{2}-\d{3}\.[^.]+$', '', n)
+    if n not in ours and base not in ours and stamped not in ours: print(n)
 ")
   local total; total=$(printf '%s\n' "$names" | grep -c .)
   if [ -n "$foreign" ]; then
