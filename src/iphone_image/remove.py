@@ -44,7 +44,7 @@ from .journal import Journal, Op
 from .logs import get_logger
 from .photos.helper import Helper, HelperError
 from .scanner import scan as run_scan
-from .selector import Selector
+from .selector import Selector, channel_of
 
 log = get_logger("remove")
 
@@ -167,6 +167,38 @@ def _incomplete_group(asset: dict[str, Any], db: Database) -> str | None:
     return None
 
 
+#: Albums Photos makes by itself. The scan reports album titles without saying
+#: which are automatic, so this is a list, and an unknown name is treated as the
+#: user's: an unrecognised smart album keeps an asset on the phone, never the
+#: other way round. Observed on the owner's library 2026-09-29 plus the rest of
+#: the standard set.
+AUTOMATIC_ALBUMS = frozenset({
+    "Recents", "Recently Saved", "Recently Added", "Favorites", "Videos",
+    "Selfies", "Live Photos", "Portrait", "Panoramas", "Time-lapse", "Slo-mo",
+    "Cinematic", "Spatial", "Bursts", "Screenshots", "Screen Recordings",
+    "Animated", "Long Exposure", "RAW", "Hidden", "Recently Deleted", "Imports",
+    "Duplicates", "Recently Edited", "Recently Viewed", "Recently Shared",
+    "All Photos", "Unable to Upload", "Depth Effect", "Camera Roll",
+})
+
+#: The album a source app files its own saves into. Being in it is where the
+#: asset came from, not a choice the user made to keep it.
+SOURCE_ALBUMS: dict[str, frozenset[str]] = {"whatsapp": frozenset({"WhatsApp"})}
+
+
+def _user_album(config: Config, asset: dict[str, Any]) -> str | None:
+    """The first album of the user's own this asset is in, for channels that keep them."""
+    channel = channel_of(asset)
+    if channel not in config.remove_from_iphone.keep_user_album_channels:
+        return None
+    try:
+        albums = json.loads(asset.get("album_names") or "[]")
+    except ValueError:
+        return "unreadable album list"  # cannot tell, so keep it
+    ignore = AUTOMATIC_ALBUMS | SOURCE_ALBUMS.get(channel, frozenset())
+    return next((a for a in albums if a not in ignore), None)
+
+
 def plan(
     config: Config,
     db: Database,
@@ -281,6 +313,16 @@ def plan(
         #    told not to, so reaching here means something changed underneath.
         if config.safety.block_suspected_proxies and float(asset.get("proxy_suspicion") or 0) > 0:
             result.block(asset, "flagged as a suspected proxy")
+            continue
+
+        # 3b. Kept deliberately. The selector already drops favourites; this is
+        #     the same defence in depth as the proxy check, and it names why.
+        if asset.get("is_favourite"):
+            result.block(asset, "favourited")
+            continue
+        album = _user_album(config, asset)
+        if album:
+            result.block(asset, f"in your album '{album}'")
             continue
 
         # 4. The whole asset group, not just the part that is easy to check.

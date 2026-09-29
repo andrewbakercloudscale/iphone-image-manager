@@ -147,6 +147,7 @@ def unique_filename(
     content_hash: str,
     *,
     taken: Callable[[Path], bool] | None = None,
+    numbered: bool = False,
 ) -> str:
     """A filename that does not collide with an unrelated file in `directory`.
 
@@ -175,6 +176,15 @@ def unique_filename(
     if not dot:
         stem, ext = candidate, ""
     suffix = "." + ext if ext else ""
+
+    # A flat folder the owner browses by hand: `IMG_1 (1).jpg`, the way Finder
+    # and Drive name a second copy, rather than a hash suffix. Stable across
+    # runs anyway, because `taken` includes released assets' claims.
+    if numbered:
+        counter = 1
+        while is_taken(directory / f"{stem} ({counter}){suffix}"):
+            counter += 1
+        return f"{stem} ({counter}){suffix}"
 
     digest = (content_hash or "").upper()
     for length in (8, 16, len(digest)):

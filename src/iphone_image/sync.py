@@ -234,6 +234,9 @@ def archive_path_for(
     config: Config, asset: dict[str, Any], *, events: dict[str, str] | None = None
 ) -> Path:
     """Where this asset belongs in the archive, per the configured pattern."""
+    channel = channel_of(asset)
+    if channel in config.organization.flat_channels:
+        return config.archive.local_path / channel
     created = asset.get("created_at_device") or ""
     event = (events or {}).get(str(asset.get("identity_key") or ""))
     if event is None and created:
@@ -579,6 +582,7 @@ def _fetch_one(
         # Not the filesystem alone: a released asset's file is gone but its
         # claim on the name is not. See `claimed_by_another`.
         taken=claimed_by_another(db, config.archive.local_path, asset.get("id")),
+        numbered=channel_of(asset) in config.organization.flat_channels,
     )
     final = directory / name
     partial = final.with_name(final.name + ".partial")

@@ -50,6 +50,7 @@ class CloudError(Exception):
 #: silently never matches would file every screenshot with the photographs and
 #: report success.
 SCREENSHOT_CHANNEL = "screenshot"
+WHATSAPP_CHANNEL = "whatsapp"
 
 
 def destination_for(config: Config, media_type: str | None, channel: str | None = None) -> str:
@@ -66,6 +67,8 @@ def destination_for(config: Config, media_type: str | None, channel: str | None 
     # alone cannot tell it from a camera photograph.
     if channel == SCREENSHOT_CHANNEL and config.cloud.screenshot_destination:
         return config.cloud.screenshot_destination
+    if channel == WHATSAPP_CHANNEL and config.cloud.whatsapp_destination:
+        return config.cloud.whatsapp_destination
     if str(media_type or "").upper() == "VIDEO" and config.cloud.video_destination:
         return config.cloud.video_destination
     return config.cloud.destination
@@ -84,6 +87,8 @@ def destinations(config: Config) -> list[str]:
         found.add(config.cloud.video_destination)
     if config.cloud.screenshot_destination:
         found.add(config.cloud.screenshot_destination)
+    if config.cloud.whatsapp_destination:
+        found.add(config.cloud.whatsapp_destination)
     return sorted(found, key=len, reverse=True)
 
 

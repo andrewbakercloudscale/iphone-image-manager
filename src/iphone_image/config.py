@@ -110,6 +110,13 @@ class OrganizationConfig(Strict):
     mode: OrganizationMode = OrganizationMode.DATE
     pattern: str = "{year}/{month}"
 
+    #: Channels filed flat, straight into `<archive>/<channel>/`, ignoring
+    #: `pattern`, with a clashing name numbered `IMG_1 (1).jpg` rather than
+    #: hash-suffixed. The owner's choice for WhatsApp media (2026-09-29): one
+    #: folder, no year/month tree. The remote mirrors the local layout, so
+    #: flat here is flat on Drive.
+    flat_channels: list[str] = Field(default_factory=list)
+
     #: For the {event} token: how few photos a place can have and still earn its
     #: own folder. Below it an asset falls back to its month, which sorts beside
     #: the named folders rather than into a junk drawer. Measured on a real
@@ -200,6 +207,12 @@ class CloudConfig(Strict):
     #: exists to protect; a per-run flag would break it.
     screenshot_destination: str = ""
 
+    #: Where WhatsApp media goes. Empty means it follows the photo/video
+    #: destinations. Chosen by channel, like screenshots: a WhatsApp photo is a
+    #: PHOTO by type. The owner asked (2026-09-29) for one flat folder, which
+    #: `organization.flat_channels` provides; this only says where it is.
+    whatsapp_destination: str = ""
+
     #: How long one folder's upload may take before it is abandoned. This is a
     #: backstop, not a prediction: `stall_timeout_seconds` is what normally
     #: catches a wedged transfer, and a slow one is left alone to be slow. The
@@ -261,6 +274,12 @@ class RemoveFromIphoneConfig(Strict):
     #: failed request abandons the whole batch, though nothing is deleted by
     #: one that fails, and the next run replans from the ledger.
     batch_size: int = Field(default=500, ge=1, le=20_000)
+
+    #: Channels where an asset the user put in an album of their own stays on
+    #: the phone. Favourites are always kept; this adds albums. Scoped to
+    #: channels because camera removal ran for weeks without it, and turning it
+    #: on everywhere would quietly change what that job removes.
+    keep_user_album_channels: list[str] = Field(default_factory=list)
 
 
 class SafetyConfig(Strict):

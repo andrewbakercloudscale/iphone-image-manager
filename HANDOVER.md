@@ -25,9 +25,18 @@ history, not current state.**
   side loop kills an in-flight sync/upload if it switches mid-transfer. At
   11:33 the screenshot job was started and is PAUSED on the hotspot: 3,669 to
   fetch, 1,846 fetched and awaiting upload. It resumes by itself on wifi.
-- **WhatsApp media: no pipeline.** 44,256 photos (7.7 GB) + 3,122 videos
-  (22.6 GB); older than 1y: 36,989 + 2,574 (24.7 GB). Asked the user whether
-  to back it up or just delete (they delete screenshots); unanswered.
+- **WhatsApp media (owner's decision 09-29): back up, then remove.** Older than
+  18 months goes to ONE flat folder `.../Andrew iPhone Archive/WhatsApp Media`
+  (`cloud.whatsapp_destination`, `organization.flat_channels`), clashing names
+  numbered `IMG_1 (1).jpg`. Removal stays Drive-gated as for everything else;
+  favourites and items in the owner's own albums are kept
+  (`remove_from_iphone.keep_user_album_channels`; album list in remove.py
+  AUTOMATIC_ALBUMS -- an unknown name keeps the item). In scope: 32,242 photos
+  (4.6 GB, 626 proxies that can never be removed) + ~2,200 videos (~16 GB).
+  `after-screenshot.sh` (running) starts `cycle.sh photo 40 whatsapp 18m`,
+  then `video 40 whatsapp 18m`, once screenshots finish cleanly;
+  `watch-job.sh whatsapp 18m` watches it. Then `audit`, then
+  `remove-from-iphone --source whatsapp --older-than 18m` (both types).
 - The Mac was on battery again from ~16:47 (55% at 20:04). Keep it plugged in.
 
 ---
