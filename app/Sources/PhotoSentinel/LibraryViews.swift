@@ -157,13 +157,16 @@ struct CleanUpView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("PICK A CLEAN-UP · EVERY ONE BACKS UP TO GOOGLE DRIVE FIRST").sectionLabel()
+            FilterBuilder(model: model)
+            SuggestionGrid(model: model)
+            Text("YOUR CLEAN-UPS · EVERY ONE BACKS UP TO GOOGLE DRIVE FIRST").sectionLabel()
             Text("Numbers here are estimates from the last scan. The plan in each clean-up scans the phone and re-checks Google Drive, and its numbers are the ones that count.")
                 .font(.callout).foregroundStyle(.secondary)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12)], spacing: 12) {
                 ForEach(model.library?.recipes ?? []) { r in
                     RecipeCard(stats: r, queued: model.queue.contains { q in r.recipe.backups.contains { $0.source == q.source && $0.type == q.type } },
-                               backUp: { model.backUp(r.recipe) }, review: { model.removing = r.recipe })
+                               backUp: { model.backUp(r.recipe) }, review: { model.removing = r.recipe },
+                               forget: r.recipe.kind == .custom ? { model.forget(r.recipe.filter) } : nil)
                 }
             }
         }
@@ -175,12 +178,18 @@ struct RecipeCard: View {
     var queued = false
     var backUp: () -> Void = {}
     var review: () -> Void = {}
+    var forget: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 SymbolTile(symbol: stats.recipe.symbol, color: Tab.cleanUp.color, size: 34)
                 Text(stats.recipe.title).font(.headline)
+                Spacer()
+                if let forget {
+                    Button(action: forget) { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                        .buttonStyle(.plain).help("Forget this clean-up. Nothing on the phone or in Drive changes.")
+                }
             }
             Text(stats.recipe.detail).font(.callout).foregroundStyle(.secondary)
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {

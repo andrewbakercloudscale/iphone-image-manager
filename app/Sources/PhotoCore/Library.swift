@@ -100,13 +100,15 @@ public struct Age: Hashable, Sendable, CustomStringConvertible {
     }
 }
 
-/// A clean-up the app offers. Each maps onto a selector the CLI already understands.
+/// A clean-up the app offers: a preset, or a filter the owner built. Every one is a
+/// `Filter`, which maps onto a selector the CLI already understands.
 public struct Recipe: Identifiable, Hashable, Sendable {
-    public enum Kind: String, Sendable { case oldVideos, whatsapp, screenshots, screenRecordings, largeVideos }
+    public enum Kind: String, Sendable { case oldVideos, whatsapp, screenshots, screenRecordings, largeVideos, custom }
     public let kind: Kind
     public var age: Age?
     public var minBytes: Int64?
-    public var id: String { kind.rawValue }
+    /// Set for `.custom`; presets derive theirs.
+    private var customFilter: Filter?
 
     public init(kind: Kind, age: Age? = nil, minBytes: Int64? = nil) {
         self.kind = kind
@@ -114,13 +116,35 @@ public struct Recipe: Identifiable, Hashable, Sendable {
         self.minBytes = minBytes
     }
 
+    public init(custom filter: Filter) {
+        kind = .custom
+        customFilter = filter
+    }
+
+    public var id: String { kind == .custom ? "custom-\(filter.key)" : kind.rawValue }
+
     public static let defaults: [Recipe] = [
         Recipe(kind: .oldVideos, age: Age(1, "y")),
         Recipe(kind: .whatsapp, age: Age(18, "m")),
         Recipe(kind: .screenshots, age: Age(1, "y")),
         Recipe(kind: .screenRecordings, age: Age(30, "d")),
-        Recipe(kind: .largeVideos, minBytes: 500_000_000),
+        Recipe(kind: .largeVideos, minBytes: 500 * Filter.mb),
     ]
+
+    public var filter: Filter {
+        if let customFilter { return customFilter }
+        var f = Filter()
+        f.olderThan = age?.description
+        switch kind {
+        case .oldVideos: f.source = "camera"; f.type = "video"
+        case .whatsapp: f.source = "whatsapp"
+        case .screenshots: f.source = "screenshot"
+        case .screenRecordings: f.source = "screenrecording"
+        case .largeVideos: f.type = "video"; f.minMB = Int((minBytes ?? 0) / Filter.mb)
+        case .custom: break
+        }
+        return f
+    }
 
     public var title: String {
         switch kind {
@@ -129,6 +153,7 @@ public struct Recipe: Identifiable, Hashable, Sendable {
         case .screenshots: "Clear old screenshots"
         case .screenRecordings: "Screen recordings"
         case .largeVideos: "Large videos"
+        case .custom: filter.name.isEmpty ? filter.summary : filter.name
         }
     }
 
@@ -138,7 +163,8 @@ public struct Recipe: Identifiable, Hashable, Sendable {
         case .whatsapp: "Older than \(age?.words ?? "any age"). Keeps favourites and your own albums."
         case .screenshots: "Screenshots older than \(age?.words ?? "any age")."
         case .screenRecordings: "Older than \(age?.words ?? "any age")."
-        case .largeVideos: "Any age, bigger than \(Fmt.bytes(minBytes ?? 0))."
+        case .largeVideos: "Any age, bigger than \(Filter.size(Int((minBytes ?? 0) / Filter.mb)))."
+        case .custom: filter.summary + "."
         }
     }
 
@@ -149,73 +175,19 @@ public struct Recipe: Identifiable, Hashable, Sendable {
         case .screenshots: "iphone"
         case .screenRecordings: "record.circle"
         case .largeVideos: "arrow.up.left.and.arrow.down.right"
+        case .custom: "line.3.horizontal.decrease.circle.fill"
         }
     }
 
     /// The selector arguments the CLI takes for this recipe.
-    public var selectorArgs: [String] {
-        var a: [String] = []
-        switch kind {
-        case .oldVideos: a += ["--source", "camera", "--type", "video"]
-        case .whatsapp: a += ["--source", "whatsapp"]
-        case .screenshots: a += ["--source", "screenshot"]
-        case .screenRecordings: a += ["--source", "screenrecording"]
-        case .largeVideos: a += ["--type", "video"]
-        }
-        if let age { a += ["--older-than", age.description] }
-        if let minBytes { a += ["--min-size", "\(minBytes / 1_000_000)MB"] }
-        return a
-    }
-
-    /// The cycle.sh jobs that back this recipe up, in order. Large videos have none of
-    /// their own: cycle.sh selects by source, and the camera and screen recording jobs cover them.
-    public var backups: [(type: String, source: String, older: String?)] {
-        let older = age?.description
-        switch kind {
-        case .oldVideos: return [("video", "camera", older)]
-        case .whatsapp: return [("photo", "whatsapp", older), ("video", "whatsapp", older)]
-        case .screenshots: return [("photo", "screenshot", older)]
-        case .screenRecordings: return [("video", "screenrecording", older)]
-        case .largeVideos: return []
-        }
-    }
-
-    /// The matching CLI command.
-    public var command: String {
-        var parts = ["iphone-image remove-from-iphone"]
-        switch kind {
-        case .oldVideos: parts += ["--source camera", "--type video"]
-        case .whatsapp: parts += ["--source whatsapp"]
-        case .screenshots: parts += ["--source screenshot"]
-        case .screenRecordings: parts += ["--source screenrecording"]
-        case .largeVideos: parts += ["--type video"]
-        }
-        if let age { parts.append("--older-than \(age)") }
-        if let minBytes { parts.append("--min-size \(minBytes / 1_000_000)MB") }
-        return parts.joined(separator: " ")
-    }
+    public var selectorArgs: [String] { filter.selectorArgs }
+    /// The arguments for `remove-from-iphone`: the selector plus the low-res tolerance.
+    public var removalArgs: [String] { filter.removalArgs }
+    public var backups: [(type: String, source: String, older: String?)] { filter.backups }
+    public var command: String { "iphone-image remove-from-iphone " + removalArgs.joined(separator: " ") }
 
     /// SQL over `assets a` choosing this recipe's assets, on the phone or not.
-    func whereClause(now: Date) -> (String, [Any?]) {
-        var c: [String] = []
-        var args: [Any?] = []
-        switch kind {
-        case .oldVideos: c += ["(\(Channel.sql)) = 'camera'", "a.media_type = 'VIDEO'"]
-        case .whatsapp: c.append("(\(Channel.sql)) = 'whatsapp'")
-        case .screenshots: c.append("(\(Channel.sql)) = 'screenshot'")
-        case .screenRecordings: c.append("(\(Channel.sql)) = 'screenRecording'")
-        case .largeVideos: c.append("a.media_type = 'VIDEO'")
-        }
-        if let age {
-            c.append("a.created_at_device < ?")
-            args.append(age.cutoff(now: now))
-        }
-        if let minBytes {
-            c.append("a.size_bytes >= ?")
-            args.append(Int(minBytes))
-        }
-        return (c.joined(separator: " AND "), args)
-    }
+    func whereClause(now: Date) -> (String, [Any?]) { filter.whereClause(now: now) }
 }
 
 public struct Tally: Hashable, Sendable {
@@ -349,22 +321,8 @@ public enum Ledger {
         // mirrored: user albums and incomplete Live Photo or burst groups, which the plan
         // still blocks, so this stays an estimate and the plan stays the truth.
         // remove.py blocks any proxy suspicion above zero, not the 0.5 the scanner reports on.
-        let keep = "(a.is_favourite = 1 OR a.proxy_suspicion > 0 OR COALESCE(a.sha256, '') = '' OR COALESCE(a.cloud_path, '') = '')"
         for recipe in recipes {
-            let (w, args) = recipe.whereClause(now: now)
-            let r = try db.rows("""
-                SELECT COUNT(*), COALESCE(SUM(a.size_bytes), 0),
-                       SUM(\(verified) AND NOT \(keep)), COALESCE(SUM(CASE WHEN \(verified) AND NOT \(keep) THEN a.size_bytes END), 0),
-                       SUM(NOT \(verified)), COALESCE(SUM(CASE WHEN NOT \(verified) THEN a.size_bytes END), 0),
-                       SUM(\(verified) AND \(keep)), COALESCE(SUM(CASE WHEN \(verified) AND \(keep) THEN a.size_bytes END), 0)
-                FROM assets a WHERE \(onPhone) AND \(w)
-                """, args)[0]
-            var rs = RecipeStats(recipe: recipe)
-            rs.selected = Tally(count: r.int(0), bytes: Int64(r.int(1)))
-            rs.removableNow = Tally(count: r.int(2), bytes: Int64(r.int(3)))
-            rs.notBackedUp = Tally(count: r.int(4), bytes: Int64(r.int(5)))
-            rs.kept = Tally(count: r.int(6), bytes: Int64(r.int(7)))
-            s.recipes.append(rs)
+            s.recipes.append(try stats(db, recipe, now: now))
         }
 
         s.years = try db.rows("""
@@ -415,6 +373,30 @@ public enum Ledger {
             WHERE status = 'STARTED' AND finished_at IS NULL ORDER BY started_at DESC
             """).map { Operation(id: $0.int(0), operation: $0.str(1), command: $0.str(2), startedAt: $0.str(3)) }
         return s
+    }
+
+    /// What one recipe or filter selects on the phone, split the way removal would split it.
+    /// The per-asset rules of remove.py's `plan`, so the estimate matches the plan. Not
+    /// mirrored: user albums and incomplete Live Photo or burst groups, which the plan
+    /// still blocks, so this stays an estimate and the plan stays the truth.
+    public static func stats(_ db: SQLiteReader, _ recipe: Recipe, now: Date = Date()) throws -> RecipeStats {
+        let verified = "a.cloud_status = 'CLOUD_VERIFIED'"
+        let tolerance = recipe.filter.proxyTolerance
+        let keep = "(a.is_favourite = 1 OR a.proxy_suspicion > \(tolerance) OR COALESCE(a.sha256, '') = '' OR COALESCE(a.cloud_path, '') = '')"
+        let (w, args) = recipe.whereClause(now: now)
+        let r = try db.rows("""
+            SELECT COUNT(*), COALESCE(SUM(a.size_bytes), 0),
+                   SUM(\(verified) AND NOT \(keep)), COALESCE(SUM(CASE WHEN \(verified) AND NOT \(keep) THEN a.size_bytes END), 0),
+                   SUM(NOT \(verified)), COALESCE(SUM(CASE WHEN NOT \(verified) THEN a.size_bytes END), 0),
+                   SUM(\(verified) AND \(keep)), COALESCE(SUM(CASE WHEN \(verified) AND \(keep) THEN a.size_bytes END), 0)
+            FROM assets a WHERE a.present_on_phone = 1 AND \(w)
+            """, args)[0]
+        var rs = RecipeStats(recipe: recipe)
+        rs.selected = Tally(count: r.int(0), bytes: Int64(r.int(1)))
+        rs.removableNow = Tally(count: r.int(2), bytes: Int64(r.int(3)))
+        rs.notBackedUp = Tally(count: r.int(4), bytes: Int64(r.int(5)))
+        rs.kept = Tally(count: r.int(6), bytes: Int64(r.int(7)))
+        return rs
     }
 
     private static func add(_ a: Tally, _ b: Tally) -> Tally { Tally(count: a.count + b.count, bytes: a.bytes + b.bytes) }

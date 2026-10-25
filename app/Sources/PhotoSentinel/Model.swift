@@ -19,6 +19,11 @@ final class Model: ObservableObject {
     @Published var allProof: Proof?
     /// Backups waiting for the running one to end. One PhotoKit exporter at a time.
     @Published var queue: [QueuedBackup] = [] { didSet { saveQueue() } }
+    @Published var suggestions: [Suggestion] = []
+    /// The filter being built on the Clean up tab.
+    @Published var draft = Filter()
+    /// Clean-ups the owner built and saved.
+    @Published var saved: [Filter] = [] { didSet { saveFilters() } }
 
     @AppStorage("age.oldVideos") var videoAge = "1y"
     @AppStorage("age.whatsapp") var whatsappAge = "18m"
@@ -36,8 +41,8 @@ final class Model: ObservableObject {
             Recipe(kind: .whatsapp, age: Age(whatsappAge)),
             Recipe(kind: .screenshots, age: Age(screenshotAge)),
             Recipe(kind: .screenRecordings, age: Age(recordingAge)),
-            Recipe(kind: .largeVideos, minBytes: 500_000_000),
-        ]
+            Recipe(kind: .largeVideos, minBytes: 500 * Filter.mb),
+        ] + saved.map { Recipe(custom: $0) }
     }
 
     var engine: CLIEngine { CLIEngine(repo: repoPath, ledgerPath: ledgerPath, recipes: recipes) }
@@ -51,6 +56,7 @@ final class Model: ObservableObject {
 
     func start() {
         loadQueue()
+        loadFilters()
         refreshTasks()
         timers.append(Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshTasks() }
@@ -73,7 +79,11 @@ final class Model: ObservableObject {
             let result = Result { try engine.library() }
             let jobs = engine.jobs()
             let proof = try? Ledger.proof(SQLiteReader(path: engine.ledgerPath), since: "", limit: 0)
+            let suggestions = (try? result.get()).flatMap { s in
+                try? Ledger.suggestions(SQLiteReader(path: engine.ledgerPath), apps: s.apps)
+            } ?? []
             await MainActor.run {
+                self.suggestions = suggestions
                 self.loading = false
                 self.allProof = proof
                 self.jobs = jobs
@@ -116,12 +126,12 @@ final class Model: ObservableObject {
     }
 
     func plan(_ r: Recipe) {
-        launch(.plan, recipe: r, title: "Plan: \(r.title)", args: ["remove-from-iphone"] + r.selectorArgs)
+        launch(.plan, recipe: r, title: "Plan: \(r.title)", args: ["remove-from-iphone"] + r.removalArgs)
     }
 
     func remove(_ r: Recipe, phrase: String) {
         launch(.remove, recipe: r, title: "Remove: \(r.title)",
-               args: ["remove-from-iphone"] + r.selectorArgs + ["--apply", "--confirm", phrase])
+               args: ["remove-from-iphone"] + r.removalArgs + ["--apply", "--confirm", phrase])
     }
 
     private func launch(_ kind: CLITask.Kind, recipe: Recipe?, title: String, args: [String]) {
@@ -157,6 +167,33 @@ final class Model: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.refreshJobs() }
         case .failure(let e): notice = e.text
         }
+    }
+
+    // MARK: Filters
+
+    /// Counts a filter against the ledger, off the main thread.
+    nonisolated func preview(_ f: Filter, ledger: String) async -> RecipeStats? {
+        try? Ledger.stats(SQLiteReader(path: ledger), Recipe(custom: f))
+    }
+
+    func save(_ f: Filter) {
+        saved.removeAll { $0.key == f.key }
+        saved.append(f)
+        refresh()
+    }
+
+    func forget(_ f: Filter) {
+        saved.removeAll { $0.key == f.key }
+        refresh()
+    }
+
+    private func saveFilters() {
+        UserDefaults.standard.set(try? JSONEncoder().encode(saved), forKey: "savedFilters")
+    }
+
+    private func loadFilters() {
+        if let d = UserDefaults.standard.data(forKey: "savedFilters"),
+           let f = try? JSONDecoder().decode([Filter].self, from: d) { saved = f }
     }
 
     private func saveQueue() {

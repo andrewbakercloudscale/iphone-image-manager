@@ -17,6 +17,8 @@ enum Snapshot {
         model.jobs = model.engine.jobs()
         model.doctor = try? model.engine.doctor()
         model.tasks = TaskStore.all()
+        if let s = model.library { model.suggestions = (try? Ledger.suggestions(SQLiteReader(path: model.ledgerPath), apps: s.apps)) ?? [] }
+        model.draft = Filter(source: "whatsapp", type: "video", olderThan: "6m", minMB: 20)
         model.allProof = try? Ledger.proof(SQLiteReader(path: model.ledgerPath), since: "", limit: 0)
 
         for tab in Tab.allCases {

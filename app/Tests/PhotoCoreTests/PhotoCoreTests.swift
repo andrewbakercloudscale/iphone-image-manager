@@ -156,7 +156,7 @@ final class TaskTests: XCTestCase {
 
     func testSelectorArgsMatchTheCLI() {
         XCTAssertEqual(Recipe(kind: .whatsapp, age: Age(18, "m")).selectorArgs, ["--source", "whatsapp", "--older-than", "18m"])
-        XCTAssertEqual(Recipe(kind: .largeVideos, minBytes: 500_000_000).selectorArgs, ["--type", "video", "--min-size", "500MB"])
+        XCTAssertEqual(Recipe(kind: .largeVideos, minBytes: 500 * Filter.mb).selectorArgs, ["--type", "video", "--min-size", "500MB"])
         XCTAssertEqual(Recipe(kind: .whatsapp, age: Age(18, "m")).backups.map(\.type), ["photo", "video"])
     }
 }
@@ -222,5 +222,45 @@ final class DetectorTests: XCTestCase {
         let f = Detector.findings(library: s, jobs: [job], doctor: nil)
         XCTAssertEqual(f.map(\.id), ["job.whatsapp/photo", "ready.screenshots"])
         XCTAssertEqual(f[0].action, .resume("whatsapp/photo"))
+    }
+}
+
+final class FilterTests: XCTestCase {
+    func testArgsAreTheCLIFlags() {
+        let f = Filter(source: "whatsapp", type: "video", olderThan: "6m", minMB: 20, proxyTolerance: 0.5)
+        XCTAssertEqual(f.removalArgs, ["--source", "whatsapp", "--type", "video", "--older-than", "6m", "--min-size", "20MB", "--proxy-threshold", "0.50"])
+        XCTAssertEqual(f.summary, "WhatsApp videos · over 20 MB · older than 6 months")
+        XCTAssertEqual(f.backups.map(\.type), ["video"])
+        XCTAssertTrue(Filter(type: "video").backups.isEmpty, "no source: cycle.sh would read it as camera")
+        XCTAssertEqual(Recipe(custom: f).id, Recipe(custom: Filter(name: "x", source: "whatsapp", type: "video", olderThan: "6m", minMB: 20, proxyTolerance: 0.5)).id)
+    }
+
+    /// The app's count must be the CLI's count. Runs `iphone-image list` against the real
+    /// ledger for a spread of filters; skipped where there is no ledger.
+    func testCountsMatchTheCLIOnTheRealLedger() throws {
+        guard FileManager.default.fileExists(atPath: Ledger.defaultPath) else { throw XCTSkip("no ledger here") }
+        let db = try SQLiteReader(path: Ledger.defaultPath)
+        let filters = [
+            Filter(source: "whatsapp", type: "video", olderThan: "6m", minMB: 20),
+            Filter(source: "camera", type: "video", minMB: 1024),
+            Filter(source: "screenshot", olderThan: "90d"),
+            Filter(type: "burst", olderThan: "30d"),
+            Filter(source: "com.burbn.instagram", year: 2022),
+            Filter(type: "photo", newerThan: "1y", maxMB: 1),
+        ]
+        for f in filters {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/bash")
+            let args = f.selectorArgs.map { "'\($0)'" }.joined(separator: " ")
+            p.arguments = ["-c", "cd '\(CLIEngine.defaultRepo)' && PYTHONPATH=src ./.venv/bin/python -m iphone_image --json list \(args)"]
+            let pipe = Pipe()
+            p.standardOutput = pipe
+            try p.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            let cli = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let app = try Ledger.stats(db, Recipe(custom: f))
+            XCTAssertEqual(app.selected.count, cli["matched"] as? Int, f.summary)
+        }
     }
 }

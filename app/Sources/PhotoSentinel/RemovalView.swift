@@ -150,6 +150,9 @@ struct RemovalSheet: View {
                     Running(text: "Scanning the phone and checking each item in Drive…", since: p.task.startedAt)
                 } else if let r = planResult, planFresh {
                     PlanSummary(plan: r)
+                    if let n = r.blockedReasons["flagged as a suspected proxy"], n > 0, recipe.filter.proxyTolerance < 1 {
+                        lowResChoice(n)
+                    }
                 } else if let msg = plan?.errorMessage, planFresh {
                     Text(msg).font(.callout).foregroundStyle(Theme.bad).textSelection(.enabled)
                 }
@@ -160,6 +163,25 @@ struct RemovalSheet: View {
                 }
             }
         }
+    }
+
+    /// The owner's choice (SAFETY.md section 2): loosen the low-res check for this removal
+    /// only. It becomes its own clean-up, so it needs its own plan.
+    private func lowResChoice(_ n: Int) -> some View {
+        HStack(spacing: 8) {
+            Text("\(Fmt.count(n)) kept by the low-res check (\(recipe.filter.proxyTolerance == 0 ? "strict" : "relaxed")).")
+                .font(.callout)
+            Spacer()
+            ForEach([(0.5, "Relax"), (1.0, "Turn off")].filter { $0.0 > recipe.filter.proxyTolerance }, id: \.0) { level, label in
+                CapsuleButton(title: label, symbol: "slider.horizontal.3", color: Theme.warn, style: .soft) {
+                    var f = recipe.filter
+                    f.proxyTolerance = level
+                    if f.name.isEmpty { f.name = recipe.title + (level >= 1 ? ", low-res check off" : ", low-res check relaxed") }
+                    model.removing = Recipe(custom: f)
+                }
+            }
+        }
+        .help("A photo that is small for its size might be a low-res stand-in whose original is only in iCloud. Screenshots are often flagged without being stand-ins. Each item removed this way records its score.")
     }
 
     // MARK: 4. Remove

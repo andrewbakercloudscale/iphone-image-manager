@@ -96,6 +96,7 @@ public enum Detector {
         case .screenshots: return "screenshots" + age
         case .screenRecordings: return "screen recordings" + age
         case .largeVideos: return "large videos"
+        case .custom: return "items in \u{201C}\(r.title)\u{201D}"
         }
     }
 }
