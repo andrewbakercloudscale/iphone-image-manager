@@ -1,4 +1,4 @@
-# Mac app design (SwiftUI)
+# Photo Sentinel: Mac app design (SwiftUI)
 
 Status: **design, not built.** Written 2026-10-25. Visual mockups: the "iPhone Image
 Manager — Mac app" design canvas, https://claude.ai/artifact/2X4jLE78DSoMF8QJ52hThE (private).
@@ -31,7 +31,7 @@ file, do not re-derive it.
 | Screenshots | **Always backed up before removal**, for everyone | No "delete without backup" option. SAFETY.md 1b stands |
 | Live Photos, bursts | **Back up every part** (paired video, every burst frame) so they become removable | `PHAssetResource` export of all resources per asset; removal requires every resource verified, not just the still |
 | Storage | **Google Drive + S3-compatible** in v1 | `StorageProvider` protocol. Onboarding step 3 offers Google Drive (default) or "S3-compatible (advanced)": endpoint, bucket, keys in Keychain. S3 verification: upload with SHA-256 checksums and store the whole-file SHA-256 as object metadata; remove only when a fresh `HeadObject` matches the ledger. Multipart uploads give a composite checksum, so compare per-part, never the bare ETag |
-| Name | A friendlier public name, not "iPhone …" (Apple trademark) | Working name **Photo Sentinel**, a sibling to System Sentinel. Owner to confirm |
+| Name | A friendlier public name, not "iPhone …" (Apple trademark) | **Photo Sentinel**, a sibling to System Sentinel (confirmed 2026-10-25) |
 | Distribution | Free and open source, notarised DMG, Sparkle | No licensing code; donation link in About |
 | Presence | Window + menu-bar icon | Menu bar shows job progress and the pause reason |
 | Battery | Pause on battery by default; setting "allow on battery above N%" (default off, N = 50) | Agent reads `IOPSCopyPowerSourcesInfo` |
@@ -192,4 +192,4 @@ Removal is the last thing ported and the first thing tested.
 
 ## 11. Open questions for the owner
 
-- Confirm the name "Photo Sentinel" (decisions above settle the rest).
+None open. All settled 2026-10-25.
