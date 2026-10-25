@@ -14,11 +14,13 @@ enum Snapshot {
 
         let model = Model()
         model.library = try? model.engine.library()
+        model.everything = try? Ledger.breakdown(SQLiteReader(path: model.ledgerPath))
         model.jobs = model.engine.jobs()
         model.doctor = try? model.engine.doctor()
         model.tasks = TaskStore.all()
         if let s = model.library { model.suggestions = (try? Ledger.suggestions(SQLiteReader(path: model.ledgerPath), apps: s.apps)) ?? [] }
         model.draft = Filter(source: "whatsapp", type: "video", olderThan: "6m", minMB: 20)
+        model.selection = try? Ledger.breakdown(SQLiteReader(path: model.ledgerPath), filter: model.draft)
         model.allProof = try? Ledger.proof(SQLiteReader(path: model.ledgerPath), since: "", limit: 0)
 
         for tab in Tab.shown {

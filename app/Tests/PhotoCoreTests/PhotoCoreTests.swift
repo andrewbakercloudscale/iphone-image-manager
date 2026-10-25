@@ -94,6 +94,33 @@ final class LedgerTests: XCTestCase {
         XCTAssertEqual(s.proxies, 2)
     }
 
+    func testBreakdownCutsEverythingAndASelectionTheSameWays() throws {
+        let db = try makeDB()
+        try insert(db, 1, file: "a", bundle: "net.whatsapp.WhatsApp", at: "2019-03-01T00:00:00Z", bytes: 100, cloud: "CLOUD_VERIFIED")
+        try insert(db, 2, file: "b", type: "VIDEO", bundle: "net.whatsapp.WhatsApp", at: "2019-04-01T00:00:00Z", bytes: 200)
+        try insert(db, 3, file: "c", subtypes: "[\"live\"]", bundle: "com.apple.camera", at: "2026-09-01T00:00:00Z", bytes: 300, fav: 1, cloud: "CLOUD_VERIFIED")
+        try insert(db, 4, file: "d", subtypes: "[\"screenshot\"]", bundle: "com.apple.springboard", at: "2026-10-01T00:00:00Z", bytes: 400)
+        try insert(db, 5, file: "e", bundle: "net.whatsapp.WhatsApp", bytes: 999, present: 0)  // gone from the phone
+        let now = ISO8601DateFormatter().date(from: "2026-10-25T00:00:00Z")!
+
+        let all = try Ledger.breakdown(db, now: now)
+        XCTAssertEqual(all.total, Tally(count: 4, bytes: 1000))
+        XCTAssertEqual(all.bySource.map(\.key), ["screenshot", "camera", "whatsapp"], "biggest first, ties by name")
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: all.byKind.map { ($0.key, $0.tally.bytes) }),
+                       ["photo": 100, "video": 200, "live": 300, "screenshot": 400])
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: all.byStatus.map { ($0.key, $0.tally.bytes) }),
+                       ["canGo": 100, "kept": 300, "notInDrive": 600], "a favourite in Drive is kept, not counted as can go")
+        XCTAssertEqual(all.byYear.map(\.period), ["2019", "2026"])
+        XCTAssertEqual(all.byYear[0].inDrive.bytes, 100)
+        XCTAssertEqual(all.byYear[0].notInDrive.bytes, 200)
+        XCTAssertEqual(all.byMonth.map(\.period), ["2026-09", "2026-10"], "only the last 24 months")
+
+        let wa = try Ledger.breakdown(db, filter: Filter(source: "whatsapp"), now: now)
+        XCTAssertEqual(wa.total, Tally(count: 2, bytes: 300))
+        XCTAssertEqual(wa.bySource.map(\.key), ["whatsapp"])
+        XCTAssertEqual(wa.oldest?.prefix(7), "2019-03")
+    }
+
     func testProofCountsOnlyDriveConfirmedRemovals() throws {
         let db = try makeDB()
         try insert(db, 1, file: "a", cloud: "CLOUD_VERIFIED")

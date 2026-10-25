@@ -53,6 +53,8 @@ final class Permissions: ObservableObject {
                                 why: "Tell you when a backup finishes or stops, and when a check or a removal finishes.",
                                 symbol: "bell.badge.fill", state: old)]
         if full != items { items = full }
+        // A bare binary (swift run, --snapshot) has no bundle, and the centre throws without one.
+        guard Notify.available else { return }
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             let s: State = switch settings.authorizationStatus {
             case .authorized, .provisional: .granted
@@ -86,7 +88,7 @@ final class Permissions: ObservableObject {
             }
         // Once turned down, macOS never asks again: only System Settings can turn it back on.
         case "photos": Self.showSettings("Privacy_Photos")
-        case "notifications" where item.state == .notAsked:
+        case "notifications" where item.state == .notAsked && Notify.available:
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in
                 Task { @MainActor in self.refresh() }
             }
@@ -191,7 +193,10 @@ struct PermissionsCard: View {
 
 /// Banners from macOS when work the user is waiting on moves on. Silent when not allowed.
 enum Notify {
+    static var available: Bool { Bundle.main.bundleIdentifier != nil }
+
     static func send(_ title: String, _ body: String) {
+        guard available else { return }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body

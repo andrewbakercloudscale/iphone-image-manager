@@ -8,6 +8,9 @@ import SwiftUI
 @MainActor
 final class Model: ObservableObject {
     @Published var library: LibrarySnapshot?
+    /// The Library charts: everything on the phone, and what the rule builder selects.
+    @Published var everything: Breakdown?
+    @Published var selection: Breakdown?
     @Published var jobs: [Job] = []
     @Published var doctor: DoctorReport?
     @Published var error: String?
@@ -112,11 +115,13 @@ final class Model: ObservableObject {
             let result = Result { try engine.library() }
             let jobs = engine.jobs()
             let proof = try? Ledger.proof(SQLiteReader(path: engine.ledgerPath), since: "", limit: 0)
+            let everything = try? Ledger.breakdown(SQLiteReader(path: engine.ledgerPath))
             let suggestions = (try? result.get()).flatMap { s in
                 try? Ledger.suggestions(SQLiteReader(path: engine.ledgerPath), apps: s.apps)
             } ?? []
             await MainActor.run {
                 self.suggestions = suggestions
+                if let everything { self.everything = everything }
                 self.loading = false
                 self.allProof = proof
                 self.notifyChanges(from: self.jobs, to: jobs)
@@ -332,6 +337,10 @@ final class Model: ObservableObject {
     // MARK: Filters
 
     /// Counts a filter against the ledger, off the main thread.
+    nonisolated func breakdown(_ f: Filter, ledger: String) async -> Breakdown? {
+        try? Ledger.breakdown(SQLiteReader(path: ledger), filter: f)
+    }
+
     nonisolated func preview(_ f: Filter, ledger: String) async -> RecipeStats? {
         try? Ledger.stats(SQLiteReader(path: ledger), Recipe(custom: f))
     }

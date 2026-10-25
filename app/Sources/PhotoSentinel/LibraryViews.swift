@@ -7,38 +7,17 @@ struct LibraryView: View {
     var body: some View {
         if let s = model.library {
             VStack(alignment: .leading, spacing: 14) {
+                FilterBuilder(model: model).id("builder")
                 HStack(spacing: 12) {
                     Kpi(label: "ON YOUR IPHONE", value: Fmt.bytes(s.onPhone.bytes), note: "\(Fmt.count(s.onPhone.count)) items")
                     Kpi(label: "SAFE IN GOOGLE DRIVE", value: Fmt.pct(s.coverage), note: "\(Fmt.bytes(s.verified.bytes)) checked", color: Theme.good)
                     Kpi(label: "YOU COULD FREE", value: Fmt.bytes(s.couldFree), note: "with the ages below", color: Tab.cleanUp.color)
                     Kpi(label: "GROWING", value: "\(Fmt.bytes(s.weeklyGrowth)) / wk", note: "average of the last 3 months", color: Tab.library.color)
                 }
+                MediaCharts(model: model)
                 KeepCard(model: model, library: s)
-                FilterBuilder(model: model).id("builder")
                 SuggestionGrid(model: model)
-                Card(title: "Where the space goes", symbol: "chart.pie.fill", tint: Tab.library.color) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        StackBar(parts: s.channels.map { (Theme.color($0.channel), Double($0.total.bytes)) })
-                        ForEach(s.channels) { c in
-                            HStack {
-                                RoundedRectangle(cornerRadius: 3).fill(Theme.color(c.channel)).frame(width: 11, height: 11)
-                                Text(c.channel.title).frame(width: 150, alignment: .leading)
-                                Text("\(Fmt.count(c.photos.count)) photos · \(Fmt.count(c.videos.count)) videos").foregroundStyle(.secondary)
-                                Spacer()
-                                Text(Fmt.bytes(c.total.bytes)).fontWeight(.semibold).monospacedDigit()
-                            }
-                            .font(.callout)
-                        }
-                    }
-                }
                 CoverageCard(model: model, library: s)
-                Card(title: "By year taken", symbol: "calendar", tint: Tab.library.color,
-                     trailing: AnyView(Text("click a year to clean it up").font(.callout).foregroundStyle(.secondary))) {
-                    YearChart(years: s.years) { y in
-                        model.draft = Filter(year: y)
-                        model.openBuilder()
-                    }
-                }
                 PlacesCard(model: model, library: s)
                 BiggestVideosCard(model: model, library: s)
                 AppsCard(model: model, library: s)
