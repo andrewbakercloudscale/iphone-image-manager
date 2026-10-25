@@ -166,6 +166,23 @@ a visible state, not a log line.
 | Job died unnoticed | agent heartbeat; app and menu bar watch it | Notification with sound; Activity shows the reason |
 | Bin rename matching | ported `Bin` check | Never surfaced unless it refuses |
 
+### Jobs in flight, and resuming them (owner request, 2026-10-25)
+
+The Activity tab leads with a **Jobs in flight** list, one row per job, never hidden in a log:
+
+| State | Shown | Action |
+|---|---|---|
+| Running | progress, items and GB left | Pause |
+| Paused by a guard (hotspot, battery, disk, Drive quota) | the reason, and that it carries on by itself | Resume now (overrides the hotspot or battery guard once) |
+| Stopped on an error | the reason in plain words, and whether the cause has gone (e.g. a one-item test fetch now works) | Resume |
+| Interrupted removal (dialog not clicked, crash) | "Nothing was removed" or exactly what was | Review and resume: re-plans, re-checks Drive, asks again |
+
+How it works:
+- Every job is a row in the ledger (`jobs`: recipe, selector, stage, counts, last progress time, stop reason, exit code), so a job survives app quits, reboots and agent crashes. `cycle.sh` exit codes 1, 2, 4, 5, 6 map onto stop reasons.
+- On launch, wake and network change the agent reads the `operations` journal. Anything started and never finished is reconciled: fetch, upload and verify steps resume automatically (they are idempotent and hash-banked); a removal never resumes by itself, it becomes a "needs you" row.
+- Resume starts from the ledger, never from the beginning: items already verified in Drive are skipped.
+- The menu-bar icon shows a badge when any job is stopped or needs you, and the Checkup tab raises it as a finding.
+
 ## 9. Code layout
 
 ```
