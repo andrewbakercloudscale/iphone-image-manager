@@ -29,7 +29,6 @@ from ..config import (
     DEFAULT_CONFIG_PATH,
     Config,
     ConfigError,
-    OrganizationConfig,
     RemovalPolicy,
     load_config,
 )
@@ -304,12 +303,43 @@ def config_init(ctx: Context, path: Path | None, force: bool) -> None:
     ctx.out.result({"written": str(target)}, lambda: ctx.out.ok(f"wrote {target}"))
 
 
+#: `config layout --destination` names, and the cloud setting each one sets.
+DESTINATION_KEYS = {
+    "photos": "destination",
+    "videos": "video_destination",
+    "screenshots": "screenshot_destination",
+    "whatsapp": "whatsapp_destination",
+}
+
+
+def _pairs(values: tuple[str, ...], what: str) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for value in values:
+        key, sep, rest = value.partition("=")
+        if not sep or not key.strip():
+            raise click.BadParameter(f"{value!r}: expected NAME=VALUE", param_hint=what)
+        found[key.strip()] = rest.strip()
+    return found
+
+
 @config.command("layout")
 @click.option("--pattern", default=None, help='Folder pattern, e.g. "{source}/{year}/{event}".')
 @click.option("--min-photos", type=int, default=None, help="Items a place needs to get a folder.")
 @click.option("--gap-days", type=int, default=None, help="Days apart that start a new visit.")
 @click.option(
     "--flat", default=None, help='Channels filed in one folder, comma separated; "" for none.'
+)
+@click.option(
+    "--source-pattern",
+    "source_patterns",
+    multiple=True,
+    help='A source\'s own layout, e.g. whatsapp="{source}/{year}/{month}". Empty to drop it.',
+)
+@click.option(
+    "--destination",
+    "destination_args",
+    multiple=True,
+    help="Remote folder: photos=, videos=, screenshots= or whatsapp=PATH.",
 )
 @click.option("--preview", "show_preview", is_flag=True, help="Count the folders it would make.")
 @click.option("--apply", "apply_", is_flag=True, help="Save it to the configuration file.")
@@ -320,69 +350,105 @@ def config_layout(
     min_photos: int | None,
     gap_days: int | None,
     flat: str | None,
+    source_patterns: tuple[str, ...],
+    destination_args: tuple[str, ...],
     show_preview: bool,
     apply_: bool,
 ) -> None:
-    """Show or change the archive's folder layout. Applies to new backups only."""
+    """Show or change how backups are stored. Applies to new backups only.
+
+    Files already backed up stay where they are; `refile` moves them.
+    """
     from .. import layout as layout_engine
 
-    org = ctx.config.organization
-    changes: dict[str, Any] = {}
+    c = ctx.config
+    org_changes: dict[str, Any] = {}
+    cloud_changes: dict[str, Any] = {}
     if pattern is not None:
-        changes["pattern"] = pattern
+        if not pattern.startswith("{source}/"):
+            # Upload strips the channel folder to reach each source's own
+            # remote destination (cloud.py), so a pattern without it uploads nothing.
+            _fail(ctx.out, 'the pattern must start with "{source}/", the per-source folder.')
+            return
+        org_changes["pattern"] = pattern
     if min_photos is not None:
-        changes["event_min_photos"] = min_photos
+        org_changes["event_min_photos"] = min_photos
     if gap_days is not None:
-        changes["event_gap_days"] = gap_days
+        org_changes["event_gap_days"] = gap_days
     if flat is not None:
-        changes["flat_channels"] = [c.strip() for c in flat.split(",") if c.strip()]
-    if pattern is not None and not pattern.startswith("{source}/"):
-        # Upload strips the channel folder to reach each source's own remote
-        # destination (cloud.py), so a pattern without it uploads nothing.
-        _fail(ctx.out, 'the pattern must start with "{source}/": each source has its own folder.')
-        return
+        org_changes["flat_channels"] = [x.strip() for x in flat.split(",") if x.strip()]
+    if source_patterns:
+        merged = dict(c.organization.channel_patterns)
+        for channel, value in _pairs(source_patterns, "--source-pattern").items():
+            if value:
+                merged[channel] = value
+            else:
+                merged.pop(channel, None)
+        org_changes["channel_patterns"] = merged
+    for kind, path in _pairs(destination_args, "--destination").items():
+        if kind not in DESTINATION_KEYS:
+            _fail(ctx.out, f"unknown destination {kind!r}: use {', '.join(DESTINATION_KEYS)}")
+            return
+        if kind == "photos" and not path:
+            _fail(ctx.out, "the photos destination cannot be empty")
+            return
+        cloud_changes[DESTINATION_KEYS[kind]] = path.strip("/")
     try:
-        proposed = OrganizationConfig.model_validate({**org.model_dump(), **changes})
+        proposed = c.model_copy(
+            update={
+                "organization": type(c.organization).model_validate(
+                    {**c.organization.model_dump(), **org_changes}
+                ),
+                "cloud": c.cloud.model_copy(update=cloud_changes),
+            }
+        )
     except ValueError as e:
         _fail(ctx.out, f"that layout cannot be used: {e}")
         return
 
-    def describe(o: OrganizationConfig) -> dict[str, Any]:
+    def describe(cfg: Config) -> dict[str, Any]:
+        o = cfg.organization
         return {
             "pattern": o.pattern,
             "minPhotos": o.event_min_photos,
             "gapDays": o.event_gap_days,
             "flat": o.flat_channels,
+            "sourcePatterns": o.channel_patterns,
+            "destinations": {k: getattr(cfg.cloud, v) for k, v in DESTINATION_KEYS.items()},
         }
 
     data: dict[str, Any] = {
-        "current": describe(org),
+        "current": describe(c),
         "proposed": describe(proposed),
-        "changed": proposed != org,
+        "changed": describe(proposed) != describe(c),
         "applied": False,
-        "configPath": str(ctx.config.source_path) if ctx.config.source_path else None,
+        "configPath": str(c.source_path) if c.source_path else None,
     }
     if show_preview:
         db = ctx.database()
         try:
-            data["preview"] = layout_engine.preview(ctx.config, db, proposed)
+            data["preview"] = layout_engine.preview(proposed, db)
         finally:
             db.close()
     if apply_ and data["changed"]:
-        if not ctx.config.source_path:
+        if not c.source_path:
             _fail(ctx.out, "no configuration file to save to. Run `config init` first.")
             return
-        path = Path(ctx.config.source_path)
-        text = layout_engine.edit_organization(path.read_text(), changes)
+        path = Path(c.source_path)
+        text = path.read_text()
+        if org_changes:
+            text = layout_engine.edit_section(text, "organization", org_changes)
+        if cloud_changes:
+            text = layout_engine.edit_section(text, "cloud", cloud_changes)
         tmp = path.with_suffix(".yaml.tmp")
         tmp.write_text(text)
         try:
-            saved = load_config(tmp).organization
+            saved = load_config(tmp)
         except ConfigError as e:
             tmp.unlink()
             _fail(ctx.out, f"not saved, the edited file did not load: {e}")
             return
-        if saved != proposed:
+        if describe(saved) != data["proposed"]:
             tmp.unlink()
             _fail(ctx.out, "not saved, the edited file did not say what was asked.")
             return
@@ -390,24 +456,89 @@ def config_layout(
         data["applied"] = True
 
     def render() -> None:
-        ctx.out.title("Folder layout")
-        ctx.out.pairs([(k, v) for k, v in data["proposed"].items()])
+        ctx.out.title("Backup layout")
+        p = data["proposed"]
+        ctx.out.pairs(
+            [
+                ("pattern", p["pattern"]),
+                ("place folder from", f"{p['minPhotos']} items"),
+                ("new visit after", f"{p['gapDays']} days"),
+                ("one folder for", ", ".join(p["flat"]) or "none"),
+                *[(f"{k} layout", v) for k, v in p["sourcePatterns"].items()],
+                *[(f"{k} go to", v or "(with photos)") for k, v in p["destinations"].items()],
+            ]
+        )
         if "preview" in data:
-            p = data["preview"]
+            pv = data["preview"]
             ctx.out.line()
             ctx.out.pairs(
                 [
-                    ("archived items", f"{p['assets']:,}"),
-                    ("folders", f"{p['folders']:,}"),
-                    ("place folders", f"{p['placeFolders']:,}"),
+                    ("archived items", f"{pv['assets']:,}"),
+                    ("folders", f"{pv['folders']:,}"),
+                    ("place folders", f"{pv['placeFolders']:,}"),
                 ]
             )
-            for row in p["places"]:
+            for row in pv["places"] or pv["biggest"]:
                 ctx.out.line(f"    {row['folder']:<50}{row['count']:>7,}")
         if data["applied"]:
-            ctx.out.ok("saved. New backups use it; files already backed up stay where they are.")
+            ctx.out.ok("saved. New backups use it; `refile` moves what is already backed up.")
 
     ctx.out.result(data, render)
+
+
+@cli.command()
+@click.option(
+    "--source", "sources", multiple=True, required=True, help="Source to re-file, e.g. whatsapp."
+)
+@click.option("--apply", "apply_", is_flag=True, help="Move the files. Without it, only plan.")
+@click.option("--show", type=int, default=5, help="Example moves to list.")
+@pass_context
+def refile(ctx: Context, sources: tuple[str, ...], apply_: bool, show: int) -> None:
+    """Move cloud copies to where the current layout puts them.
+
+    Server-side moves on the remote; each file is found by hash at its new
+    path before the ledger is changed. Re-run to finish an interrupted run.
+    """
+    from .. import refile as refile_engine
+
+    db = ctx.database()
+    try:
+        plan = refile_engine.plan(ctx.config, db, list(sources))
+        data: dict[str, Any] = {
+            "applied": False,
+            "toMove": len(plan.moves),
+            "alreadyInPlace": plan.already,
+            "skipped": dict(plan.skipped),
+            "examples": [{"from": m.old, "to": m.new} for m in plan.moves[:show]],
+        }
+        if apply_ and plan.moves:
+            result = refile_engine.run(
+                ctx.config, db, plan.moves, on_progress=lambda line: click.echo(line, err=True)
+            )
+            data.update(applied=True, moved=result.moved, failures=result.failures[:200])
+    finally:
+        db.close()
+
+    def render() -> None:
+        ctx.out.title("Re-file " + ", ".join(sources))
+        ctx.out.pairs(
+            [
+                ("to move", f"{data['toMove']:,}"),
+                ("already in place", f"{data['alreadyInPlace']:,}"),
+                *[(k, f"{v:,}") for k, v in data["skipped"].items()],
+            ]
+        )
+        for e in data["examples"]:
+            ctx.out.line(f"    {e['from']}")
+            ctx.out.line(f"      -> {e['to']}")
+        if data["applied"]:
+            ctx.out.ok(f"moved {data['moved']:,}; {len(data['failures']):,} failed")
+        elif data["toMove"]:
+            ctx.out.line("  Nothing moved. Add --apply to move them.")
+
+    ctx.out.result(data, render)
+    if data.get("failures"):
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------

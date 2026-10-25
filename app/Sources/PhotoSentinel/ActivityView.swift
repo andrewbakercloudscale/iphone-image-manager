@@ -183,6 +183,9 @@ struct TaskRow: View {
         case .recover:
             guard let r = status.decode(RecoverReport.self) else { return "" }
             return "\(Fmt.count(r.verified)) of \(Fmt.count(r.files.count)) downloaded and matched their fingerprint."
+        case .refile:
+            guard let r = status.decode(RefileReport.self) else { return "" }
+            return "Moved \(Fmt.count(r.moved ?? 0)) of \(Fmt.count(r.toMove)) in Google Drive, each found by its fingerprint at the new place."
         case .backup:
             return "Copied off the phone, uploaded, and checked in Google Drive."
         case .places:

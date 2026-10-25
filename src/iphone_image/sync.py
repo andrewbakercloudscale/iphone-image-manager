@@ -207,7 +207,7 @@ def event_folders(config: Config, db: Database, *, also: list[str] | None = None
     Skipped entirely when the pattern does not ask for it, because reading the
     Photos database costs a copy of it.
     """
-    if "{event}" not in config.organization.pattern:
+    if not config.organization.uses("{event}"):
         return {}
     places = read_places(config.photos.library_path)
     placeholders = ",".join("?" for _ in (also or []))
@@ -258,7 +258,7 @@ def archive_path_for(
         "camera_make": asset.get("camera_make"),
         "camera_model": asset.get("camera_model"),
     }
-    relative = render_pattern(config.organization.pattern, values)
+    relative = render_pattern(config.organization.pattern_for(channel), values)
     return config.archive.local_path / relative
 
 

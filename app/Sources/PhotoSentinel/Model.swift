@@ -197,6 +197,12 @@ final class Model: ObservableObject {
                args: ["recover"] + ids.flatMap { ["--id", String($0)] })
     }
 
+    /// Moves files already in Drive to where the saved layout puts them (`refile`).
+    func refile(_ sources: [String]) {
+        launch(.refile, recipe: nil, title: "Move existing files in Drive",
+               args: ["refile", "--apply"] + sources.flatMap { ["--source", $0] })
+    }
+
     func plan(_ r: Recipe) {
         launch(.plan, recipe: r, title: "Plan: \(r.title)", args: ["remove-from-iphone"] + r.removalArgs)
     }

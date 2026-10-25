@@ -117,6 +117,12 @@ class OrganizationConfig(Strict):
     #: flat here is flat on Drive.
     flat_channels: list[str] = Field(default_factory=list)
 
+    #: A layout of its own for a channel, overriding `pattern` for it:
+    #: `{whatsapp: "{source}/{year}/{month}"}`. Each source has its own remote
+    #: destination, so every pattern starts with {source} (the level upload
+    #: strips). A channel in `flat_channels` stays flat whatever this says.
+    channel_patterns: dict[str, str] = Field(default_factory=dict)
+
     #: For the {event} token: how few photos a place can have and still earn its
     #: own folder. Below it an asset falls back to its month, which sorts beside
     #: the named folders rather than into a junk drawer. Measured on a real
@@ -134,6 +140,24 @@ class OrganizationConfig(Strict):
         if problems:
             raise ValueError("; ".join(problems))
         return value
+
+    @field_validator("channel_patterns")
+    @classmethod
+    def _check_channel_patterns(cls, value: dict[str, str]) -> dict[str, str]:
+        for channel, pattern in value.items():
+            problems = validate_pattern(pattern)
+            if not pattern.startswith("{source}/"):
+                problems.append('it must start with "{source}/"')
+            if problems:
+                raise ValueError(f"channel_patterns.{channel}: " + "; ".join(problems))
+        return value
+
+    def pattern_for(self, channel: str) -> str:
+        return self.channel_patterns.get(channel, self.pattern)
+
+    def uses(self, token: str) -> bool:
+        """Whether any pattern in play names `token`."""
+        return any(token in p for p in [self.pattern, *self.channel_patterns.values()])
 
 
 class GeolocationConfig(Strict):
@@ -401,7 +425,7 @@ class Config(Strict):
             )
 
         needs_location = any(
-            token in self.organization.pattern
+            self.organization.uses(token)
             for token in ("{country}", "{region}", "{city}", "{suburb}")
         )
         if needs_location and not self.geolocation.reverse_geocode:

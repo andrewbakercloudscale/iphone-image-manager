@@ -7,7 +7,7 @@ import Foundation
 /// what lets Activity show it as a job in flight and lets a removal's result be read back
 /// after the fact, rather than living only in a window that has gone.
 public struct CLITask: Identifiable, Codable, Hashable, Sendable {
-    public enum Kind: String, Codable, Sendable { case audit, plan, remove, places, backup, settle, recover }
+    public enum Kind: String, Codable, Sendable { case audit, plan, remove, places, backup, settle, recover, refile }
 
     public let id: String
     public let kind: Kind

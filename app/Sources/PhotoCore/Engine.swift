@@ -120,13 +120,17 @@ public struct CLIEngine: Engine {
     }
 }
 
-/// `config layout`: the archive's folder layout, a preview of it, and saving it.
+/// `config layout`: how backups are stored, a preview of it, and saving it.
 public struct LayoutReport: Codable, Sendable {
     public struct Settings: Codable, Hashable, Sendable {
         public var pattern: String
         public var minPhotos: Int
         public var gapDays: Int
         public var flat: [String]
+        /// A source's own layout, overriding `pattern`.
+        public var sourcePatterns: [String: String]
+        /// photos, videos, screenshots, whatsapp: the Drive folder each goes to; empty means with the photos.
+        public var destinations: [String: String]
     }
     public struct Folder: Codable, Hashable, Sendable {
         public let folder: String
@@ -145,7 +149,25 @@ public struct LayoutReport: Codable, Sendable {
     public let changed: Bool
     public let applied: Bool
     public let preview: Preview?
-    public let error: String?
+}
+
+/// `refile`: files already in Drive that the layout now puts somewhere else.
+public struct RefileReport: Codable, Sendable {
+    public struct Example: Codable, Hashable, Sendable {
+        public let from: String
+        public let to: String
+    }
+    public struct Failure: Codable, Hashable, Sendable {
+        public let file: String
+        public let error: String
+    }
+    public let applied: Bool
+    public let toMove: Int
+    public let alreadyInPlace: Int
+    public let skipped: [String: Int]
+    public let examples: [Example]
+    public let moved: Int?
+    public let failures: [Failure]?
 }
 
 extension CLIEngine {
@@ -155,13 +177,27 @@ extension CLIEngine {
         if let s {
             args += ["--pattern", s.pattern, "--min-photos", String(s.minPhotos), "--gap-days", String(s.gapDays),
                      "--flat", s.flat.joined(separator: ",")]
+            for source in ["whatsapp", "screenshot"] {
+                args += ["--source-pattern", "\(source)=\(s.sourcePatterns[source] ?? "")"]
+            }
+            for (kind, path) in s.destinations.sorted(by: { $0.key < $1.key }) {
+                args += ["--destination", "\(kind)=\(path)"]
+            }
         }
         if preview { args.append("--preview") }
         if apply { args.append("--apply") }
-        let data = try run(args)
+        return try decode(LayoutReport.self, run(args))
+    }
+
+    /// What `refile` would move. Reads the ledger only: seconds.
+    public func refilePlan(_ sources: [String]) throws -> RefileReport {
+        try decode(RefileReport.self, run(["--json", "refile"] + sources.flatMap { ["--source", $0] }))
+    }
+
+    private func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T {
         if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let e = obj["error"] as? String {
             throw JobError.message(e)
         }
-        return try JSONDecoder().decode(LayoutReport.self, from: data)
+        return try JSONDecoder().decode(type, from: data)
     }
 }

@@ -17,34 +17,45 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from .config import Config, OrganizationConfig
+from .config import Config
 from .db.database import Database
 from .organize.events import assign
 from .photos.places import read_places
 from .sync import archive_path_for
 
-#: Keys `edit_organization` may write, in the order they are added when missing.
-KEYS = ("pattern", "flat_channels", "event_min_photos", "event_gap_days")
+#: Keys a layout save may write, per section, in the order they are added when missing.
+KEYS = {
+    "organization": (
+        "pattern",
+        "channel_patterns",
+        "flat_channels",
+        "event_min_photos",
+        "event_gap_days",
+    ),
+    "cloud": ("destination", "video_destination", "screenshot_destination", "whatsapp_destination"),
+}
 
 
-def render_value(key: str, value: Any) -> str:
-    if key == "pattern":
-        return f'"{value}"'
-    if key == "flat_channels":
+def render_value(value: Any) -> str:
+    if isinstance(value, str):
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    if isinstance(value, list):
         return "[" + ", ".join(value) + "]"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{k}: {render_value(v)}" for k, v in value.items()) + "}"
     return str(value)
 
 
-def edit_organization(text: str, changes: dict[str, Any]) -> str:
-    """config.yaml with `organization.<key>` set for each change, comments kept."""
+def edit_section(text: str, section: str, changes: dict[str, Any]) -> str:
+    """config.yaml with `<section>.<key>` set for each change, comments kept."""
     lines = text.splitlines(keepends=True)
     start = next(
-        (i for i, line in enumerate(lines) if re.match(r"^organization:\s*(#.*)?$", line)), None
+        (i for i, line in enumerate(lines) if re.match(rf"^{section}:\s*(#.*)?$", line)), None
     )
     if start is None:
         if lines and not lines[-1].endswith("\n"):
             lines[-1] += "\n"
-        lines.append("\norganization:\n")
+        lines.append(f"\n{section}:\n")
         start = len(lines) - 1
     end = start + 1
     indent = "  "
@@ -57,11 +68,13 @@ def edit_organization(text: str, changes: dict[str, Any]) -> str:
     while end > start + 1 and not lines[end - 1].strip():
         end -= 1
 
-    for key in KEYS:
+    for key in KEYS[section]:
         if key not in changes:
             continue
-        value = render_value(key, changes[key])
-        pattern = re.compile(rf"^(\s+){key}:\s*(\"[^\"]*\"|'[^']*'|\[[^\]]*\]|[^#\s]*)(\s*#.*)?$")
+        value = render_value(changes[key])
+        pattern = re.compile(
+            rf"^(\s+){key}:\s*(\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'|\[[^\]]*\]|\{{.*\}}|[^#\s]*)(\s*#.*)?$"
+        )
         for i in range(start + 1, end):
             m = pattern.match(lines[i].rstrip("\n"))
             if m:
@@ -74,14 +87,17 @@ def edit_organization(text: str, changes: dict[str, Any]) -> str:
     return "".join(lines)
 
 
-def preview(config: Config, db: Database, organization: OrganizationConfig) -> dict[str, Any]:
-    """Where the archived assets would sit under `organization`.
+def edit_organization(text: str, changes: dict[str, Any]) -> str:
+    return edit_section(text, "organization", changes)
+
+
+def preview(proposed: Config, db: Database) -> dict[str, Any]:
+    """Where the archived assets would sit under the proposed configuration.
 
     Counts the same assets `sync.event_folders` clusters over, so a place folder
     shown here is one a backup would really make. Reads a copy of the Photos
     database when the pattern names {event}, which takes a minute.
     """
-    proposed = config.model_copy(update={"organization": organization})
     rows = [
         dict(r)
         for r in db.conn.execute(
@@ -90,8 +106,9 @@ def preview(config: Config, db: Database, organization: OrganizationConfig) -> d
         ).fetchall()
     ]
     events: dict[str, str] = {}
-    if "{event}" in organization.pattern:
-        places = read_places(config.photos.library_path)
+    organization = proposed.organization
+    if organization.uses("{event}"):
+        places = read_places(proposed.photos.library_path)
         events, _ = assign(
             rows,
             places.by_uuid,
@@ -106,7 +123,7 @@ def preview(config: Config, db: Database, organization: OrganizationConfig) -> d
     place_folders = {
         f: n
         for f, n in folders.items()
-        if "{event}" in organization.pattern
+        if "{event}" in organization.pattern_for(Path(f).parts[0])
         and f not in organization.flat_channels
         and not re.fullmatch(r"\d\d", Path(f).name)
     }
