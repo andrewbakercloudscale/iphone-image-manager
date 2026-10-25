@@ -21,6 +21,7 @@ final class Model: ObservableObject {
     @Published var removing: Recipe? { didSet { if removing == nil { planNextIfAny() } } }
     /// A section to scroll to once its tab shows ("builder").
     @Published var scrollTarget: String?
+    let permissions = Permissions()
     /// "Apply my plan": the clean-ups still to walk through, one removal sheet at a time.
     @Published var plan: [Recipe] = []
     @Published var planDone: [String] = []

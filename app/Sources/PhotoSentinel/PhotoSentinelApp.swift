@@ -64,6 +64,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             Header(model: model)
             TabBar(selection: $model.tab, badges: badges)
+            PermissionsBanner(permissions: model.permissions)
             if let notice = model.notice {
                 HStack {
                     Image(systemName: "info.circle.fill").foregroundStyle(Tab.backup.color)

@@ -232,6 +232,7 @@ struct SettingsView: View {
                 }
                 .font(.callout)
             }
+            PermissionsCard(permissions: model.permissions)
             Card(title: "Is this Mac ready?", symbol: "stethoscope", tint: Tab.checkup.color,
                  trailing: model.doctorRunning ? nil : AnyView(CapsuleButton(title: "Run again", symbol: "arrow.clockwise", color: Tab.checkup.color, style: .soft) { model.refreshDoctor() })) {
                 DoctorPanel(model: model)

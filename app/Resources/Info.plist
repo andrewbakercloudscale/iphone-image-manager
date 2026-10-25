@@ -11,6 +11,7 @@
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSPhotoLibraryUsageDescription</key><string>Photo Sentinel backs up your photos and videos to your own Google Drive, and removes from the phone only what Drive has checked.</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
 </dict>
 </plist>
