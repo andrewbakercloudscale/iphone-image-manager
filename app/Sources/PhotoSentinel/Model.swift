@@ -18,18 +18,23 @@ final class Model: ObservableObject {
     @Published var notice: String?
     @Published var tab: Tab = .checkup
     @Published var tasks: [TaskStatus] = []
-    @Published var removing: Recipe?
+    @Published var removing: Recipe? { didSet { if removing == nil { planNextIfAny() } } }
+    /// A section to scroll to once its tab shows ("builder").
+    @Published var scrollTarget: String?
+    /// "Apply my plan": the clean-ups still to walk through, one removal sheet at a time.
+    @Published var plan: [Recipe] = []
+    @Published var planDone: [String] = []
     @Published var allProof: Proof?
     /// Backups waiting for the running one to end. One PhotoKit exporter at a time.
     @Published var queue: [QueuedBackup] = [] { didSet { saveQueue() } }
     @Published var suggestions: [Suggestion] = []
-    /// The filter being built on the Clean up tab.
+    /// The filter being built on the Library tab.
     @Published var draft = Filter()
     /// Clean-ups the owner built and saved.
     @Published var saved: [Filter] = [] { didSet { saveFilters() } }
 
     /// "off" keeps every item of that type on the phone.
-    @AppStorage("age.cameraPhotos") var photoAge = "off"
+    @AppStorage("age.cameraPhotos") var photoAge = "3y"
     @AppStorage("age.oldVideos") var videoAge = "1y"
     @AppStorage("age.whatsapp") var whatsappAge = "18m"
     @AppStorage("age.screenshots") var screenshotAge = "1y"
@@ -212,7 +217,45 @@ final class Model: ObservableObject {
     /// Opens the filter builder on one place.
     func showPlace(country: String, city: String? = nil) {
         draft = Filter(country: country, city: city)
-        tab = .cleanUp
+        openBuilder()
+    }
+
+    /// The filter builder, on the Library tab.
+    func openBuilder() {
+        tab = .library
+        scrollTarget = "builder"
+    }
+
+    /// Backs up everything the ages need, then opens each type's removal in turn. Each one
+    /// still shows its plan and asks for the typed phrase; nothing is removed without that.
+    func applyPlan(_ steps: [RecipeStats]) {
+        for s in steps where s.notBackedUp.count > 0 { backUp(s.recipe) }
+        plan = steps.filter { $0.removableNow.count > 0 }.map(\.recipe)
+        planDone = []
+        if plan.isEmpty {
+            notice = "Backups queued. Nothing is in Google Drive yet to remove; come back when they finish."
+        } else {
+            planNext()
+        }
+    }
+
+    func planNext() {
+        guard let next = plan.first(where: { !planDone.contains($0.id) }) else { plan = []; return }
+        planDone.append(next.id)
+        removing = next
+    }
+
+    func stopPlan() {
+        plan = []
+        planDone = []
+    }
+
+    /// When a removal sheet closes during a plan, the next step waits for a click on the card.
+    private func planNextIfAny() {
+        if !plan.isEmpty && plan.allSatisfy({ planDone.contains($0.id) }) {
+            notice = "Your plan is done. Anything that still needs a backup comes off the next time you apply it."
+            plan = []
+        }
     }
 
     /// Backs up items picked one by one. Queued behind any running export.
@@ -326,7 +369,7 @@ final class Model: ObservableObject {
         switch action {
         case .resume(let id): resume(id)
         case .recipe(let id):
-            tab = .cleanUp
+            tab = .library
             removing = recipes.first { $0.id == id }
         case .openTab(let name): tab = Tab.named(name) ?? .checkup
         case .none: break

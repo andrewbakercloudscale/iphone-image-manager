@@ -12,7 +12,7 @@ struct FilterBuilder: View {
     private var f: Binding<Filter> { $model.draft }
 
     var body: some View {
-        Card(title: "Build your own clean-up", symbol: "line.3.horizontal.decrease.circle.fill", tint: Tab.cleanUp.color,
+        Card(title: "Build your own rule", symbol: "line.3.horizontal.decrease.circle.fill", tint: Tab.cleanUp.color,
              trailing: AnyView(Button("Reset") { model.draft = Filter() }.buttonStyle(.link))) {
             VStack(alignment: .leading, spacing: 12) {
                 Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 8) {

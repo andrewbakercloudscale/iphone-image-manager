@@ -121,7 +121,7 @@ struct OnboardingView: View {
                             }
                             .font(.callout)
                         }
-                        Text("All of these, and your own filters, are on the Clean up tab.").font(.caption).foregroundStyle(.secondary)
+                        Text("All of these, and your own rules, are on the Library tab.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }

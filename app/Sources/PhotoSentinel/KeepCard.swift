@@ -61,12 +61,19 @@ struct KeepCard: View {
                     Text("on your iPhone with these ages · frees \(Fmt.bytes(frees))").font(.callout).foregroundStyle(.secondary)
                     Spacer()
                     if later > 0 {
-                        RowButton(title: "Back up all that's needed", symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color, style: .fill) {
+                        RowButton(title: "Back up all", symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color) {
                             for r in rows where r.notBackedUp.count > 0 { model.backUp(r.recipe) }
                         }
-                        .help("Queues a backup for every type below; one runs at a time")
+                        .help("Queues a backup for every type below; one runs at a time. Nothing leaves the phone.")
+                    }
+                    if frees > 0 && model.plan.isEmpty {
+                        RowButton(title: "Apply my plan…", symbol: "checklist", color: Tab.library.color, style: .fill) {
+                            model.applyPlan(rows)
+                        }
+                        .help("Backs up everything these ages need, then walks you through each type's removal: the plan, the typed phrase, and Delete in the dialog.")
                     }
                 }
+                if !model.plan.isEmpty { planBanner }
                 StackBar(parts: [(Tab.library.color.opacity(0.35), Double(after)), (Theme.good, Double(today)), (Theme.warn, Double(later))])
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 HStack(spacing: 16) {
@@ -91,6 +98,27 @@ struct KeepCard: View {
         .onChange(of: model.ages) { model.refresh() }
     }
 
+    /// Where "Apply my plan" is: each type, done or next, and a way to stop.
+    private var planBanner: some View {
+        let next = model.plan.first { !model.planDone.contains($0.id) }
+        return HStack(spacing: 10) {
+            Image(systemName: "checklist").foregroundStyle(Tab.library.color)
+            ForEach(model.plan) { r in
+                let done = model.planDone.contains(r.id) && r.id != model.removing?.id
+                Label(name(r.kind), systemImage: done ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(done ? Theme.good : .secondary)
+            }
+            Spacer()
+            if let next, model.removing == nil {
+                RowButton(title: "Next: \(name(next.kind))…", symbol: "arrow.right.circle.fill", color: Tab.library.color, style: .fill) { model.planNext() }
+            }
+            RowButton(title: "Stop", symbol: "xmark", color: .secondary) { model.stopPlan() }
+        }
+        .font(.callout)
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Tab.library.color.opacity(0.1)))
+    }
+
     /// The owner's own rules (saved filters), and a way to add one: by size, place, app or year.
     private var rules: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -100,7 +128,7 @@ struct KeepCard: View {
                 Spacer()
                 RowButton(title: "Add a rule", symbol: "plus.circle.fill", color: Tab.library.color) {
                     model.draft = Filter()
-                    model.tab = .cleanUp
+                    model.openBuilder()
                 }
                 .help("Build one from app, kind, age, size, year or place, and save it with a name. It shows up here.")
             }
@@ -121,7 +149,7 @@ struct KeepCard: View {
                         .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                     RowButton(title: "Edit", symbol: "slider.horizontal.3", color: Tab.library.color) {
                         model.draft = r.recipe.filter
-                        model.tab = .cleanUp
+                        model.openBuilder()
                     }
                     if r.selected.count > 0 {
                         RowButton(title: "Back up & remove…", symbol: "iphone.and.arrow.forward", style: .fill) { model.removing = r.recipe }

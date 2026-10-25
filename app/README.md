@@ -8,7 +8,7 @@ job writes) and `~/.iphone-image/cycle.log`, and acts only through the engine:
 
 | Action | What runs | Where it is |
 |---|---|---|
-| Back up / Resume | `cycle.sh <type> 40 <source> [age]` under `caffeinate`. One at a time; the rest queue | Clean up, Activity |
+| Back up / Resume | `cycle.sh <type> 40 <source> [age]` under `caffeinate`. One at a time; the rest queue | Library, Activity |
 | Check Google Drive | `iphone-image --json audit`: every verified file's hash re-read from Drive | Backup, removal step 2 |
 | Plan a removal | `remove-from-iphone <selector>`: fresh scan, then each item's Drive hash re-read | removal step 3 |
 | Remove | the same with `--apply --confirm "<phrase>"`. Never resumes by itself | removal step 4 |

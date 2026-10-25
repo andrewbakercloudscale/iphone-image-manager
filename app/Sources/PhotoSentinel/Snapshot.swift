@@ -21,7 +21,7 @@ enum Snapshot {
         model.draft = Filter(source: "whatsapp", type: "video", olderThan: "6m", minMB: 20)
         model.allProof = try? Ledger.proof(SQLiteReader(path: model.ledgerPath), since: "", limit: 0)
 
-        for tab in Tab.allCases {
+        for tab in Tab.shown {
             model.tab = tab
             let view = VStack(alignment: .leading, spacing: 12) {
                 Header(model: model)
@@ -54,7 +54,7 @@ enum Snapshot {
         switch tab {
         case .checkup: CheckupView(model: model)
         case .library: LibraryView(model: model)
-        case .cleanUp: CleanUpView(model: model)
+        case .cleanUp: LibraryView(model: model)
         case .backup: BackupView(model: model)
         case .activity: ActivityView(model: model)
         case .bin: BinView(model: model)

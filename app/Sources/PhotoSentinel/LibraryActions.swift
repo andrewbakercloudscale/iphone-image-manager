@@ -2,7 +2,7 @@ import PhotoCore
 import SwiftUI
 
 /// Library cards that act, not just show: every row leads to backing up, removing, or a
-/// filter of its own on the Clean up tab.
+/// filter of its own on the Library tab.
 
 /// A bar row with its actions on the right.
 struct ActionRow<Actions: View>: View {
@@ -44,41 +44,6 @@ struct RowButton: View {
     }
 }
 
-struct FreeCard: View {
-    @ObservedObject var model: Model
-    let library: LibrarySnapshot
-
-    var body: some View {
-        let top = Double(library.recipes.map(\.selected.bytes).max() ?? 1)
-        Card(title: "What you could free", symbol: "sparkles", tint: Tab.cleanUp.color) {
-            VStack(spacing: 10) {
-                ForEach(library.recipes) { r in
-                    ActionRow(label: r.recipe.title, value: Double(r.selected.bytes) / max(top, 1), text: Fmt.bytes(r.selected.bytes),
-                              color: Tab.cleanUp.color,
-                              note: "\(Fmt.bytes(r.removableNow.bytes)) in Drive · \(Fmt.bytes(r.notBackedUp.bytes)) to back up") {
-                        if r.notBackedUp.count > 0 && !r.recipe.backups.isEmpty {
-                            if model.queue.contains(where: { q in r.recipe.backups.contains { $0.source == q.source && $0.type == q.type } }) {
-                                Pill(text: "Queued", symbol: "clock.fill", color: Theme.warn)
-                            } else {
-                                RowButton(title: "Back up \(Fmt.bytes(r.notBackedUp.bytes))", symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color) { model.backUp(r.recipe) }
-                                    .help("Copies them to Google Drive and checks each copy. Nothing leaves the phone.")
-                            }
-                        }
-                        RowButton(title: "Adjust", symbol: "slider.horizontal.3") {
-                            model.draft = r.recipe.filter
-                            model.tab = .cleanUp
-                        }
-                        if r.selected.count > 0 {
-                            RowButton(title: "Back up & remove…", symbol: "iphone.and.arrow.forward", style: .fill) { model.removing = r.recipe }
-                                .help("Backs up what Drive doesn't have yet, then removes from the iPhone only what Drive has checked. You see the plan first.")
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 struct CoverageCard: View {
     @ObservedObject var model: Model
     let library: LibrarySnapshot
@@ -99,7 +64,7 @@ struct CoverageCard: View {
                             }
                             RowButton(title: "Filter", symbol: "line.3.horizontal.decrease") {
                                 model.draft = Filter(source: source)
-                                model.tab = .cleanUp
+                                model.openBuilder()
                             }
                         }
                     }
@@ -237,7 +202,7 @@ struct AppsCard: View {
                         }
                         RowButton(title: "Clean up", symbol: "line.3.horizontal.decrease") {
                             model.draft = Filter(source: a.bundle)
-                            model.tab = .cleanUp
+                            model.openBuilder()
                         }
                     }
                 }

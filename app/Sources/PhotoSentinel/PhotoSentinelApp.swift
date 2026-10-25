@@ -74,6 +74,7 @@ struct ContentView: View {
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 10).fill(Tab.backup.color.opacity(0.1)))
             }
+            ScrollViewReader { proxy in
             ScrollView {
                 Group {
                     if let error = model.error, model.library == nil {
@@ -91,6 +92,15 @@ struct ContentView: View {
                 }
                 .padding(.bottom, 12)
             }
+            .onChange(of: model.scrollTarget) {
+                guard let target = model.scrollTarget else { return }
+                // After the tab has drawn, so the target exists.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    withAnimation { proxy.scrollTo(target, anchor: .top) }
+                    model.scrollTarget = nil
+                }
+            }
+            }
             Footer(model: model)
         }
         .padding(16)
@@ -105,7 +115,7 @@ struct ContentView: View {
         switch model.tab {
         case .checkup: CheckupView(model: model)
         case .library: LibraryView(model: model)
-        case .cleanUp: CleanUpView(model: model)
+        case .cleanUp: LibraryView(model: model)
         case .backup: BackupView(model: model)
         case .activity: ActivityView(model: model)
         case .bin: BinView(model: model)

@@ -172,9 +172,11 @@ struct Meter: View {
 
 enum Tab: Int, CaseIterable, Identifiable {
     case checkup, library, cleanUp, backup, activity, bin, settings
+    /// Clean up now lives inside Library; the case stays for its colour.
+    static let shown: [Tab] = allCases.filter { $0 != .cleanUp }
     var id: Int { rawValue }
 
-    static func named(_ name: String) -> Tab? { allCases.first { $0.title == name } }
+    static func named(_ name: String) -> Tab? { name == "Clean up" ? .library : allCases.first { $0.title == name } }
 
     var title: String {
         switch self {
@@ -221,7 +223,7 @@ struct TabBar: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(Tab.allCases) { tab in
+            ForEach(Tab.shown) { tab in
                 let on = tab == selection
                 Button { selection = tab } label: {
                     VStack(spacing: 3) {

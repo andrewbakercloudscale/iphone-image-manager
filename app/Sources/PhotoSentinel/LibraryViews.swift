@@ -14,6 +14,8 @@ struct LibraryView: View {
                     Kpi(label: "GROWING", value: "\(Fmt.bytes(s.weeklyGrowth)) / wk", note: "average of the last 3 months", color: Tab.library.color)
                 }
                 KeepCard(model: model, library: s)
+                FilterBuilder(model: model).id("builder")
+                SuggestionGrid(model: model)
                 Card(title: "Where the space goes", symbol: "chart.pie.fill", tint: Tab.library.color) {
                     VStack(alignment: .leading, spacing: 10) {
                         StackBar(parts: s.channels.map { (Theme.color($0.channel), Double($0.total.bytes)) })
@@ -29,13 +31,12 @@ struct LibraryView: View {
                         }
                     }
                 }
-                FreeCard(model: model, library: s)
                 CoverageCard(model: model, library: s)
                 Card(title: "By year taken", symbol: "calendar", tint: Tab.library.color,
                      trailing: AnyView(Text("click a year to clean it up").font(.callout).foregroundStyle(.secondary))) {
                     YearChart(years: s.years) { y in
                         model.draft = Filter(year: y)
-                        model.tab = .cleanUp
+                        model.openBuilder()
                     }
                 }
                 PlacesCard(model: model, library: s)
@@ -122,75 +123,6 @@ struct YearChart: View {
             }
         }
         .frame(height: 190, alignment: .bottom)
-    }
-}
-
-struct CleanUpView: View {
-    @ObservedObject var model: Model
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            FilterBuilder(model: model)
-            SuggestionGrid(model: model)
-            Text("YOUR CLEAN-UPS · EVERY ONE BACKS UP TO GOOGLE DRIVE FIRST").sectionLabel()
-            Text("Numbers here are estimates from the last scan. The plan in each clean-up scans the phone and re-checks Google Drive, and its numbers are the ones that count.")
-                .font(.callout).foregroundStyle(.secondary)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12)], spacing: 12) {
-                ForEach(model.library?.recipes ?? []) { r in
-                    RecipeCard(stats: r, queued: model.queue.contains { q in r.recipe.backups.contains { $0.source == q.source && $0.type == q.type } },
-                               backUp: { model.backUp(r.recipe) }, review: { model.removing = r.recipe },
-                               forget: r.recipe.kind == .custom ? { model.forget(r.recipe.filter) } : nil)
-                }
-            }
-        }
-    }
-}
-
-struct RecipeCard: View {
-    let stats: RecipeStats
-    var queued = false
-    var backUp: () -> Void = {}
-    var review: () -> Void = {}
-    var forget: (() -> Void)?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                SymbolTile(symbol: stats.recipe.symbol, color: Tab.cleanUp.color, size: 34)
-                Text(stats.recipe.title).font(.headline)
-                Spacer()
-                if let forget {
-                    Button(action: forget) { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                        .buttonStyle(.plain).help("Forget this clean-up. Nothing on the phone or in Drive changes.")
-                }
-            }
-            Text(stats.recipe.detail).font(.callout).foregroundStyle(.secondary)
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
-                row("On the phone", stats.selected, .primary)
-                row("In Drive, can go (est.)", stats.removableNow, Theme.good)
-                row("Not in Drive yet", stats.notBackedUp, Theme.warn)
-                row("Kept for safety", stats.kept, .secondary)
-            }
-            .font(.callout)
-            HStack {
-                CapsuleButton(title: "Remove from iPhone…", symbol: "trash.fill", color: Tab.cleanUp.color, action: review)
-                if stats.notBackedUp.count > 0 && !stats.recipe.backups.isEmpty {
-                    if queued { Pill(text: "Backup queued", symbol: "clock.fill", color: Theme.warn) }
-                    else { CapsuleButton(title: "Back up", symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color, style: .soft, action: backUp) }
-                }
-            }
-        }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.cardFill))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.cardStroke, lineWidth: 1.5))
-    }
-
-    private func row(_ label: String, _ t: Tally, _ color: Color) -> some View {
-        GridRow {
-            Text(label)
-            Text(Fmt.count(t.count)).monospacedDigit().foregroundStyle(color)
-            Text(Fmt.bytes(t.bytes)).monospacedDigit().foregroundStyle(color).fontWeight(.semibold)
-        }
     }
 }
 
