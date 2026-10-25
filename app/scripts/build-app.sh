@@ -36,8 +36,10 @@ if pgrep -x PhotoSentinel >/dev/null; then
     for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -x PhotoSentinel >/dev/null || break; sleep 0.5; done
     pkill -KILL -x PhotoSentinel 2>/dev/null || true
 fi
-rm -rf "$DEST"
-cp -R "$APP" "$DEST"
+# In place, never rm and copy: the Dock's "Keep in Dock" entry and System Settings' grants
+# point at this folder, and a new folder at the same path is a different one to them.
+mkdir -p "$DEST"
+rsync -a --delete "$APP/" "$DEST/"
 echo "== installed: $DEST"
 
 if [[ "${1:-}" != "--no-open" ]]; then
