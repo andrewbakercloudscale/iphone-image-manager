@@ -122,10 +122,10 @@ struct RemovalSheet: View {
     @ViewBuilder private var driveStep: some View {
         Step(number: 2, title: "Confirm Google Drive has them", done: driveConfirmed) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Re-reads the SHA-256 of every file in Google Drive and compares it with the hash taken when it was copied off the phone.")
+                Text("Re-reads the SHA-256 of every file in Google Drive and compares it with the hash taken when it was copied off the phone. Takes about 7 minutes.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let a = audit, a.running {
-                    Running(text: "Asking Google Drive for every file's hash…", since: a.task.startedAt)
+                    Running(text: "Asking Google Drive for every file's hash (about 7 minutes)…", since: a.task.startedAt)
                 } else if let r = auditReport, auditFresh {
                     AuditSummary(report: r, at: audit!.task.startedAt)
                     if !r.clean { Text("Removal stays locked until this is clean.").font(.callout.weight(.semibold)).foregroundStyle(Theme.bad) }

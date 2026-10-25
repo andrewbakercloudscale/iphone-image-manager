@@ -292,7 +292,7 @@ struct DriveCheckCard: View {
              trailing: (audit?.running ?? false) ? nil : AnyView(CapsuleButton(title: audit == nil ? "Check now" : "Check again", symbol: "arrow.clockwise", color: Theme.good, style: .soft) { model.runAudit() })) {
             VStack(alignment: .leading, spacing: 6) {
                 if let a = audit, a.running {
-                    Running(text: "Asking Google Drive for every file's hash…", since: a.task.startedAt)
+                    Running(text: "Asking Google Drive for every file's hash (about 7 minutes)…", since: a.task.startedAt)
                 } else if let r = audit?.decode(AuditReport.self), let a = audit {
                     AuditSummary(report: r, at: a.task.startedAt)
                 } else if let msg = audit?.errorMessage {
