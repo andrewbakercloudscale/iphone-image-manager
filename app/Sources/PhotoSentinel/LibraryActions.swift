@@ -20,9 +20,10 @@ struct ActionRow<Actions: View>: View {
                 if let note { Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
             }
             .frame(width: 210, alignment: .leading)
-            Meter(value: value, color: color)
+            // The buttons keep their full width; the meter gives way.
+            Meter(value: value, color: color).frame(minWidth: 40)
             Text(text).fontWeight(.semibold).monospacedDigit().frame(width: 70, alignment: .trailing)
-            HStack(spacing: 6) { actions }.frame(minWidth: 250, alignment: .trailing)
+            HStack(spacing: 6) { actions }.fixedSize().frame(minWidth: 250, alignment: .trailing).layoutPriority(1)
         }
         .font(.callout)
     }
@@ -39,6 +40,7 @@ struct RowButton: View {
     var body: some View {
         CapsuleButton(title: title, symbol: symbol, color: color, style: style, action: action)
             .controlSize(.small)
+            .fixedSize()
     }
 }
 
@@ -53,19 +55,23 @@ struct FreeCard: View {
                 ForEach(library.recipes) { r in
                     ActionRow(label: r.recipe.title, value: Double(r.selected.bytes) / max(top, 1), text: Fmt.bytes(r.selected.bytes),
                               color: Tab.cleanUp.color,
-                              note: "\(Fmt.bytes(r.removableNow.bytes)) can go now · \(Fmt.bytes(r.notBackedUp.bytes)) needs backup") {
+                              note: "\(Fmt.bytes(r.removableNow.bytes)) in Drive · \(Fmt.bytes(r.notBackedUp.bytes)) to back up") {
                         if r.notBackedUp.count > 0 && !r.recipe.backups.isEmpty {
                             if model.queue.contains(where: { q in r.recipe.backups.contains { $0.source == q.source && $0.type == q.type } }) {
                                 Pill(text: "Queued", symbol: "clock.fill", color: Theme.warn)
                             } else {
-                                RowButton(title: "Back up", symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color) { model.backUp(r.recipe) }
+                                RowButton(title: "Back up \(Fmt.bytes(r.notBackedUp.bytes))", symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color) { model.backUp(r.recipe) }
+                                    .help("Copies them to Google Drive and checks each copy. Nothing leaves the phone.")
                             }
                         }
                         RowButton(title: "Adjust", symbol: "slider.horizontal.3") {
                             model.draft = r.recipe.filter
                             model.tab = .cleanUp
                         }
-                        RowButton(title: "Remove…", symbol: "trash.fill", style: .fill) { model.removing = r.recipe }
+                        if r.selected.count > 0 {
+                            RowButton(title: "Back up & remove…", symbol: "iphone.and.arrow.forward", style: .fill) { model.removing = r.recipe }
+                                .help("Backs up what Drive doesn't have yet, then removes from the iPhone only what Drive has checked. You see the plan first.")
+                        }
                     }
                 }
             }
@@ -83,7 +89,8 @@ struct CoverageCard: View {
                 ForEach(library.channels) { c in
                     ActionRow(label: c.channel.title, value: c.coverage, text: Fmt.pct(c.coverage), color: Theme.good,
                               note: c.coverage >= 0.999 ? "all \(Fmt.count(c.total.count)) in Drive"
-                                  : "\(Fmt.bytes(c.total.bytes - c.verified.bytes)) only on the phone") {
+                                  : "\(Fmt.bytes(c.total.bytes - c.verified.bytes)) only on the phone"
+                                    + (c.notBackedUpAge.map { ", \($0)" } ?? "")) {
                         if let source = c.channel.cliSource {
                             if c.coverage < 0.999 {
                                 RowButton(title: "Back up all", symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color) {
@@ -126,7 +133,7 @@ struct BiggestVideosCard: View {
                         Text(Fmt.bytes(v.bytes)).fontWeight(.semibold).monospacedDigit()
                         Text(v.inDrive ? "in Drive" : "phone only").foregroundStyle(v.inDrive ? Theme.good : Theme.warn).frame(width: 78, alignment: .trailing)
                         if v.inDrive {
-                            RowButton(title: "Remove…", symbol: "trash.fill", style: .fill) { remove([v]) }
+                            RowButton(title: "Delete from iPhone…", symbol: "iphone.and.arrow.forward", style: .fill) { remove([v]) }
                         } else {
                             RowButton(title: "Back up", symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color) { backUp([v]) }
                         }
@@ -144,7 +151,7 @@ struct BiggestVideosCard: View {
                                 backUp(chosen.filter { !$0.inDrive })
                             }
                         }
-                        RowButton(title: "Remove picked…", symbol: "trash.fill", style: .fill) { remove(chosen) }
+                        RowButton(title: "Delete picked from iPhone…", symbol: "iphone.and.arrow.forward", style: .fill) { remove(chosen) }
                     }
                 }
                 Text("Back up copies a video off the phone, uploads it and checks it in Drive. Remove only ever takes what Drive has checked.")

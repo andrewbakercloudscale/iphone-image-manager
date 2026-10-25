@@ -33,13 +33,15 @@ public enum Detector {
                                actionTitle: "Open Settings", action: .openTab("Settings"), bytes: .max))
         }
 
-        let phoneOnly = s.channels.filter { $0.channel == .camera }
+        let camera = s.channels.filter { $0.channel == .camera }
+        let taken = camera.first?.notBackedUpAge
+        let phoneOnly = camera
             .reduce(Tally()) { Tally(count: $0.count + $1.total.count - $1.verified.count, bytes: $0.bytes + $1.total.bytes - $1.verified.bytes) }
         if phoneOnly.count > 0 {
             let running = jobs.contains { $0.source == "camera" && $0.state == .running }
             out.append(Finding(id: "camera.unprotected", kind: .safety, symbol: "exclamationmark.shield.fill",
                                title: "\(Fmt.count(phoneOnly.count)) camera photos and videos are only on your phone",
-                               detail: "\(Fmt.bytes(phoneOnly.bytes)) with no copy in Google Drive." + (running ? " Backing up now." : ""),
+                               detail: "\(Fmt.bytes(phoneOnly.bytes)) with no copy in Google Drive" + (taken.map { ", \($0)." } ?? ".") + (running ? " Backing up now." : ""),
                                actionTitle: running ? "Watch progress" : "Back up", action: .openTab("Activity"), bytes: phoneOnly.bytes))
         }
 
@@ -92,6 +94,7 @@ public enum Detector {
         let age = r.age.map { " older than \($0.words)" } ?? ""
         switch r.kind {
         case .oldVideos: return "camera videos" + age
+        case .cameraPhotos: return "camera photos" + age
         case .whatsapp: return "WhatsApp items" + age
         case .screenshots: return "screenshots" + age
         case .screenRecordings: return "screen recordings" + age

@@ -10,9 +10,10 @@ struct LibraryView: View {
                 HStack(spacing: 12) {
                     Kpi(label: "ON YOUR IPHONE", value: Fmt.bytes(s.onPhone.bytes), note: "\(Fmt.count(s.onPhone.count)) items")
                     Kpi(label: "SAFE IN GOOGLE DRIVE", value: Fmt.pct(s.coverage), note: "\(Fmt.bytes(s.verified.bytes)) checked", color: Theme.good)
-                    Kpi(label: "YOU COULD FREE", value: Fmt.bytes(s.couldFree), note: "with the clean-ups below", color: Tab.cleanUp.color)
+                    Kpi(label: "YOU COULD FREE", value: Fmt.bytes(s.couldFree), note: "with the ages below", color: Tab.cleanUp.color)
                     Kpi(label: "GROWING", value: "\(Fmt.bytes(s.weeklyGrowth)) / wk", note: "average of the last 3 months", color: Tab.library.color)
                 }
+                KeepCard(model: model, library: s)
                 Card(title: "Where the space goes", symbol: "chart.pie.fill", tint: Tab.library.color) {
                     VStack(alignment: .leading, spacing: 10) {
                         StackBar(parts: s.channels.map { (Theme.color($0.channel), Double($0.total.bytes)) })
@@ -82,6 +83,7 @@ struct BarRow: View {
 
 struct StackBar: View {
     let parts: [(Color, Double)]
+    var height: CGFloat = 24
 
     var body: some View {
         GeometryReader { g in
@@ -92,7 +94,7 @@ struct StackBar: View {
                 }
             }
         }
-        .frame(height: 24)
+        .frame(height: height)
         .clipShape(RoundedRectangle(cornerRadius: 7))
     }
 }
@@ -285,7 +287,11 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            AgesCard(model: model)
+            Card(title: "What stays on your phone", symbol: "iphone.gen3", tint: Tab.library.color,
+                 trailing: AnyView(RowButton(title: "Open Library", symbol: "chart.bar.xaxis", color: Tab.library.color) { model.tab = .library })) {
+                Text("How long each type of media stays on the phone is set on the Library tab, where you see what each choice frees.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
             Card(title: "Where things are", symbol: "folder.fill", tint: Tab.backup.color) {
                 Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
                     GridRow { Text("Ledger"); TextField("", text: $model.ledgerPath).textFieldStyle(.roundedBorder) }
@@ -313,13 +319,14 @@ struct AgesCard: View {
     var body: some View {
         Card(title: "Clean-up ages", symbol: "calendar.badge.clock", tint: Tab.cleanUp.color) {
             Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
+                ageRow("Camera photos older than", $model.photoAge, .cameraPhotos)
                 ageRow("Camera videos older than", $model.videoAge, .oldVideos)
                 ageRow("WhatsApp older than", $model.whatsappAge, .whatsapp)
                 ageRow("Screenshots older than", $model.screenshotAge, .screenshots)
                 ageRow("Screen recordings older than", $model.recordingAge, .screenRecordings)
             }
         }
-        .onChange(of: [model.videoAge, model.whatsappAge, model.screenshotAge, model.recordingAge]) { model.refresh() }
+        .onChange(of: model.ages) { model.refresh() }
     }
 
     /// "frees 21.3 GB · 1.6 GB today": all of it once backed up, and what can go now.
@@ -339,7 +346,7 @@ struct AgesCard: View {
         GridRow {
             Text(label)
             Picker("", selection: value) {
-                ForEach(["30d", "60d", "90d", "6m", "1y", "18m", "2y", "3y"], id: \.self) { Text(Age($0)?.words ?? $0).tag($0) }
+                ForEach(KeepCard.ages, id: \.self) { Text($0 == "off" ? "never" : Age($0)?.words ?? $0).tag($0) }
             }
             .labelsHidden().frame(width: 140)
             effect(kind)

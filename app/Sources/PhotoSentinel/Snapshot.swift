@@ -29,6 +29,7 @@ enum Snapshot {
                 page(tab, model)
             }
             .padding(16)
+            .disclosureGroupStyle(.expander)
             .frame(width: 1040)
             .background(Color(light: "#f5f5f7", dark: "#1c1c1f"))
             let r = ImageRenderer(content: view)

@@ -40,7 +40,7 @@ struct FilterBuilder: View {
                 Divider()
                 preview
                 HStack(spacing: 8) {
-                    CapsuleButton(title: "Remove from iPhone…", symbol: "trash.fill", color: Tab.cleanUp.color) {
+                    CapsuleButton(title: "Back up & remove from iPhone…", symbol: "iphone.and.arrow.forward", color: Tab.cleanUp.color) {
                         model.removing = Recipe(custom: model.draft)
                     }
                     if !model.draft.backups.isEmpty && (stats?.notBackedUp.count ?? 0) > 0 {
@@ -99,13 +99,13 @@ struct FilterBuilder: View {
     /// Only photos can be suspected proxies; videos always score zero.
     private var lowRes: some View {
         HStack(spacing: 6) {
-            Text("Low-res check").frame(width: 92, alignment: .leading)
+            Text("Low-res check").frame(width: 100, alignment: .leading)
             Picker("", selection: f.proxyTolerance) {
                 Text("Strict").tag(0.0)
                 Text("Relaxed").tag(0.5)
                 Text("Off").tag(1.0)
             }
-            .labelsHidden().frame(width: 130)
+            .labelsHidden().fixedSize().frame(width: 170, alignment: .leading)
             .help("Photos that are small for their size might be low-res stand-ins whose original is only in iCloud. Strict keeps every one on the phone; Relaxed keeps the clearest cases; Off keeps none. Screenshots are often flagged without being stand-ins.")
         }
         .font(.callout)
@@ -113,12 +113,13 @@ struct FilterBuilder: View {
 
     private func picker<T: Hashable>(_ label: String, _ value: Binding<T?>, _ options: [(T, String)]) -> some View {
         HStack(spacing: 6) {
-            Text(label).frame(width: 92, alignment: .leading)
+            Text(label).frame(width: 100, alignment: .leading)
             Picker("", selection: value) {
                 Text("Any").tag(T?.none)
                 ForEach(options, id: \.0) { Text($0.1).tag(T?.some($0.0)) }
             }
-            .labelsHidden().frame(width: 170)
+            // A menu picker keeps its own width and centres in a wider frame: pin it left so the column lines up.
+            .labelsHidden().fixedSize().frame(width: 170, alignment: .leading)
         }
         .font(.callout)
     }

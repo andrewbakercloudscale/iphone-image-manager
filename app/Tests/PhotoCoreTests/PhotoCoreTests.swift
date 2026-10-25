@@ -13,6 +13,13 @@ final class AgeTests: XCTestCase {
         XCTAssertEqual(Age(1, "y").words, "1 year")
     }
 
+    func testTakenBetweenSaysTheAgeRange() {
+        let now = ISO8601DateFormatter().date(from: "2026-10-25T12:00:00Z")!
+        XCTAssertEqual(Fmt.takenBetween("2023-09-01T00:00:00Z", "2026-09-20T08:00:00Z", now: now), "taken between 5 weeks and 3 years ago")
+        XCTAssertEqual(Fmt.takenBetween("2026-10-20T00:00:00.123Z", "2026-10-20T00:00:00Z", now: now), "taken 5 days ago")
+        XCTAssertNil(Fmt.takenBetween("", "2026-10-20T00:00:00Z", now: now))
+    }
+
     func testCutoffIsComparableWithLedgerTimestamps() {
         let now = ISO8601DateFormatter().date(from: "2026-10-25T00:00:00Z")!
         XCTAssertEqual(Age(1, "y").cutoff(now: now), "2025-10-25T00:00:00Z")

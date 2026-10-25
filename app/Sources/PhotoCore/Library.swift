@@ -103,7 +103,7 @@ public struct Age: Hashable, Sendable, CustomStringConvertible {
 /// A clean-up the app offers: a preset, or a filter the owner built. Every one is a
 /// `Filter`, which maps onto a selector the CLI already understands.
 public struct Recipe: Identifiable, Hashable, Sendable {
-    public enum Kind: String, Sendable { case oldVideos, whatsapp, screenshots, screenRecordings, largeVideos, custom }
+    public enum Kind: String, Sendable { case oldVideos, cameraPhotos, whatsapp, screenshots, screenRecordings, largeVideos, custom }
     public let kind: Kind
     public var age: Age?
     public var minBytes: Int64?
@@ -137,6 +137,7 @@ public struct Recipe: Identifiable, Hashable, Sendable {
         f.olderThan = age?.description
         switch kind {
         case .oldVideos: f.source = "camera"; f.type = "video"
+        case .cameraPhotos: f.source = "camera"; f.type = "photo"
         case .whatsapp: f.source = "whatsapp"
         case .screenshots: f.source = "screenshot"
         case .screenRecordings: f.source = "screenrecording"
@@ -148,10 +149,11 @@ public struct Recipe: Identifiable, Hashable, Sendable {
 
     public var title: String {
         switch kind {
-        case .oldVideos: "Move old videos to Drive"
-        case .whatsapp: "WhatsApp clean-up"
-        case .screenshots: "Clear old screenshots"
-        case .screenRecordings: "Screen recordings"
+        case .oldVideos: "Old camera videos"
+        case .cameraPhotos: "Old camera photos"
+        case .whatsapp: "Old WhatsApp media"
+        case .screenshots: "Old screenshots"
+        case .screenRecordings: "Old screen recordings"
         case .largeVideos: "Large videos"
         case .custom: filter.name.isEmpty ? filter.summary : filter.name
         }
@@ -160,6 +162,7 @@ public struct Recipe: Identifiable, Hashable, Sendable {
     public var detail: String {
         switch kind {
         case .oldVideos: "Camera videos older than \(age?.words ?? "any age")."
+        case .cameraPhotos: "Camera photos older than \(age?.words ?? "any age"). Keeps favourites and your own albums."
         case .whatsapp: "Older than \(age?.words ?? "any age"). Keeps favourites and your own albums."
         case .screenshots: "Screenshots older than \(age?.words ?? "any age")."
         case .screenRecordings: "Older than \(age?.words ?? "any age")."
@@ -171,6 +174,7 @@ public struct Recipe: Identifiable, Hashable, Sendable {
     public var symbol: String {
         switch kind {
         case .oldVideos: "video.fill"
+        case .cameraPhotos: "photo.fill"
         case .whatsapp: "bubble.left.and.bubble.right.fill"
         case .screenshots: "iphone"
         case .screenRecordings: "record.circle"
@@ -204,6 +208,14 @@ public struct ChannelStats: Identifiable, Hashable, Sendable {
     public var photos = Tally()
     public var videos = Tally()
     public var verified = Tally()
+    /// When the oldest and newest items with no Drive copy were taken (ledger timestamps).
+    public var notBackedUpOldest: String?
+    public var notBackedUpNewest: String?
+    /// "taken between 3 weeks and 2 years ago", for what has no Drive copy.
+    public var notBackedUpAge: String? {
+        guard let o = notBackedUpOldest, let n = notBackedUpNewest else { return nil }
+        return Fmt.takenBetween(o, n)
+    }
     public var id: String { channel.rawValue }
     public var total: Tally { Tally(count: photos.count + videos.count, bytes: photos.bytes + videos.bytes) }
     /// Share of bytes on the phone already verified in Drive.
@@ -340,6 +352,15 @@ public enum Ledger {
             s.verified = add(s.verified, Tally(count: r.int(4), bytes: Int64(r.int(5))))
         }
         s.channels.sort { $0.total.bytes > $1.total.bytes }
+        for r in try db.rows("""
+            SELECT \(Channel.sql) ch, MIN(a.created_at_device), MAX(a.created_at_device)
+            FROM assets a WHERE \(onPhone) AND NOT \(verified) AND a.created_at_device IS NOT NULL GROUP BY ch
+            """) {
+            if let i = s.channels.firstIndex(where: { $0.channel.rawValue == r.str(0) }) {
+                s.channels[i].notBackedUpOldest = r.str(1)
+                s.channels[i].notBackedUpNewest = r.str(2)
+            }
+        }
 
         // The per-asset rules of remove.py's `plan`, so the estimate matches the plan. Not
         // mirrored: user albums and incomplete Live Photo or burst groups, which the plan
@@ -461,6 +482,34 @@ public enum Ledger {
 }
 
 public enum Fmt {
+    /// "between 3 weeks and 2 years ago", from two ledger timestamps.
+    public static func takenBetween(_ oldest: String, _ newest: String, now: Date = Date()) -> String? {
+        guard let o = date(oldest), let n = date(newest) else { return nil }
+        let a = ago(n, now: now), b = ago(o, now: now)
+        return a == b ? "taken \(a) ago" : "taken between \(a) and \(b) ago"
+    }
+
+    /// The age in the largest whole unit: "today", "5 days", "3 weeks", "4 months", "2 years".
+    public static func ago(_ d: Date, now: Date = Date()) -> String {
+        let days = Int(now.timeIntervalSince(d) / 86_400)
+        func n(_ v: Int, _ u: String) -> String { "\(v) \(u)\(v == 1 ? "" : "s")" }
+        if days < 1 { return "less than a day" }
+        if days < 14 { return n(days, "day") }
+        if days < 60 { return n(days / 7, "week") }
+        if days < 730 { return n(days / 30, "month") }
+        return n(days / 365, "year")
+    }
+
+    /// Ledger timestamps are ISO 8601, with or without fractional seconds or a zone.
+    static func date(_ s: String) -> Date? {
+        let f = ISO8601DateFormatter()
+        if let d = f.date(from: s) { return d }
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: s) { return d }
+        f.formatOptions = [.withFullDate]
+        return f.date(from: String(s.prefix(10)))
+    }
+
     public static func bytes(_ b: Int64) -> String {
         let gb = Double(b) / 1e9
         if gb >= 100 { return "\(Int(gb.rounded())) GB" }

@@ -28,6 +28,8 @@ final class Model: ObservableObject {
     /// Clean-ups the owner built and saved.
     @Published var saved: [Filter] = [] { didSet { saveFilters() } }
 
+    /// "off" keeps every item of that type on the phone.
+    @AppStorage("age.cameraPhotos") var photoAge = "off"
     @AppStorage("age.oldVideos") var videoAge = "1y"
     @AppStorage("age.whatsapp") var whatsappAge = "18m"
     @AppStorage("age.screenshots") var screenshotAge = "1y"
@@ -39,14 +41,26 @@ final class Model: ObservableObject {
     private var timers: [Timer] = []
 
     var recipes: [Recipe] {
-        [
-            Recipe(kind: .oldVideos, age: Age(videoAge)),
-            Recipe(kind: .whatsapp, age: Age(whatsappAge)),
-            Recipe(kind: .screenshots, age: Age(screenshotAge)),
-            Recipe(kind: .screenRecordings, age: Age(recordingAge)),
-            Recipe(kind: .largeVideos, minBytes: 500 * Filter.mb),
-        ] + saved.map { Recipe(custom: $0) }
+        // A type set to "off" has no clean-up at all: an age-less recipe would select everything.
+        let aged: [Recipe] = [
+            (Recipe.Kind.cameraPhotos, photoAge), (.oldVideos, videoAge), (.whatsapp, whatsappAge),
+            (.screenshots, screenshotAge), (.screenRecordings, recordingAge),
+        ].compactMap { kind, text in Age(text).map { Recipe(kind: kind, age: $0) } }
+        return aged + [Recipe(kind: .largeVideos, minBytes: 500 * Filter.mb)] + saved.map { Recipe(custom: $0) }
     }
+
+    /// The age setting behind each kept-on-phone type, for the Library and onboarding.
+    func ageBinding(_ kind: Recipe.Kind) -> Binding<String> {
+        switch kind {
+        case .cameraPhotos: $photoAge
+        case .oldVideos: $videoAge
+        case .whatsapp: $whatsappAge
+        case .screenshots: $screenshotAge
+        default: $recordingAge
+        }
+    }
+
+    var ages: [String] { [photoAge, videoAge, whatsappAge, screenshotAge, recordingAge] }
 
     var engine: CLIEngine { CLIEngine(repo: repoPath, ledgerPath: ledgerPath, recipes: recipes) }
 

@@ -10,10 +10,17 @@ struct PhotoSentinelApp: App {
     var body: some Scene {
         Window("Photo Sentinel", id: "main") {
             ContentView(model: model)
+                .disclosureGroupStyle(.expander)
                 .frame(minWidth: 880, minHeight: 640)
                 .onAppear { model.start() }
         }
         .defaultSize(width: 1040, height: 860)
+        .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About Photo Sentinel") { AboutWindow.show(model) }
+                Button("Share with a Friend…") { ShareApp.show() }
+            }
+        }
 
         MenuBarExtra {
             MenuView(model: model)
@@ -170,6 +177,9 @@ struct Footer: View {
             CapsuleButton(title: "Open cycle.log", symbol: "doc.text.fill", color: Tab.backup.color, style: .soft) {
                 NSWorkspace.shared.open(URL(fileURLWithPath: Jobs.logPath))
             }
+            CapsuleButton(title: "About", symbol: "info.circle.fill", color: Tab.library.color, style: .soft) { AboutWindow.show(model) }
+            CapsuleButton(title: "Share", symbol: "square.and.arrow.up", color: Tab.checkup.color, style: .soft) { ShareApp.show() }
+                .help("Share with a friend by Messages, Mail, WhatsApp, AirDrop and more")
             CapsuleButton(title: "Quit", symbol: "power", color: Theme.bad, style: .soft) { NSApp.terminate(nil) }
             Spacer()
         }
@@ -195,6 +205,8 @@ struct MenuView: View {
                     NSApp.activate(ignoringOtherApps: true)
                 }
                 Spacer()
+                Button("About") { AboutWindow.show(model) }
+                Button("Share…") { ShareApp.show() }
                 Button("Quit") { NSApp.terminate(nil) }
             }
         }
