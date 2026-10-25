@@ -28,50 +28,18 @@ struct LibraryView: View {
                         }
                     }
                 }
-                HStack(alignment: .top, spacing: 14) {
-                    Card(title: "What you could free", symbol: "sparkles", tint: Tab.cleanUp.color) {
-                        let top = Double(s.recipes.map(\.selected.bytes).max() ?? 1)
-                        VStack(spacing: 8) {
-                            ForEach(s.recipes) { r in
-                                BarRow(label: r.recipe.title, value: Double(r.selected.bytes) / max(top, 1), text: Fmt.bytes(r.selected.bytes), color: Tab.cleanUp.color)
-                            }
-                        }
-                    }
-                    Card(title: "Safe in Google Drive", symbol: "checkmark.shield.fill", tint: Theme.good) {
-                        VStack(spacing: 8) {
-                            ForEach(s.channels) { c in
-                                BarRow(label: c.channel.title, value: c.coverage, text: Fmt.pct(c.coverage), color: Theme.good)
-                            }
-                        }
+                FreeCard(model: model, library: s)
+                CoverageCard(model: model, library: s)
+                Card(title: "By year taken", symbol: "calendar", tint: Tab.library.color,
+                     trailing: AnyView(Text("click a year to clean it up").font(.callout).foregroundStyle(.secondary))) {
+                    YearChart(years: s.years) { y in
+                        model.draft = Filter(year: y)
+                        model.tab = .cleanUp
                     }
                 }
-                Card(title: "By year taken", symbol: "calendar", tint: Tab.library.color) {
-                    YearChart(years: s.years)
-                }
-                HStack(alignment: .top, spacing: 14) {
-                    Card(title: "Biggest videos", symbol: "video.fill", tint: Tab.backup.color) {
-                        VStack(spacing: 6) {
-                            ForEach(s.biggestVideos.prefix(8)) { v in
-                                HStack {
-                                    Text(v.filename).lineLimit(1)
-                                    Text(String(v.created.prefix(7))).foregroundStyle(.secondary)
-                                    Spacer()
-                                    Text(Fmt.bytes(v.bytes)).fontWeight(.semibold).monospacedDigit()
-                                    Text(v.inDrive ? "in Drive" : "phone only").foregroundStyle(v.inDrive ? Theme.good : Theme.warn).frame(width: 78, alignment: .trailing)
-                                }
-                                .font(.callout)
-                            }
-                        }
-                    }
-                    Card(title: "Apps that fill your library", symbol: "square.grid.2x2.fill", tint: Theme.good) {
-                        let top = Double(s.apps.first?.tally.bytes ?? 1)
-                        VStack(spacing: 8) {
-                            ForEach(s.apps, id: \.bundle) { a in
-                                BarRow(label: Fmt.app(a.bundle), value: Double(a.tally.bytes) / max(top, 1), text: Fmt.bytes(a.tally.bytes), color: Theme.series[2])
-                            }
-                        }
-                    }
-                }
+                PlacesCard(model: model, library: s)
+                BiggestVideosCard(model: model, library: s)
+                AppsCard(model: model, library: s)
             }
         }
     }
@@ -131,6 +99,7 @@ struct StackBar: View {
 
 struct YearChart: View {
     let years: [(year: String, bytes: Int64, count: Int)]
+    var pick: ((Int) -> Void)?
 
     var body: some View {
         let top = Double(years.map(\.bytes).max() ?? 1)
@@ -145,7 +114,9 @@ struct YearChart: View {
                     Text(y.year).font(.caption).monospacedDigit()
                 }
                 .frame(maxWidth: .infinity)
-                .help("\(y.year): \(Fmt.count(y.count)) items, \(Fmt.bytes(y.bytes))")
+                .contentShape(Rectangle())
+                .onTapGesture { if let n = Int(y.year) { pick?(n) } }
+                .help("\(y.year): \(Fmt.count(y.count)) items, \(Fmt.bytes(y.bytes)). Click to back up or remove them.")
             }
         }
         .frame(height: 190, alignment: .bottom)
@@ -263,14 +234,7 @@ struct BinView: View {
                     Kpi(label: "REMOVED FROM IPHONE", value: Fmt.count(s.removed.total.count), note: Fmt.bytes(s.removed.total.bytes), color: Tab.bin.color)
                     Kpi(label: "STILL UNDOABLE", value: Fmt.count(s.removed.recent.count), note: "removed in the last 30 days", color: Theme.good)
                 }
-                Card(title: "How to get something back", symbol: "arrow.uturn.backward.circle.fill", tint: Tab.bin.color) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("For 30 days after removal: Photos on the iPhone › Albums › Recently Deleted › Recover.")
-                        Text("After that: every removed item is in Google Drive. Removal only ever happened after Drive's copy was checked.")
-                        if let last = s.removed.lastAt { Text("Last removal: \(last.prefix(16).replacingOccurrences(of: "T", with: " "))").foregroundStyle(.secondary) }
-                    }
-                    .font(.callout)
-                }
+                RecoverCard(model: model, library: s)
                 if let p = model.allProof, p.total > 0 {
                     Card(title: "Proof every removed item is in Google Drive", symbol: "checkmark.seal.fill", tint: Theme.good) {
                         VStack(alignment: .leading, spacing: 6) {

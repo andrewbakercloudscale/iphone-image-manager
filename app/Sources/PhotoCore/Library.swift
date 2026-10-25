@@ -256,6 +256,12 @@ public struct LibrarySnapshot: Sendable {
     public var apps: [(bundle: String, tally: Tally)] = []
     public var removed = Removal()
     public var unfinishedOperations: [Operation] = []
+    /// On-phone items by where they were taken, biggest first. Empty until `places` has run.
+    public var places: [PlaceStats] = []
+    /// On the phone with no recorded place: no GPS, or `places` has not seen them yet.
+    public var unplaced = Tally()
+    /// When `places` last wrote the ledger, ISO; nil if never.
+    public var placesAt: String?
     public var readAt = Date()
 
     public init() {}
@@ -268,6 +274,24 @@ public struct LibrarySnapshot: Sendable {
         guard !recent.isEmpty else { return 0 }
         return recent.reduce(0) { $0 + $1.bytes } / Int64(recent.count) * 7 / 30
     }
+}
+
+/// One country, with its biggest cities.
+public struct PlaceStats: Identifiable, Hashable, Sendable {
+    public let country: String
+    public var total = Tally()
+    public var verified = Tally()
+    public var cities: [CityStats] = []
+    public var id: String { country }
+    public var coverage: Double { total.bytes == 0 ? 1 : Double(verified.bytes) / Double(total.bytes) }
+}
+
+public struct CityStats: Identifiable, Hashable, Sendable {
+    public let city: String
+    public let total: Tally
+    public let verified: Tally
+    public var id: String { city }
+    public var coverage: Double { total.bytes == 0 ? 1 : Double(verified.bytes) / Double(total.bytes) }
 }
 
 /// A journal entry that started and never finished.
@@ -352,6 +376,9 @@ public enum Ledger {
         s.favourites = safety.int(1)
         s.live = safety.int(2)
 
+        // A ledger from before places were added has no location_id: it simply has no places yet.
+        try? readPlaces(db, into: &s)
+
         s.apps = try db.rows("""
             SELECT a.source_bundle_id, COUNT(*), COALESCE(SUM(a.size_bytes), 0) FROM assets a
             WHERE \(onPhone) AND COALESCE(a.source_bundle_id, '') <> '' AND a.source_bundle_id <> 'com.apple.camera'
@@ -373,6 +400,37 @@ public enum Ledger {
             WHERE status = 'STARTED' AND finished_at IS NULL ORDER BY started_at DESC
             """).map { Operation(id: $0.int(0), operation: $0.str(1), command: $0.str(2), startedAt: $0.str(3)) }
         return s
+    }
+
+    /// By country, then city, from `locations` (written by `iphone-image places`).
+    static func readPlaces(_ db: SQLiteReader, into s: inout LibrarySnapshot) throws {
+        let verified = "a.cloud_status = 'CLOUD_VERIFIED'"
+        let cols = """
+            COUNT(*), COALESCE(SUM(a.size_bytes), 0), SUM(\(verified)),
+            COALESCE(SUM(CASE WHEN \(verified) THEN a.size_bytes END), 0)
+            """
+        let from = "FROM assets a LEFT JOIN locations l ON l.id = a.location_id WHERE a.present_on_phone = 1"
+        func tallies(_ r: [Any?], _ i: Int) -> (Tally, Tally) {
+            (Tally(count: r.int(i), bytes: Int64(r.int(i + 1))), Tally(count: r.int(i + 2), bytes: Int64(r.int(i + 3))))
+        }
+        var byCountry: [String: PlaceStats] = [:]
+        for r in try db.rows("SELECT l.country, \(cols) \(from) AND l.country IS NOT NULL GROUP BY l.country") {
+            let (t, v) = tallies(r, 1)
+            byCountry[r.str(0)] = PlaceStats(country: r.str(0), total: t, verified: v)
+        }
+        for r in try db.rows("SELECT l.country, l.city, \(cols) \(from) AND l.city IS NOT NULL GROUP BY l.country, l.city") {
+            let (t, v) = tallies(r, 2)
+            byCountry[r.str(0)]?.cities.append(CityStats(city: r.str(1), total: t, verified: v))
+        }
+        s.places = byCountry.values.map { p in
+            var p = p
+            p.cities.sort { $0.total.bytes > $1.total.bytes }
+            return p
+        }
+        .sorted { $0.total.bytes > $1.total.bytes }
+        let u = try db.rows("SELECT \(cols) \(from) AND l.id IS NULL")[0]
+        s.unplaced = tallies(u, 0).0
+        s.placesAt = try db.rows("SELECT MAX(looked_up_at) FROM locations")[0][0] as? String
     }
 
     /// What one recipe or filter selects on the phone, split the way removal would split it.

@@ -60,9 +60,9 @@ public enum Detector {
         let removals = s.unfinishedOperations.filter(\.needsPerson)
         if !removals.isEmpty {
             out.append(Finding(id: "journal.remove", kind: .job, symbol: "hand.raised.fill",
-                               title: "\(removals.count) removal\(removals.count == 1 ? "" : "s") never finished",
-                               detail: "Usually the Delete dialog was not clicked, and nothing was removed. It is re-planned and Drive re-checked before it runs again.",
-                               actionTitle: "Review", action: .openTab("Activity"), bytes: .max - 3))
+                               title: "\(removals.count) removal\(removals.count == 1 ? "" : "s") never confirmed",
+                               detail: "The app stopped before Photos said what it deleted. The latest scan of the phone settles it: what is gone is recorded as removed, the rest can be planned again.",
+                               actionTitle: "Finish it", action: .openTab("Activity"), bytes: .max - 3))
         }
 
         for r in s.recipes where r.recipe.kind != .largeVideos {

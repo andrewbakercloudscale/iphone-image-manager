@@ -29,6 +29,10 @@ def selector_options(func: F) -> F:
         click.option("--min-size", help="Smallest to include, e.g. 10MB."),
         click.option("--max-size", help="Largest to include, e.g. 500KB."),
         click.option(
+            "--country", help="Where it was taken, e.g. 'South Africa'. Run `places` first."
+        ),
+        click.option("--city", help="Where it was taken, e.g. 'Cape Town'. Run `places` first."),
+        click.option(
             "--order",
             default="oldest",
             show_default=True,
@@ -48,6 +52,13 @@ def selector_options(func: F) -> F:
             "backed up like anything else by default; what they can never be "
             "is removed from the phone.",
         ),
+        click.option(
+            "--id",
+            "ids",
+            type=int,
+            multiple=True,
+            help="A ledger asset id. Repeat for several. Narrows like the rest.",
+        ),
         click.option("--limit", type=int, help="Stop after this many assets."),
     ]
     for option in reversed(options):
@@ -65,6 +76,9 @@ def build_selector(**kwargs: Any) -> Selector:
         year=kwargs.get("year"),
         min_size=kwargs.get("min_size"),
         max_size=kwargs.get("max_size"),
+        country=kwargs.get("country"),
+        city=kwargs.get("city"),
+        ids=tuple(kwargs.get("ids") or ()),
         order=kwargs.get("order") or "oldest",
         include_favourites=not kwargs.get("no_favourites"),
         include_proxy_suspects=not kwargs.get("no_proxy_suspects"),

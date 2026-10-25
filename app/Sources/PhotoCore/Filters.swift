@@ -18,11 +18,19 @@ public struct Filter: Codable, Hashable, Sendable {
     public var year: Int?
     public var minMB: Int?
     public var maxMB: Int?
+    /// Where it was taken, as `iphone-image places` recorded it.
+    public var country: String?
+    public var city: String?
+    /// Items picked one by one (`--id`), e.g. from Biggest videos.
+    public var ids: [Int] = []
     /// How much proxy suspicion a removal tolerates, 0 to 1 (`--proxy-threshold`).
     public var proxyTolerance: Double = 0
 
     public init(name: String = "", source: String? = nil, type: String? = nil, olderThan: String? = nil,
-                newerThan: String? = nil, year: Int? = nil, minMB: Int? = nil, maxMB: Int? = nil, proxyTolerance: Double = 0) {
+                newerThan: String? = nil, year: Int? = nil, minMB: Int? = nil, maxMB: Int? = nil, country: String? = nil, city: String? = nil, ids: [Int] = [], proxyTolerance: Double = 0) {
+        self.ids = ids
+        self.country = country
+        self.city = city
         self.name = name
         self.source = source
         self.type = type
@@ -48,6 +56,9 @@ public struct Filter: Codable, Hashable, Sendable {
         if let year { a += ["--year", String(year)] }
         if let minMB { a += ["--min-size", "\(minMB)MB"] }
         if let maxMB { a += ["--max-size", "\(maxMB)MB"] }
+        if let country { a += ["--country", country] }
+        if let city { a += ["--city", city] }
+        for id in ids { a += ["--id", String(id)] }
         return a
     }
 
@@ -59,7 +70,7 @@ public struct Filter: Codable, Hashable, Sendable {
     /// video, and an age; size and year it ignores, so it backs up a little more than the
     /// filter, which costs only time. No source, no job: cycle.sh would read it as camera.
     public var backups: [(type: String, source: String, older: String?)] {
-        guard let source else { return [] }
+        guard let source, ids.isEmpty else { return [] }
         let types: [String]
         switch type {
         case "video": types = ["video"]
@@ -110,6 +121,13 @@ public struct Filter: Codable, Hashable, Sendable {
             c.append("a.size_bytes <= ?")
             args.append(Int(Int64(maxMB) * Self.mb))
         }
+        if !ids.isEmpty { c.append("a.id IN (\(ids.map(String.init).joined(separator: ",")))") }
+        for (column, value) in [("country", country), ("city", city)] {
+            if let value {
+                c.append("a.location_id IN (SELECT id FROM locations WHERE \(column) = ? COLLATE NOCASE)")
+                args.append(value)
+            }
+        }
         return (c.isEmpty ? "1 = 1" : c.joined(separator: " AND "), args)
     }
 
@@ -126,12 +144,14 @@ public struct Filter: Codable, Hashable, Sendable {
             default: "everything"
             }
         }()
+        if !ids.isEmpty { return ids.count == 1 ? "1 picked item" : "\(ids.count) picked items" }
         var parts = [source.map { "\(Filter.sourceTitle($0)) \(what)" } ?? what.prefix(1).uppercased() + what.dropFirst()]
         if let minMB { parts.append("over \(Filter.size(minMB))") }
         if let maxMB { parts.append("under \(Filter.size(maxMB))") }
         if let olderThan { parts.append("older than \(Age(olderThan)?.words ?? olderThan)") }
         if let newerThan { parts.append("newer than \(Age(newerThan)?.words ?? newerThan)") }
         if let year { parts.append("from \(year)") }
+        if let place = city ?? country { parts.append("taken in \(place)") }
         return parts.joined(separator: " · ")
     }
 

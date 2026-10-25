@@ -29,6 +29,11 @@ struct FilterBuilder: View {
                     GridRow {
                         picker("Bigger than", f.minMB, Self.sizes)
                         picker("Smaller than", f.maxMB, Self.sizes)
+                        picker("Country", f.country, countries)
+                    }
+                    GridRow {
+                        picker("City", f.city, cities)
+                        Color.clear.frame(height: 1)
                         Color.clear.frame(height: 1)
                     }
                 }
@@ -123,6 +128,17 @@ struct FilterBuilder: View {
         let known: Set<String> = ["com.apple.camera", "net.whatsapp.WhatsApp", "com.apple.springboard", "com.apple.replayd"]
         let apps = (model.library?.apps ?? []).filter { !known.contains($0.bundle) }.map { ($0.bundle, Fmt.app($0.bundle)) }
         return channels + apps
+    }
+
+    private var countries: [(String, String)] {
+        (model.library?.places ?? []).map { ($0.country, $0.country) }
+    }
+
+    /// The chosen country's cities, or every city when no country is chosen.
+    private var cities: [(String, String)] {
+        let places = (model.library?.places ?? []).filter { model.draft.country == nil || $0.country == model.draft.country }
+        var seen = Set<String>()
+        return places.flatMap(\.cities).filter { seen.insert($0.city).inserted }.prefix(60).map { ($0.city, $0.city) }
     }
 
     private var years: [(Int, String)] {

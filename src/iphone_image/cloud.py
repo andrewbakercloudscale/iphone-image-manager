@@ -535,6 +535,43 @@ class RcloneProvider:
         finally:
             Path(listing).unlink(missing_ok=True)
 
+    def download(self, destination: str, relatives: list[str], to: Path) -> None:
+        """Copy files from the remote into `to`, keeping their relative paths.
+
+        Reads only: the remote is never changed. Used to bring back something
+        removed from the phone after Recently Deleted has emptied.
+        """
+        if not relatives:
+            return
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
+            handle.write("\n".join(relatives))
+            listing = handle.name
+        try:
+            self._run(
+                [
+                    "copy",
+                    f"{self.remote}:{destination}",
+                    str(to),
+                    "--files-from-raw",
+                    listing,
+                    "--transfers",
+                    str(self.transfers),
+                    "--retries",
+                    "3",
+                    "--stats",
+                    self.stats_interval,
+                    "--stats-one-line",
+                    "--stats-log-level",
+                    "NOTICE",
+                    *self._pacing(),
+                ],
+                timeout=self.batch_timeout,
+                stall_timeout=self.stall_timeout,
+                no_progress_timeout=self.no_progress_timeout,
+            )
+        finally:
+            Path(listing).unlink(missing_ok=True)
+
     def _pacing(self) -> list[str]:
         return ["--tpslimit", str(self.tps_limit)] if self.tps_limit else []
 

@@ -139,10 +139,18 @@ struct Header: View {
 
     @ViewBuilder private var jobPill: some View {
         if let j = model.activeJob {
-            switch j.state {
-            case .paused: Pill(text: "\(j.title): paused", symbol: "pause.circle.fill", color: Theme.warn)
-            default: Pill(text: "\(j.title)" + (j.progress.map { " · \(Fmt.pct($0))" } ?? ""), symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color)
+            // Says what it is doing, not just a number: "Backing up WhatsApp photos · 32% done · 21,880 left".
+            Button { model.tab = .activity } label: {
+                switch j.state {
+                case .paused: Pill(text: "Backing up \(j.title): paused", symbol: "pause.circle.fill", color: Theme.warn)
+                default:
+                    Pill(text: "Backing up \(j.title)" + (j.progress.map { " · \(Fmt.pct($0)) done" } ?? "")
+                         + (j.left.map { " · \(Fmt.count($0)) left" } ?? ""),
+                         symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color)
+                }
             }
+            .buttonStyle(.plain)
+            .help("Copying from Photos to Google Drive. Percent of this job's items done since it started. Click for details.")
         } else {
             Pill(text: "No job running", symbol: "moon.zzz.fill", color: .secondary)
         }

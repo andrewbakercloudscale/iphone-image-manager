@@ -164,6 +164,13 @@ class Selector:
     year: int | None = None
     min_size: str | int | None = None
     max_size: str | int | None = None
+    #: Where it was taken, as `locate` recorded it from Photos. Matched exactly,
+    #: ignoring case. An asset with no recorded place never matches either.
+    country: str | None = None
+    city: str | None = None
+    #: Ledger asset ids, for acting on items picked one by one in the Mac app.
+    #: Narrows like every other field: an id still has to pass the rest.
+    ids: tuple[int, ...] = ()
     order: str = "oldest"
     include_favourites: bool = True
     #: Suspected iCloud proxies are *backed up* like anything else: a proxy is
@@ -250,6 +257,17 @@ class Selector:
         if self.year is not None:
             clauses.append("a.created_at_device LIKE ?")
             params.append(f"{self.year}-%")
+
+        if self.ids:
+            clauses.append(f"a.id IN ({','.join('?' for _ in self.ids)})")
+            params.extend(int(i) for i in self.ids)
+
+        for column, value in (("country", self.country), ("city", self.city)):
+            if value:
+                clauses.append(
+                    f"a.location_id IN (SELECT id FROM locations WHERE {column} = ? COLLATE NOCASE)"
+                )
+                params.append(value.strip())
 
         if (size := parse_size(self.min_size)) is not None:
             clauses.append("a.size_bytes >= ?")

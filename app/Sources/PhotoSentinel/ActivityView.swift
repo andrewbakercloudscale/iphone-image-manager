@@ -46,9 +46,16 @@ struct ActivityView: View {
                                 Text(op.plain).font(.body.weight(.medium))
                                 Text(local(op.startedAt)).foregroundStyle(.secondary).monospacedDigit()
                                 Spacer()
-                                Text(op.needsPerson ? "Needs you: re-plan and re-check Drive before it runs again"
-                                     : inProgress(op, ops) ? "In progress now" : "Safe: the next run picks it up")
-                                    .font(.callout).foregroundStyle(.secondary)
+                                if op.needsPerson {
+                                    Text("Photos may have deleted them before the app heard back").font(.callout).foregroundStyle(.secondary)
+                                    CapsuleButton(title: "Finish from latest scan", symbol: "checkmark.circle.fill", color: Tab.cleanUp.color) {
+                                        model.settleRemovals()
+                                    }
+                                    .help("Checks the newest scan of the phone: items it no longer saw were removed and are recorded as removed; items still there are released to be planned again. Nothing on the phone is touched.")
+                                } else {
+                                    Text(inProgress(op, ops) ? "In progress now" : "Safe: the next run picks it up")
+                                        .font(.callout).foregroundStyle(.secondary)
+                                }
                             }
                         }
                         Text("A removal never resumes by itself. Copy, upload and check steps are safe to repeat: anything already verified in Drive is skipped.")
@@ -170,6 +177,17 @@ struct TaskRow: View {
         case .plan:
             guard let p = status.decode(RemovalPlan.self) else { return "" }
             return "\(Fmt.count(p.eligible)) can go (\(Fmt.bytes(p.eligibleBytes))), \(Fmt.count(p.blocked)) stay."
+        case .settle:
+            guard let r = status.decode(SettleReport.self) else { return "" }
+            return "\(Fmt.count(r.confirmedGone)) confirmed removed (\(Fmt.bytes(r.bytesGone))), \(Fmt.count(r.stillOnPhone)) still on the phone."
+        case .recover:
+            guard let r = status.decode(RecoverReport.self) else { return "" }
+            return "\(Fmt.count(r.verified)) of \(Fmt.count(r.files.count)) downloaded and matched their fingerprint."
+        case .backup:
+            return "Copied off the phone, uploaded, and checked in Google Drive."
+        case .places:
+            guard let p = status.decode(PlacesReport.self) else { return "" }
+            return p.degraded ?? "\(Fmt.count(p.located)) items placed in \(Fmt.count(p.places)) places."
         case .remove:
             guard let p = status.decode(RemovalPlan.self) else { return "" }
             return "Removed \(Fmt.count(p.removed ?? 0)), \(Fmt.bytes(p.bytesRemoved ?? 0))."

@@ -23,6 +23,7 @@ import plistlib
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from ..logs import get_logger
 from .library_db import LibraryDbError, _snapshot
@@ -138,3 +139,78 @@ def read_places(library: Path) -> Places:
 
     log.info("read a place name for %d of %d assets", len(by_uuid), total)
     return Places(by_uuid=by_uuid, total=total)
+
+
+@dataclass(frozen=True)
+class Address:
+    """The parts of an address the archive and the Mac app use."""
+
+    country: str | None
+    region: str | None
+    city: str | None
+    suburb: str | None
+
+
+def _address_from_blob(blob: bytes) -> Address | None:
+    """Decode the `CNPostalAddress` inside Photos' archived reverse-geocode.
+
+    Unlike `_city_from_address`, which reads a position in the one-line form,
+    this follows the archive's object graph to the named fields. Position is
+    wrong whenever a part is missing: an address with no postcode put the street
+    where the city should be ("11 Steenbrasbaai Street" as a city).
+    """
+    try:
+        objects = plistlib.loads(blob).get("$objects", [])
+    except Exception:  # an undocumented archive format; never fatal
+        return None
+    if not isinstance(objects, list):
+        return None
+
+    def text(ref: Any) -> str | None:
+        if not isinstance(ref, plistlib.UID) or ref.data >= len(objects):
+            return None
+        value = objects[ref.data]
+        return (
+            tidy(value) if isinstance(value, str) and value != "$null" and value.strip() else None
+        )
+
+    for obj in objects:
+        if isinstance(obj, dict) and "_city" in obj and "_country" in obj:
+            found = Address(
+                country=text(obj.get("_country")),
+                region=text(obj.get("_state")),
+                city=text(obj.get("_city")),
+                suburb=text(obj.get("_subLocality")),
+            )
+            return found if found.country or found.city else None
+    return None
+
+
+def read_addresses(library: Path) -> tuple[dict[str, Address], str | None]:
+    """Address per asset UUID, as Photos geocoded it, and why not if it could not.
+
+    Only assets Photos has reverse-geocoded have one: those with GPS, which on a
+    real library was 5,585 of 76,031. WhatsApp images and screenshots carry none.
+    """
+    try:
+        snapshot = _snapshot(library)
+    except LibraryDbError as exc:
+        return {}, str(exc)
+    found: dict[str, Address] = {}
+    try:
+        conn = sqlite3.connect(f"file:{snapshot}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            for row in conn.execute(_ADDRESS_SQL):
+                address = _address_from_blob(row["address"])
+                if address:
+                    found[row["uuid"]] = address
+        except sqlite3.OperationalError as exc:
+            return {}, f"the Photos schema does not match what this build expects ({exc})"
+        finally:
+            conn.close()
+    finally:
+        import shutil
+
+        shutil.rmtree(snapshot.parent, ignore_errors=True)
+    return found, None

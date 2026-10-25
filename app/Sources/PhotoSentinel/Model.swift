@@ -91,7 +91,7 @@ final class Model: ObservableObject {
                 self.allProof = proof
                 self.jobs = jobs
                 switch result {
-                case .success(let s): self.library = s; self.error = nil
+                case .success(let s): self.library = s; self.error = nil; self.placesIfStale()
                 case .failure(let e): self.error = "Could not read the ledger: \(e)"
                 }
             }
@@ -115,7 +115,10 @@ final class Model: ObservableObject {
         let before = Set(tasks.filter(\.running).map(\.task.id))
         tasks = TaskStore.all()
         // Something just finished: the ledger has moved.
-        if tasks.contains(where: { before.contains($0.task.id) && !$0.running }) { refresh() }
+        if tasks.contains(where: { before.contains($0.task.id) && !$0.running }) {
+            refresh()
+            pumpQueue()
+        }
     }
 
     func latest(_ kind: CLITask.Kind, recipe: Recipe? = nil) -> TaskStatus? {
@@ -128,6 +131,32 @@ final class Model: ObservableObject {
         launch(.audit, recipe: nil, title: "Google Drive check", args: ["audit"])
     }
 
+    /// Reads where each item was taken from Photos into the ledger. About 10 seconds;
+    /// touches no file, phone or cloud.
+    func runPlaces(quiet: Bool = false) {
+        launch(.places, recipe: nil, title: "Look up places", args: ["places"], quiet: quiet)
+    }
+
+    /// Once a day, so new photos get their place without anyone asking.
+    private var placesChecked = false
+    private func placesIfStale() {
+        guard !placesChecked, let s = library else { return }
+        placesChecked = true
+        let stale = s.placesAt.flatMap { ISO8601DateFormatter().date(from: $0) }.map { Date().timeIntervalSince($0) > 86_400 } ?? true
+        if stale { runPlaces(quiet: true) }
+    }
+
+    /// Records the outcome of removals a crashed run left unconfirmed, from the newest scan.
+    func settleRemovals() {
+        launch(.settle, recipe: nil, title: "Finish unconfirmed removals", args: ["settle", "--apply"])
+    }
+
+    /// Downloads removed items back from Drive into a new folder in Downloads, hash-checked.
+    func recover(_ ids: [Int]) {
+        launch(.recover, recipe: nil, title: "Recover \(ids.count) item\(ids.count == 1 ? "" : "s") from Drive",
+               args: ["recover"] + ids.flatMap { ["--id", String($0)] })
+    }
+
     func plan(_ r: Recipe) {
         launch(.plan, recipe: r, title: "Plan: \(r.title)", args: ["remove-from-iphone"] + r.removalArgs)
     }
@@ -137,9 +166,12 @@ final class Model: ObservableObject {
                args: ["remove-from-iphone"] + r.removalArgs + ["--apply", "--confirm", phrase])
     }
 
-    private func launch(_ kind: CLITask.Kind, recipe: Recipe?, title: String, args: [String]) {
+    private func launch(_ kind: CLITask.Kind, recipe: Recipe?, title: String, args: [String], quiet: Bool = false) {
         // One CLI task at a time: two scans or a scan beside a removal would race.
-        if let busy = runningTask { notice = "\(busy.task.title) is still running. Try again when it ends."; return }
+        if let busy = runningTask {
+            if !quiet { notice = "\(busy.task.title) is still running. Try again when it ends." }
+            return
+        }
         do {
             _ = try TaskStore.start(kind: kind, recipe: recipe?.id, title: title, args: args, repo: repoPath)
         } catch {
@@ -151,6 +183,11 @@ final class Model: ObservableObject {
     // MARK: Backups
 
     func backUp(_ r: Recipe) {
+        if !r.filter.ids.isEmpty {
+            let bytes = (try? Ledger.stats(SQLiteReader(path: ledgerPath), r))?.notBackedUp.bytes ?? 0
+            backUpItems(r.filter.ids, bytes: bytes, label: r.title)
+            return
+        }
         let wanted = r.backups.map { QueuedBackup(type: $0.type, source: $0.source, older: $0.older) }
         let fresh = wanted.filter { !queue.contains($0) }
         queue += fresh
@@ -158,11 +195,37 @@ final class Model: ObservableObject {
         if !queue.isEmpty { notice = "\(r.title): backup queued. It starts when the running job ends." }
     }
 
+    /// Opens the filter builder on one place.
+    func showPlace(country: String, city: String? = nil) {
+        draft = Filter(country: country, city: city)
+        tab = .cleanUp
+    }
+
+    /// Backs up items picked one by one. Queued behind any running export.
+    func backUpItems(_ ids: [Int], bytes: Int64, label: String) {
+        let q = QueuedBackup(type: "items", source: "", older: nil, ids: ids, bytes: bytes, label: label)
+        guard !queue.contains(q) else { return }
+        queue.append(q)
+        pumpQueue()
+        if queue.contains(q) { notice = "\(label): backup queued. It starts when the running job ends." }
+    }
+
     func cancelQueued(_ q: QueuedBackup) { queue.removeAll { $0 == q } }
 
     /// Starts the next queued backup once nothing else is exporting.
     func pumpQueue() {
-        guard let next = queue.first, !Jobs.anyRunning(Jobs.processes()) else { return }
+        guard let next = queue.first, !Jobs.anyRunning(Jobs.processes()),
+              !tasks.contains(where: { $0.running && $0.task.kind == .backup }) else { return }
+        if next.ids != nil {
+            guard runningTask == nil else { return }
+            do {
+                _ = try TaskStore.start(kind: .backup, recipe: nil, title: "Back up: \(next.title)", steps: next.steps, repo: repoPath)
+                queue.removeFirst()
+                notice = "Backing up \(next.title). Nothing is removed from the phone by a backup."
+            } catch { notice = "Could not start: \(error)" }
+            refreshTasks()
+            return
+        }
         switch Jobs.start(type: next.type, source: next.source, older: next.older, processes: Jobs.processes()) {
         case .success:
             queue.removeFirst()
@@ -261,6 +324,22 @@ struct QueuedBackup: Codable, Hashable, Identifiable {
     let type: String
     let source: String
     let older: String?
-    var id: String { "\(source)/\(type)" }
-    var title: String { "\(Channel.allCases.first { $0.cliSource == source }?.title ?? source) \(type == "video" ? "videos" : "photos")" + (older.map { ", older than \(Age($0)?.words ?? $0)" } ?? "") }
+    /// Picked items instead of a whole source: fetched, uploaded and checked by id.
+    var ids: [Int]? = nil
+    var bytes: Int64? = nil
+    var label: String? = nil
+    var id: String { ids.map { "items/" + $0.map(String.init).joined(separator: ",") } ?? "\(source)/\(type)" }
+    var title: String {
+        if let label { return label }
+        return "\(Channel.allCases.first { $0.cliSource == source }?.title ?? source) \(type == "video" ? "videos" : "photos")" + (older.map { ", older than \(Age($0)?.words ?? $0)" } ?? "")
+    }
+
+    /// sync, cloud, release for exactly these items. The budget is their size rounded up,
+    /// so a 4.7 GB video is not skipped as bigger than a chunk; sync still keeps the
+    /// Mac's free-space floor and refuses if they will not fit.
+    var steps: [[String]] {
+        let sel = (ids ?? []).flatMap { ["--id", String($0)] }
+        let gb = max(1, Int(((bytes ?? 0) + 1_073_741_823) / 1_073_741_824) + 1)
+        return [["sync"] + sel + ["--budget", "\(gb)GB", "--apply"], ["cloud"] + sel + ["--apply"], ["release"] + sel + ["--apply"]]
+    }
 }

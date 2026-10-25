@@ -588,3 +588,86 @@ def run(
             db.close()
 
     return result
+
+
+@dataclass
+class SettleResult:
+    """What `settle` found for removals left in REQUESTED by a run that never finished."""
+
+    confirmed_gone: int = 0
+    still_on_phone: int = 0
+    unknown: int = 0
+    bytes_gone: int = 0
+    operations_closed: int = 0
+
+
+def settle(db: Database, *, apply: bool = False) -> SettleResult:
+    """Finish the record of removals interrupted after the dialog.
+
+    A run that dies between asking Photos to delete and hearing back leaves its
+    rows REQUESTED. Whether they went is not guessed: a completed scan taken
+    *after* the request either saw each asset or did not. Not seen means the
+    deletion happened, and the row becomes REMOVED with that scan as its
+    evidence. Seen means it did not, and the row becomes FAILED, which leaves
+    the asset free to be planned again from scratch. With no later scan the row
+    is left alone. Nothing here asks the phone to do anything.
+    """
+    result = SettleResult()
+    latest = db.conn.execute(
+        "SELECT id, finished_at FROM scans WHERE status = 'COMPLETED' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    rows = db.conn.execute(
+        "SELECT d.id, d.asset_id, d.operation_id, d.requested_at, d.size_bytes, d.evidence, "
+        "a.last_seen_scan_id, a.present_on_phone FROM deletion_events d "
+        "JOIN assets a ON a.id = d.asset_id WHERE d.status = 'REQUESTED'"
+    ).fetchall()
+    later = latest is not None
+    now = utcnow()
+    touched_ops: set[int] = set()
+    for row in rows:
+        if not later or str(latest["finished_at"] or "") <= str(row["requested_at"]):
+            result.unknown += 1
+            continue
+        seen_now = int(row["last_seen_scan_id"] or 0) == int(latest["id"])
+        if row["operation_id"]:
+            touched_ops.add(int(row["operation_id"]))
+        if seen_now:
+            result.still_on_phone += 1
+            if apply:
+                db.conn.execute(
+                    "UPDATE deletion_events SET status = 'FAILED', completed_at = ?, error = ? "
+                    "WHERE id = ?",
+                    (now, f"still on the phone at scan {latest['id']}", row["id"]),
+                )
+            continue
+        result.confirmed_gone += 1
+        result.bytes_gone += int(row["size_bytes"] or 0)
+        if apply:
+            evidence = json.loads(row["evidence"] or "{}")
+            evidence["settled_by_scan"] = int(latest["id"])
+            db.conn.execute(
+                "UPDATE deletion_events SET status = 'REMOVED', completed_at = ?, evidence = ? "
+                "WHERE id = ?",
+                (latest["finished_at"], json.dumps(evidence), row["id"]),
+            )
+            db.conn.execute(
+                "UPDATE assets SET present_on_phone = 0, "
+                "removed_from_phone_at = COALESCE(removed_from_phone_at, ?), updated_at = ? "
+                "WHERE id = ?",
+                (latest["finished_at"], now, row["asset_id"]),
+            )
+    if apply:
+        for op in touched_ops:
+            left = db.conn.execute(
+                "SELECT COUNT(*) FROM deletion_events "
+                "WHERE operation_id = ? AND status = 'REQUESTED'",
+                (op,),
+            ).fetchone()[0]
+            if not left:
+                db.conn.execute(
+                    "UPDATE operations SET status = 'COMPLETED', finished_at = ?, "
+                    "error = 'settled from a later scan' WHERE id = ? AND status = 'STARTED'",
+                    (now, op),
+                )
+                result.operations_closed += 1
+    return result

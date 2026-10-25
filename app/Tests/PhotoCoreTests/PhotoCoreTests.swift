@@ -28,6 +28,7 @@ final class LedgerTests: XCTestCase {
           source_bundle_id TEXT, created_at_device TEXT, size_bytes INTEGER, is_favourite INTEGER DEFAULT 0,
           proxy_suspicion REAL DEFAULT 0, cloud_status TEXT DEFAULT 'NONE', present_on_phone INTEGER DEFAULT 1,
           sha256 TEXT, cloud_path TEXT);
+        CREATE TABLE locations (id INTEGER PRIMARY KEY, country TEXT, city TEXT);
         CREATE TABLE deletion_events (id INTEGER PRIMARY KEY, asset_id INTEGER, status TEXT, completed_at TEXT,
           size_bytes INTEGER, evidence TEXT DEFAULT '{}');
         CREATE TABLE operations (id INTEGER PRIMARY KEY, operation TEXT, status TEXT, command TEXT, started_at TEXT, finished_at TEXT);
@@ -232,6 +233,8 @@ final class FilterTests: XCTestCase {
         XCTAssertEqual(f.summary, "WhatsApp videos · over 20 MB · older than 6 months")
         XCTAssertEqual(f.backups.map(\.type), ["video"])
         XCTAssertTrue(Filter(type: "video").backups.isEmpty, "no source: cycle.sh would read it as camera")
+        XCTAssertEqual(Filter(country: "Greece", ids: [4, 5]).selectorArgs, ["--country", "Greece", "--id", "4", "--id", "5"])
+        XCTAssertTrue(Filter(source: "whatsapp", ids: [4]).backups.isEmpty, "picked items are backed up by id, not by cycle.sh")
         XCTAssertEqual(Recipe(custom: f).id, Recipe(custom: Filter(name: "x", source: "whatsapp", type: "video", olderThan: "6m", minMB: 20, proxyTolerance: 0.5)).id)
     }
 
@@ -247,6 +250,9 @@ final class FilterTests: XCTestCase {
             Filter(type: "burst", olderThan: "30d"),
             Filter(source: "com.burbn.instagram", year: 2022),
             Filter(type: "photo", newerThan: "1y", maxMB: 1),
+            Filter(country: "South Africa"),
+            Filter(type: "video", city: "cape town"),
+            Filter(ids: [1, 2, 3, 99999]),
         ]
         for f in filters {
             let p = Process()

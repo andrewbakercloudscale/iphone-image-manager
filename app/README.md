@@ -13,6 +13,10 @@ job writes) and `~/.iphone-image/cycle.log`, and acts only through the engine:
 | Plan a removal | `remove-from-iphone <selector>`: fresh scan, then each item's Drive hash re-read | removal step 3 |
 | Remove | the same with `--apply --confirm "<phrase>"`. Never resumes by itself | removal step 4 |
 | Proof | `deletion_events.evidence.remote_hash_confirmed`, per removed item | removal step 5, Bin |
+| Back up picked items | `sync --id … --budget --apply` → `cloud --apply` → `release --apply`, queued behind any job | Library |
+| Places | `places`: country/city from Photos' reverse geocoding, by rounded GPS | Library (auto daily), filters |
+| Finish a removal | `settle --apply`: a later scan records what Photos actually deleted | Activity, Checkup |
+| Recover | `recover --id …`: Drive → new folder, each file hash-checked; "Add to Photos" only on click | Bin |
 
 CLI actions run detached under `~/.iphone-image/ui/<id>/` (`task.json`, `out.json`,
 `err.log`, `exit`), so they outlive the app and show in Activity when it reopens.

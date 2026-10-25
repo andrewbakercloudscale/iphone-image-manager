@@ -19,6 +19,8 @@ import click
 from .. import __version__
 from .. import audit as audit_engine
 from .. import cloud as cloud_engine
+from .. import locate as locate_engine
+from .. import recover as recover_engine
 from .. import release as release_engine
 from .. import relocate as relocate_engine
 from .. import remove as remove_engine
@@ -355,6 +357,127 @@ def scan(ctx: Context, limit: int) -> None:
         ctx.out.line("  Channels", style="head")
         for channel, count in top:
             ctx.out.line(f"    {channel:<36}{count:>9,}")
+
+    ctx.out.result(data, render)
+
+
+@cli.command()
+@click.option("--apply", "apply_", is_flag=True, help="Record the outcome. Without it, show it.")
+@pass_context
+def settle(ctx: Context, apply_: bool) -> None:
+    """Finish the record of removals a crashed run left unconfirmed.
+
+    Uses the newest completed scan: an item it no longer saw was removed, one it
+    still saw was not and can be planned again. Never touches the phone.
+    """
+    db = ctx.database()
+    try:
+        result = remove_engine.settle(db, apply=apply_)
+    finally:
+        db.close()
+    data = {
+        "applied": apply_,
+        "confirmedGone": result.confirmed_gone,
+        "bytesGone": result.bytes_gone,
+        "stillOnPhone": result.still_on_phone,
+        "unknown": result.unknown,
+        "operationsClosed": result.operations_closed,
+    }
+
+    def render() -> None:
+        ctx.out.title("Settle unfinished removals")
+        ctx.out.pairs(
+            [
+                ("removed, confirmed by a later scan", f"{result.confirmed_gone:,}"),
+                ("still on the phone", f"{result.still_on_phone:,}"),
+                ("no scan since, left alone", f"{result.unknown:,}"),
+            ]
+        )
+        if not apply_:
+            ctx.out.line("  Nothing recorded yet. Re-run with --apply.", style="muted")
+
+    ctx.out.result(data, render)
+
+
+@cli.command()
+@click.option("--id", "ids", type=int, multiple=True, help="A ledger asset id. Repeat for several.")
+@click.option(
+    "--to",
+    type=click.Path(path_type=Path, file_okay=False),
+    help="An empty folder. Default: ~/Downloads/Photo Sentinel recovered/<now>.",
+)
+@pass_context
+def recover(ctx: Context, ids: tuple[int, ...], to: Path | None) -> None:
+    """Download items back from the cloud, each checked against its recorded hash.
+
+    For anything removed from the phone more than 30 days ago, when Recently
+    Deleted no longer has it. Reads only from the cloud; never writes over a file.
+    """
+    db = ctx.database()
+    try:
+        result = recover_engine.run(ctx.config, db, list(ids), to=to)
+    except (recover_engine.RecoverError, cloud_engine.CloudError) as exc:
+        _fail(ctx.out, str(exc))
+        return
+    finally:
+        db.close()
+    data = {"folder": str(result.folder), "verified": result.verified, "files": result.files}
+
+    def render() -> None:
+        ctx.out.title("Recovered")
+        ctx.out.pairs(
+            [("folder", str(result.folder)), ("matched their hash", f"{result.verified:,}")]
+        )
+        for f in result.files:
+            if not f["verified"]:
+                ctx.out.warn(f"{f['filename']}: did not match the recorded hash")
+
+    ctx.out.result(data, render)
+    if result.verified < len(result.files):
+        sys.exit(1)
+
+
+@cli.command()
+@pass_context
+def places(ctx: Context) -> None:
+    """Record where each asset was taken, from Photos' own place names.
+
+    Writes country, region, city and suburb to the ledger so `--country` and
+    `--city` can select on them. Reads only: no file, phone or cloud is touched,
+    and nothing leaves this Mac. Safe to re-run.
+    """
+    db = ctx.database()
+    try:
+        result = locate_engine.run(ctx.config, db)
+        breakdown = locate_engine.summary(db)
+    finally:
+        db.close()
+    data = {
+        "assets": result.assets,
+        "located": result.located,
+        "places": result.places,
+        "noCoordinates": result.no_coordinates,
+        "degraded": result.degraded,
+        **breakdown,
+    }
+
+    def render() -> None:
+        ctx.out.title("Places")
+        ctx.out.pairs(
+            [
+                ("assets with a place", f"{result.located:,} of {result.assets:,}"),
+                ("distinct places", f"{result.places:,}"),
+            ]
+        )
+        if result.degraded:
+            ctx.out.warn(result.degraded)
+        ctx.out.line()
+        ctx.out.line("  On the phone, by country", style="head")
+        for row in breakdown["countries"][:10]:
+            ctx.out.line(f"    {row['country']:<30}{human_bytes(row['bytes']):>10}")
+        ctx.out.line(
+            f"    {'(no place recorded)':<30}{human_bytes(breakdown['noLocation']['bytes']):>10}"
+        )
 
     ctx.out.result(data, render)
 

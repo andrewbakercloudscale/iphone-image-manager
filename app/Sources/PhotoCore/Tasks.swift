@@ -7,7 +7,7 @@ import Foundation
 /// what lets Activity show it as a job in flight and lets a removal's result be read back
 /// after the fact, rather than living only in a window that has gone.
 public struct CLITask: Identifiable, Codable, Hashable, Sendable {
-    public enum Kind: String, Codable, Sendable { case audit, plan, remove }
+    public enum Kind: String, Codable, Sendable { case audit, plan, remove, places, backup, settle, recover }
 
     public let id: String
     public let kind: Kind
@@ -53,17 +53,26 @@ public enum TaskStore {
     /// Starts `iphone-image --json <args>` detached. Returns once it is running.
     public static func start(kind: CLITask.Kind, recipe: String?, title: String, args: [String],
                              repo: String = CLIEngine.defaultRepo) throws -> CLITask {
+        try start(kind: kind, recipe: recipe, title: title, steps: [args], repo: repo)
+    }
+
+    /// Several commands in order, stopping at the first that fails. `out.json` holds the
+    /// last one's JSON, or the failing one's, so the error shown is the step that stopped.
+    public static func start(kind: CLITask.Kind, recipe: String?, title: String, steps: [[String]],
+                             repo: String = CLIEngine.defaultRepo) throws -> CLITask {
+        let args = steps.last ?? []
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
         let id = "\(stamp)-\(kind.rawValue)" + (recipe.map { "-\($0)" } ?? "")
         let dir = root + "/" + id
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
-        let quoted = args.map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }.joined(separator: " ")
-        // The subshell is the task: alive while the command runs, and it writes the exit code
+        func quote(_ a: [String]) -> String { a.map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }.joined(separator: " ") }
+        let chain = steps.map { "PYTHONPATH=src ./.venv/bin/python -m iphone_image --json \(quote($0)) > '\(dir)/out.json' 2>> '\(dir)/err.log'" }
+            .joined(separator: " && ")
+        // The subshell is the task: alive while the commands run, and it writes the exit code
         // last, so `exit` existing means the output is complete.
         let script = """
-        ( cd '\(repo)' && PYTHONPATH=src ./.venv/bin/python -m iphone_image --json \(quoted) \
-            > '\(dir)/out.json' 2> '\(dir)/err.log'; echo $? > '\(dir)/exit' ) < /dev/null > /dev/null 2>&1 &
+        ( cd '\(repo)' && \(chain); echo $? > '\(dir)/exit' ) < /dev/null > /dev/null 2>&1 &
         echo $!
         """
         let p = Process()
@@ -124,6 +133,27 @@ public struct AuditReport: Decodable, Hashable, Sendable {
     }
 }
 
+public struct SettleReport: Decodable, Hashable, Sendable {
+    public let confirmedGone: Int
+    public let bytesGone: Int64
+    public let stillOnPhone: Int
+    public let unknown: Int
+}
+
+public struct RecoverReport: Decodable, Hashable, Sendable {
+    public struct File: Decodable, Hashable, Sendable { public let id: Int; public let filename: String?; public let path: String; public let verified: Bool }
+    public let folder: String
+    public let verified: Int
+    public let files: [File]
+}
+
+public struct PlacesReport: Decodable, Hashable, Sendable {
+    public let assets: Int
+    public let located: Int
+    public let places: Int
+    public let degraded: String?
+}
+
 public struct RemovalPlan: Decodable, Hashable, Sendable {
     public struct Blocked: Decodable, Hashable, Sendable { public let id: Int; public let filename: String?; public let reason: String }
     public let applied: Bool
@@ -157,6 +187,7 @@ public struct RemovalPlan: Decodable, Hashable, Sendable {
 /// One removed item, with the evidence recorded at the moment of removal.
 public struct ProofRow: Identifiable, Hashable, Sendable {
     public let id: Int
+    public var assetId = 0
     public let filename: String
     public let drivePath: String
     public let sha256: String
@@ -202,17 +233,24 @@ extension Ledger {
         p.confirmed = sums.int(1)
         p.stillVerified = sums.int(2)
         p.bytes = Int64(sums.int(3))
-        p.rows = try db.rows("""
+        p.rows = try removed(db, since: since, search: "", limit: limit)
+        return p
+    }
+
+    /// Removed items, newest first, optionally matching a filename fragment.
+    public static func removed(_ db: SQLiteReader, since: String = "", search: String, limit: Int = 500) throws -> [ProofRow] {
+        try db.rows("""
             SELECT d.id, COALESCE(a.filename, ''), COALESCE(a.cloud_path, ''), COALESCE(a.sha256, ''),
                    COALESCE(d.size_bytes, 0), d.completed_at,
-                   json_extract(d.evidence, '$.remote_hash_confirmed') = 1, a.cloud_status = 'CLOUD_VERIFIED'
+                   json_extract(d.evidence, '$.remote_hash_confirmed') = 1, a.cloud_status = 'CLOUD_VERIFIED', a.id
             FROM deletion_events d JOIN assets a ON a.id = d.asset_id
-            WHERE d.status = 'REMOVED' AND d.completed_at >= ?
+            WHERE d.status = 'REMOVED' AND d.completed_at >= ? AND COALESCE(a.filename, '') LIKE ?
             ORDER BY d.completed_at DESC LIMIT ?
-            """, [since, limit]).map {
-            ProofRow(id: $0.int(0), filename: $0.str(1), drivePath: $0.str(2), sha256: $0.str(3), bytes: Int64($0.int(4)),
-                     removedAt: $0.str(5), driveHashConfirmed: $0.int(6) == 1, stillVerified: $0.int(7) == 1)
+            """, [since, "%\(search)%", limit]).map {
+            var r = ProofRow(id: $0.int(0), filename: $0.str(1), drivePath: $0.str(2), sha256: $0.str(3), bytes: Int64($0.int(4)),
+                             removedAt: $0.str(5), driveHashConfirmed: $0.int(6) == 1, stillVerified: $0.int(7) == 1)
+            r.assetId = $0.int(8)
+            return r
         }
-        return p
     }
 }
