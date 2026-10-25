@@ -379,6 +379,16 @@ def test_removal_blocks_proxies_however_the_selector_was_built() -> None:
     assert f"a.proxy_suspicion < {PROXY_SUSPICION_BLOCK}" in where
 
 
+def test_a_raised_proxy_threshold_widens_removal_only_as_far_as_asked() -> None:
+    where, params = Selector(proxy_threshold=0.8).for_removal().where()
+    assert "a.proxy_suspicion <= ?" in where and 0.8 in params
+
+
+def test_a_proxy_threshold_outside_zero_to_one_is_refused() -> None:
+    with pytest.raises(SelectorError):
+        Selector(proxy_threshold=1.5)
+
+
 def test_removal_protects_favourites_however_the_selector_was_built() -> None:
     where, _ = Selector(include_favourites=True).for_removal().where()
     assert "a.is_favourite = 0" in where

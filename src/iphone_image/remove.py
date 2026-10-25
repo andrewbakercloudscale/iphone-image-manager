@@ -311,7 +311,8 @@ def plan(
 
         # 3. Proxy suspicion. The selector already excludes these and cannot be
         #    told not to, so reaching here means something changed underneath.
-        if config.safety.block_suspected_proxies and float(asset.get("proxy_suspicion") or 0) > 0:
+        suspicion = float(asset.get("proxy_suspicion") or 0)
+        if config.safety.block_suspected_proxies and suspicion > selector.proxy_threshold:
             result.block(asset, "flagged as a suspected proxy")
             continue
 
@@ -365,6 +366,13 @@ def plan(
                     "basis": "remote_hash_only" if cloud_is_the_evidence else "local_and_remote",
                     "cloud_status": asset.get("cloud_status"),
                     "policy": str(policy),
+                    # A removal the owner let through despite some suspicion
+                    # says so, with the score and the tolerance it was under.
+                    **(
+                        {"proxy_suspicion": suspicion, "proxy_threshold": selector.proxy_threshold}
+                        if suspicion > 0
+                        else {}
+                    ),
                 },
             )
         )

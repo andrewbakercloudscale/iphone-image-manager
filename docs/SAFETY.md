@@ -115,12 +115,22 @@ original. This is not theoretical.
 Assets over the threshold are flagged `SUSPECTED_PROXY` and:
 
 - are still backed up locally and to the cloud, normally;
-- are **permanently blocked from removal** in v1, with no override flag;
+- are **blocked from removal by default**: any score above zero blocks, stricter
+  than the 0.5 flag itself;
 - are listed explicitly by `iphone-image status --proxies` and appear as a named
   blocked category in every removal plan.
 
 The block is deliberately not overridable in v1. Detection is heuristic and a false
 negative destroys an irreplaceable original.
+
+**Owner decision, 2026-10-25: the tolerance is adjustable per removal.** The score is
+bytes per pixel alone, and screenshots and app images are small for their size without
+being proxies: 2,226 old screenshots were blocked on it. `remove-from-iphone
+--proxy-threshold <0..1>` (Photo Sentinel: the low-res check in a filter) sets how much
+suspicion one removal tolerates. 0, the default, keeps the old behaviour; 1 tolerates
+everything. It is never a saved setting, so each removal chooses again, and every item
+removed despite some suspicion records its score and the tolerance in
+`deletion_events.evidence`. Videos always score 0, so the check never affects them.
 
 ---
 

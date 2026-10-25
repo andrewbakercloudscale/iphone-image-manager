@@ -1107,8 +1107,18 @@ def _removal_phrase(count: int) -> str:
 @selector_options
 @click.option("--apply", "apply_", is_flag=True, help="Actually remove. Without it, plan only.")
 @click.option("--confirm", default="", help="The typed confirmation phrase. Required with --apply.")
+@click.option(
+    "--proxy-threshold",
+    type=click.FloatRange(0.0, 1.0),
+    default=0.0,
+    show_default=True,
+    help="Proxy suspicion removal tolerates, 0 to 1. 0 blocks anything flagged at all; "
+    "1 blocks nothing. See docs/SAFETY.md section 2.",
+)
 @click.pass_obj
-def remove_from_iphone(ctx: Context, apply_: bool, confirm: str, **kwargs: Any) -> None:
+def remove_from_iphone(
+    ctx: Context, apply_: bool, confirm: str, proxy_threshold: float, **kwargs: Any
+) -> None:
     """Delete assets from the iPhone, once every safety condition is proved.
 
     A scan is taken in this same run and the plan is computed against it. The
@@ -1121,7 +1131,7 @@ def remove_from_iphone(ctx: Context, apply_: bool, confirm: str, **kwargs: Any) 
     """
     config = ctx.config
     try:
-        selector = build_selector(**kwargs)
+        selector = replace(build_selector(**kwargs), proxy_threshold=proxy_threshold)
     except SelectorError as exc:
         _fail(ctx.out, str(exc))
         return
@@ -1173,6 +1183,7 @@ def remove_from_iphone(ctx: Context, apply_: bool, confirm: str, **kwargs: Any) 
         "blocked": preview.blocked,
         "blockedReasons": preview.blocks,
         "blockedAssets": preview.blocked_assets[:200],
+        "proxyThreshold": proxy_threshold,
     }
 
     def render_blocks() -> None:

@@ -213,6 +213,30 @@ def test_the_default_policy_refuses_outright(env) -> None:
         plan(config, db)
 
 
+def test_any_suspicion_blocks_removal_by_default(env) -> None:
+    """A score below the scanner's flag still blocks: the default tolerates nothing."""
+    config, db = env
+    on_phone(config, db, "a", "2019/11/IMG_1.PNG", proxy=0.1)
+    eligible, result = plan(config, db)
+    assert eligible == []
+    assert result.blocks == {"flagged as a suspected proxy": 1}
+
+
+def test_the_owner_can_tolerate_more_suspicion_per_removal(env) -> None:
+    """docs/SAFETY.md section 2, owner decision of 2026-10-25."""
+    config, db = env
+    on_phone(config, db, "a", "2019/11/IMG_1.PNG", proxy=0.1)
+    on_phone(config, db, "b", "2019/11/IMG_2.PNG", proxy=0.7)
+    on_phone(config, db, "c", "2019/11/IMG_3.PNG", proxy=0.9)
+    remote = {f"2019/11/IMG_{n}.PNG": hashlib.sha256(b"photo").hexdigest() for n in (1, 2, 3)}
+
+    eligible, _ = remove_engine.plan(
+        config, db, Selector(proxy_threshold=0.7), scan_id=SCAN, provider=FakeCloud(remote)
+    )
+    assert sorted(c.filename for c in eligible) == ["IMG_1.PNG", "IMG_2.PNG"]
+    assert eligible[0].evidence["proxy_threshold"] == 0.7, "a tolerated suspicion is recorded"
+
+
 def test_a_live_photo_whose_motion_half_was_never_archived_is_never_removed(env) -> None:
     """The finding that prompted this gate.
 

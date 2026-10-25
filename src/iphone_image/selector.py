@@ -182,6 +182,13 @@ class Selector:
     #: behaviour, and `for_release` is the only thing that turns it off.
     require_present_on_phone: bool = True
     limit: int | None = None
+    #: How much proxy suspicion removal tolerates: an asset scoring above it is
+    #: never removed. 0.0, the default, blocks anything the scanner had any doubt
+    #: about. The owner chose to make this adjustable per removal (2026-10-25,
+    #: docs/SAFETY.md section 2): the score is bytes per pixel alone, and
+    #: screenshots and app images are small for their size without being proxies.
+    #: 1.0 tolerates everything. Only `for_removal` reads it.
+    proxy_threshold: float = 0.0
 
     def __post_init__(self) -> None:
         if self.media_type and self.media_type not in MEDIA_TYPES:
@@ -201,6 +208,10 @@ class Selector:
                 raise SelectorError(f"--{field_name.replace('_', '-')}: {exc}") from exc
         parse_size(self.min_size)
         parse_size(self.max_size)
+        if not 0.0 <= float(self.proxy_threshold) <= 1.0:
+            raise SelectorError(
+                f"proxy threshold must be between 0 and 1, not {self.proxy_threshold}"
+            )
 
     # -- compilation -------------------------------------------------------
 
@@ -251,7 +262,12 @@ class Selector:
         if not self.include_favourites:
             clauses.append("a.is_favourite = 0")
         if not self.include_proxy_suspects:
-            clauses.append(f"a.proxy_suspicion < {PROXY_SUSPICION_BLOCK}")
+            if self.proxy_threshold >= PROXY_SUSPICION_BLOCK:
+                # Raised past the scanner's flag: the owner chose to tolerate more.
+                clauses.append("a.proxy_suspicion <= ?")
+                params.append(float(self.proxy_threshold))
+            else:
+                clauses.append(f"a.proxy_suspicion < {PROXY_SUSPICION_BLOCK}")
 
         # Every caller interpolates this into `WHERE {where} AND ...`, so an
         # empty fragment is a syntax error rather than "everything". A selector
