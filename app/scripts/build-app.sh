@@ -22,7 +22,11 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/PhotoSentinel"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
-codesign --force --sign - "$APP"
+# macOS remembers Photos/folder access by the signature. An ad-hoc signature ("-") changes on
+# every build, so each rebuild asked again. Any stable identity (self-signed is fine) keeps it.
+SIGN_ID="${PHOTO_SENTINEL_SIGN_ID:-$(security find-identity -v -p codesigning | awk -F'"' 'NR==1 && /"/ {print $2}')}"
+codesign --force --sign "${SIGN_ID:--}" "$APP"
+echo "== signed with: ${SIGN_ID:-ad-hoc (macOS will ask for access again after each build)}"
 codesign --verify "$APP"
 
 DEST="$HOME/Applications/Photo Sentinel.app"
