@@ -15,6 +15,27 @@ struct ActivityView: View {
                     ForEach(model.jobs) { j in JobRow(job: j) { model.resume(j.id) } }
                 }
             }
+            if !model.queue.isEmpty {
+                Card(title: "Waiting to start", symbol: "clock.fill", tint: Tab.activity.color,
+                     trailing: AnyView(Text("one export at a time; the next starts when the running job ends").font(.callout).foregroundStyle(.secondary))) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(model.queue) { q in
+                            HStack {
+                                Text(q.title).font(.body.weight(.medium))
+                                Spacer()
+                                Button("Cancel") { model.cancelQueued(q) }.buttonStyle(.link)
+                            }
+                        }
+                    }
+                }
+            }
+            if !model.tasks.isEmpty {
+                Card(title: "Checks and removals", symbol: "checkmark.shield.fill", tint: Tab.activity.color) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(model.tasks.prefix(8), id: \.task.id) { t in TaskRow(status: t) }
+                    }
+                }
+            }
             if let ops = model.library?.unfinishedOperations, !ops.isEmpty {
                 Card(title: "Unfinished steps from earlier runs", symbol: "list.bullet.clipboard", tint: Tab.activity.color) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -116,5 +137,42 @@ struct JobRow: View {
         }
         .padding(compact ? 6 : 10)
         .background(RoundedRectangle(cornerRadius: 10).fill(l.color.opacity(0.07)))
+    }
+}
+
+struct TaskRow: View {
+    let status: TaskStatus
+
+    var body: some View {
+        let failed = status.errorMessage != nil
+        HStack(alignment: .top, spacing: 10) {
+            Circle().fill(status.running ? Theme.good : (failed ? Theme.bad : Color.secondary)).frame(width: 10, height: 10).padding(.top, 5)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(status.task.title).font(.body.weight(.semibold))
+                    Text(status.running ? "Running" : (failed ? "Stopped" : "Done")).font(.callout.weight(.semibold))
+                        .foregroundStyle(status.running ? Theme.good : (failed ? Theme.bad : .secondary))
+                }
+                Text(summary).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+            }
+            Spacer()
+            Text(status.task.startedAt.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.tertiary)
+        }
+    }
+
+    private var summary: String {
+        if status.running { return status.task.kind == .remove ? "Click Delete when the dialog appears." : "Working…" }
+        if let e = status.errorMessage { return e }
+        switch status.task.kind {
+        case .audit:
+            guard let r = status.decode(AuditReport.self) else { return "" }
+            return r.clean ? "\(Fmt.count(r.matched ?? 0)) items in Google Drive, every hash matches." : "Google Drive is missing items or hashes differ."
+        case .plan:
+            guard let p = status.decode(RemovalPlan.self) else { return "" }
+            return "\(Fmt.count(p.eligible)) can go (\(Fmt.bytes(p.eligibleBytes))), \(Fmt.count(p.blocked)) stay."
+        case .remove:
+            guard let p = status.decode(RemovalPlan.self) else { return "" }
+            return "Removed \(Fmt.count(p.removed ?? 0)), \(Fmt.bytes(p.bytesRemoved ?? 0))."
+        }
     }
 }

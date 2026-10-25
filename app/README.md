@@ -2,11 +2,22 @@
 
 SwiftUI front end for iphone-image. Design: [`../docs/MAC-APP-DESIGN.md`](../docs/MAC-APP-DESIGN.md).
 
-**Phase A (now): read-only over the Python engine.** It reads the ledger
-(`~/Desktop/iphone/iphone-image.sqlite`, read-only, safe while a job writes) and
-`~/.iphone-image/cycle.log`, and runs `iphone-image --json doctor`. The one thing it
-does is **Resume** a stopped backup job, which runs `cycle.sh` under `caffeinate`
-exactly as HANDOVER.md does. Backup only: nothing is removed from the phone.
+**Every photo operation runs from the app** (owner, 2026-10-25). The app never writes the
+ledger itself; it reads it (`~/Desktop/iphone/iphone-image.sqlite`, read-only, safe while a
+job writes) and `~/.iphone-image/cycle.log`, and acts only through the engine:
+
+| Action | What runs | Where it is |
+|---|---|---|
+| Back up / Resume | `cycle.sh <type> 40 <source> [age]` under `caffeinate`. One at a time; the rest queue | Clean up, Activity |
+| Check Google Drive | `iphone-image --json audit`: every verified file's hash re-read from Drive | Backup, removal step 2 |
+| Plan a removal | `remove-from-iphone <selector>`: fresh scan, then each item's Drive hash re-read | removal step 3 |
+| Remove | the same with `--apply --confirm "<phrase>"`. Never resumes by itself | removal step 4 |
+| Proof | `deletion_events.evidence.remote_hash_confirmed`, per removed item | removal step 5, Bin |
+
+CLI actions run detached under `~/.iphone-image/ui/<id>/` (`task.json`, `out.json`,
+`err.log`, `exit`), so they outlive the app and show in Activity when it reopens.
+Removal stays locked until a Google Drive check from the last 6 hours is clean.
+Clean-up numbers are estimates that mirror `remove.py`'s per-asset rules; the plan is the truth.
 
 ```bash
 bash scripts/build-app.sh               # test, build, install to ~/Applications, launch

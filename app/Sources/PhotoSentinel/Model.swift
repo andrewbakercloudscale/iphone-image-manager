@@ -2,8 +2,8 @@ import Foundation
 import PhotoCore
 import SwiftUI
 
-/// The app's state. Reads only: Phase A never writes the ledger. The one action it takes is
-/// resuming a backup job, which runs cycle.sh exactly as HANDOVER.md does.
+/// The app's state. It never writes the ledger itself: every action is the CLI or cycle.sh,
+/// started detached so it outlives the app (TaskStore, Jobs).
 @MainActor
 final class Model: ObservableObject {
     @Published var library: LibrarySnapshot?
@@ -14,6 +14,11 @@ final class Model: ObservableObject {
     @Published var doctorRunning = false
     @Published var notice: String?
     @Published var tab: Tab = .checkup
+    @Published var tasks: [TaskStatus] = []
+    @Published var removing: Recipe?
+    @Published var allProof: Proof?
+    /// Backups waiting for the running one to end. One PhotoKit exporter at a time.
+    @Published var queue: [QueuedBackup] = [] { didSet { saveQueue() } }
 
     @AppStorage("age.oldVideos") var videoAge = "1y"
     @AppStorage("age.whatsapp") var whatsappAge = "18m"
@@ -45,6 +50,11 @@ final class Model: ObservableObject {
     var activeJob: Job? { jobs.first { if case .running = $0.state { return true }; if case .paused = $0.state { return true }; return false } }
 
     func start() {
+        loadQueue()
+        refreshTasks()
+        timers.append(Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshTasks() }
+        })
         refresh()
         refreshDoctor()
         // Jobs move by the minute; the library by the hour. The ledger read takes about a second.
@@ -62,8 +72,10 @@ final class Model: ObservableObject {
         Task.detached {
             let result = Result { try engine.library() }
             let jobs = engine.jobs()
+            let proof = try? Ledger.proof(SQLiteReader(path: engine.ledgerPath), since: "", limit: 0)
             await MainActor.run {
                 self.loading = false
+                self.allProof = proof
                 self.jobs = jobs
                 switch result {
                 case .success(let s): self.library = s; self.error = nil
@@ -77,8 +89,83 @@ final class Model: ObservableObject {
         let engine = engine
         Task.detached {
             let jobs = engine.jobs()
-            await MainActor.run { self.jobs = jobs }
+            await MainActor.run {
+                self.jobs = jobs
+                self.pumpQueue()
+            }
         }
+    }
+
+    // MARK: CLI tasks: audit, removal plan, removal
+
+    func refreshTasks() {
+        let before = Set(tasks.filter(\.running).map(\.task.id))
+        tasks = TaskStore.all()
+        // Something just finished: the ledger has moved.
+        if tasks.contains(where: { before.contains($0.task.id) && !$0.running }) { refresh() }
+    }
+
+    func latest(_ kind: CLITask.Kind, recipe: Recipe? = nil) -> TaskStatus? {
+        tasks.first { $0.task.kind == kind && (recipe == nil || $0.task.recipe == recipe?.id) }
+    }
+
+    var runningTask: TaskStatus? { tasks.first(where: \.running) }
+
+    func runAudit() {
+        launch(.audit, recipe: nil, title: "Google Drive check", args: ["audit"])
+    }
+
+    func plan(_ r: Recipe) {
+        launch(.plan, recipe: r, title: "Plan: \(r.title)", args: ["remove-from-iphone"] + r.selectorArgs)
+    }
+
+    func remove(_ r: Recipe, phrase: String) {
+        launch(.remove, recipe: r, title: "Remove: \(r.title)",
+               args: ["remove-from-iphone"] + r.selectorArgs + ["--apply", "--confirm", phrase])
+    }
+
+    private func launch(_ kind: CLITask.Kind, recipe: Recipe?, title: String, args: [String]) {
+        // One CLI task at a time: two scans or a scan beside a removal would race.
+        if let busy = runningTask { notice = "\(busy.task.title) is still running. Try again when it ends."; return }
+        do {
+            _ = try TaskStore.start(kind: kind, recipe: recipe?.id, title: title, args: args, repo: repoPath)
+        } catch {
+            notice = "Could not start: \(error)"
+        }
+        refreshTasks()
+    }
+
+    // MARK: Backups
+
+    func backUp(_ r: Recipe) {
+        let wanted = r.backups.map { QueuedBackup(type: $0.type, source: $0.source, older: $0.older) }
+        let fresh = wanted.filter { !queue.contains($0) }
+        queue += fresh
+        pumpQueue()
+        if !queue.isEmpty { notice = "\(r.title): backup queued. It starts when the running job ends." }
+    }
+
+    func cancelQueued(_ q: QueuedBackup) { queue.removeAll { $0 == q } }
+
+    /// Starts the next queued backup once nothing else is exporting.
+    func pumpQueue() {
+        guard let next = queue.first, !Jobs.anyRunning(Jobs.processes()) else { return }
+        switch Jobs.start(type: next.type, source: next.source, older: next.older, processes: Jobs.processes()) {
+        case .success:
+            queue.removeFirst()
+            notice = "Backing up \(next.title). Nothing is removed from the phone by a backup."
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.refreshJobs() }
+        case .failure(let e): notice = e.text
+        }
+    }
+
+    private func saveQueue() {
+        UserDefaults.standard.set(try? JSONEncoder().encode(queue), forKey: "backupQueue")
+    }
+
+    private func loadQueue() {
+        if let d = UserDefaults.standard.data(forKey: "backupQueue"),
+           let q = try? JSONDecoder().decode([QueuedBackup].self, from: d) { queue = q }
     }
 
     func refreshDoctor() {
@@ -105,9 +192,19 @@ final class Model: ObservableObject {
     func perform(_ action: Finding.Action) {
         switch action {
         case .resume(let id): resume(id)
-        case .recipe: tab = .cleanUp
+        case .recipe(let id):
+            tab = .cleanUp
+            removing = recipes.first { $0.id == id }
         case .openTab(let name): tab = Tab.named(name) ?? .checkup
         case .none: break
         }
     }
+}
+
+struct QueuedBackup: Codable, Hashable, Identifiable {
+    let type: String
+    let source: String
+    let older: String?
+    var id: String { "\(source)/\(type)" }
+    var title: String { "\(Channel.allCases.first { $0.cliSource == source }?.title ?? source) \(type == "video" ? "videos" : "photos")" + (older.map { ", older than \(Age($0)?.words ?? $0)" } ?? "") }
 }

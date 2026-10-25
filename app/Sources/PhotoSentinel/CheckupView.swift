@@ -62,7 +62,7 @@ struct CheckupView: View {
     private func worthKnowing(_ s: LibrarySnapshot) -> some View {
         DisclosureGroup("Worth knowing") {
             VStack(alignment: .leading, spacing: 6) {
-                Text("\(Fmt.count(s.proxies)) low-res stand-ins stay on the phone: the full photo is only in iCloud.")
+                Text("\(Fmt.count(s.proxies)) items look like low-res stand-ins, so they stay on the phone until checked.")
                 Text("\(Fmt.count(s.favourites)) favourites are never cleaned up.")
                 Text("\(Fmt.count(s.live)) Live Photos stay until their motion half is backed up too.")
             }

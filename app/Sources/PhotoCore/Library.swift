@@ -152,7 +152,35 @@ public struct Recipe: Identifiable, Hashable, Sendable {
         }
     }
 
-    /// The matching CLI command, so the owner can run it today (Phase A runs nothing itself).
+    /// The selector arguments the CLI takes for this recipe.
+    public var selectorArgs: [String] {
+        var a: [String] = []
+        switch kind {
+        case .oldVideos: a += ["--source", "camera", "--type", "video"]
+        case .whatsapp: a += ["--source", "whatsapp"]
+        case .screenshots: a += ["--source", "screenshot"]
+        case .screenRecordings: a += ["--source", "screenrecording"]
+        case .largeVideos: a += ["--type", "video"]
+        }
+        if let age { a += ["--older-than", age.description] }
+        if let minBytes { a += ["--min-size", "\(minBytes / 1_000_000)MB"] }
+        return a
+    }
+
+    /// The cycle.sh jobs that back this recipe up, in order. Large videos have none of
+    /// their own: cycle.sh selects by source, and the camera and screen recording jobs cover them.
+    public var backups: [(type: String, source: String, older: String?)] {
+        let older = age?.description
+        switch kind {
+        case .oldVideos: return [("video", "camera", older)]
+        case .whatsapp: return [("photo", "whatsapp", older), ("video", "whatsapp", older)]
+        case .screenshots: return [("photo", "screenshot", older)]
+        case .screenRecordings: return [("video", "screenrecording", older)]
+        case .largeVideos: return []
+        }
+    }
+
+    /// The matching CLI command.
     public var command: String {
         var parts = ["iphone-image remove-from-iphone"]
         switch kind {
@@ -218,7 +246,7 @@ public struct RecipeStats: Identifiable, Hashable, Sendable {
     public var removableNow = Tally()
     /// Selected but with no verified Drive copy yet.
     public var notBackedUp = Tally()
-    /// Kept for safety: favourites, suspected proxies, Live Photos.
+    /// In Drive but held back by a removal rule: favourites, suspected proxies, no hash or no Drive path.
     public var kept = Tally()
     public var id: String { recipe.id }
 }
@@ -317,14 +345,18 @@ public enum Ledger {
         }
         s.channels.sort { $0.total.bytes > $1.total.bytes }
 
-        let keep = "(a.is_favourite = 1 OR a.proxy_suspicion >= 0.5 OR COALESCE(a.subtypes, '') LIKE '%live%')"
+        // The per-asset rules of remove.py's `plan`, so the estimate matches the plan. Not
+        // mirrored: user albums and incomplete Live Photo or burst groups, which the plan
+        // still blocks, so this stays an estimate and the plan stays the truth.
+        // remove.py blocks any proxy suspicion above zero, not the 0.5 the scanner reports on.
+        let keep = "(a.is_favourite = 1 OR a.proxy_suspicion > 0 OR COALESCE(a.sha256, '') = '' OR COALESCE(a.cloud_path, '') = '')"
         for recipe in recipes {
             let (w, args) = recipe.whereClause(now: now)
             let r = try db.rows("""
                 SELECT COUNT(*), COALESCE(SUM(a.size_bytes), 0),
                        SUM(\(verified) AND NOT \(keep)), COALESCE(SUM(CASE WHEN \(verified) AND NOT \(keep) THEN a.size_bytes END), 0),
                        SUM(NOT \(verified)), COALESCE(SUM(CASE WHEN NOT \(verified) THEN a.size_bytes END), 0),
-                       SUM(\(keep)), COALESCE(SUM(CASE WHEN \(keep) THEN a.size_bytes END), 0)
+                       SUM(\(verified) AND \(keep)), COALESCE(SUM(CASE WHEN \(verified) AND \(keep) THEN a.size_bytes END), 0)
                 FROM assets a WHERE \(onPhone) AND \(w)
                 """, args)[0]
             var rs = RecipeStats(recipe: recipe)
@@ -355,7 +387,7 @@ public enum Ledger {
         }
 
         let safety = try db.rows("""
-            SELECT SUM(a.proxy_suspicion >= 0.5), SUM(a.is_favourite = 1), SUM(COALESCE(a.subtypes, '') LIKE '%live%')
+            SELECT SUM(a.proxy_suspicion > 0), SUM(a.is_favourite = 1), SUM(COALESCE(a.subtypes, '') LIKE '%live%')
             FROM assets a WHERE \(onPhone)
             """)[0]
         s.proxies = safety.int(0)

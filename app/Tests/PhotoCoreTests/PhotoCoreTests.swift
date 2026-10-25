@@ -26,8 +26,10 @@ final class LedgerTests: XCTestCase {
         try db.exec("""
         CREATE TABLE assets (id INTEGER PRIMARY KEY, filename TEXT, media_type TEXT, subtypes TEXT,
           source_bundle_id TEXT, created_at_device TEXT, size_bytes INTEGER, is_favourite INTEGER DEFAULT 0,
-          proxy_suspicion REAL DEFAULT 0, cloud_status TEXT DEFAULT 'NONE', present_on_phone INTEGER DEFAULT 1);
-        CREATE TABLE deletion_events (id INTEGER PRIMARY KEY, status TEXT, completed_at TEXT, size_bytes INTEGER);
+          proxy_suspicion REAL DEFAULT 0, cloud_status TEXT DEFAULT 'NONE', present_on_phone INTEGER DEFAULT 1,
+          sha256 TEXT, cloud_path TEXT);
+        CREATE TABLE deletion_events (id INTEGER PRIMARY KEY, asset_id INTEGER, status TEXT, completed_at TEXT,
+          size_bytes INTEGER, evidence TEXT DEFAULT '{}');
         CREATE TABLE operations (id INTEGER PRIMARY KEY, operation TEXT, status TEXT, command TEXT, started_at TEXT, finished_at TEXT);
         """)
         return db
@@ -35,10 +37,12 @@ final class LedgerTests: XCTestCase {
 
     func insert(_ db: SQLiteReader, _ id: Int, file: String, type: String = "PHOTO", subtypes: String = "[]",
                 bundle: String? = nil, at: String = "2020-01-01T00:00:00Z", bytes: Int = 1000,
-                fav: Int = 0, proxy: Double = 0, cloud: String = "NONE", present: Int = 1) throws {
+                fav: Int = 0, proxy: Double = 0, cloud: String = "NONE", present: Int = 1, sha: String? = "abc") throws {
         let b = bundle.map { "'\($0)'" } ?? "NULL"
+        let h = sha.map { "'\($0)'" } ?? "NULL"
         try db.exec("""
-        INSERT INTO assets VALUES (\(id), '\(file)', '\(type)', '\(subtypes)', \(b), '\(at)', \(bytes), \(fav), \(proxy), '\(cloud)', \(present));
+        INSERT INTO assets VALUES (\(id), '\(file)', '\(type)', '\(subtypes)', \(b), '\(at)', \(bytes), \(fav), \(proxy), '\(cloud)', \(present),
+          \(h), 'Drive/\(file)');
         """)
     }
 
@@ -68,15 +72,92 @@ final class LedgerTests: XCTestCase {
         try insert(db, 4, file: "d", bundle: "net.whatsapp.WhatsApp", at: old, bytes: 400, proxy: 0.9, cloud: "CLOUD_VERIFIED")
         try insert(db, 5, file: "e", bundle: "net.whatsapp.WhatsApp", at: new, bytes: 500, cloud: "CLOUD_VERIFIED") // too new
         try insert(db, 6, file: "f", bundle: "net.whatsapp.WhatsApp", at: old, bytes: 600, cloud: "CLOUD_VERIFIED", present: 0) // gone
+        // remove.py blocks any suspicion above zero, and anything with no hash to compare.
+        try insert(db, 7, file: "g", bundle: "net.whatsapp.WhatsApp", at: old, bytes: 10, proxy: 0.1, cloud: "CLOUD_VERIFIED")
+        try insert(db, 8, file: "h", bundle: "net.whatsapp.WhatsApp", at: old, bytes: 20, cloud: "CLOUD_VERIFIED", sha: nil)
         let now = ISO8601DateFormatter().date(from: "2026-10-25T00:00:00Z")!
         let s = try Ledger.read(db, recipes: [Recipe(kind: .whatsapp, age: Age(18, "m"))], now: now)
         let r = try XCTUnwrap(s.recipes.first)
-        XCTAssertEqual(r.selected, Tally(count: 4, bytes: 1000))
-        XCTAssertEqual(r.removableNow, Tally(count: 1, bytes: 100), "favourites and proxies are never removable")
+        XCTAssertEqual(r.selected, Tally(count: 6, bytes: 1030))
+        XCTAssertEqual(r.removableNow, Tally(count: 1, bytes: 100), "favourites, proxies and unhashed items are never removable")
         XCTAssertEqual(r.notBackedUp, Tally(count: 1, bytes: 200))
-        XCTAssertEqual(r.kept, Tally(count: 2, bytes: 700))
-        XCTAssertEqual(s.onPhone, Tally(count: 5, bytes: 1500))
-        XCTAssertEqual(s.proxies, 1)
+        XCTAssertEqual(r.kept, Tally(count: 4, bytes: 730), "only items in Drive count as kept; the rest are not backed up")
+        XCTAssertEqual(s.onPhone, Tally(count: 7, bytes: 1530))
+        XCTAssertEqual(s.proxies, 2)
+    }
+
+    func testProofCountsOnlyDriveConfirmedRemovals() throws {
+        let db = try makeDB()
+        try insert(db, 1, file: "a", cloud: "CLOUD_VERIFIED")
+        try insert(db, 2, file: "b", cloud: "CLOUD_VERIFIED")
+        try insert(db, 3, file: "c")
+        try db.exec("""
+        INSERT INTO deletion_events (asset_id, status, completed_at, size_bytes, evidence) VALUES
+          (1, 'REMOVED', '2026-10-25T10:00:00+00:00', 5, '{"remote_hash_confirmed": true}'),
+          (2, 'REMOVED', '2026-10-25T10:00:01+00:00', 5, '{}'),
+          (3, 'REMOVED', '2026-10-25T10:00:02+00:00', 5, '{"remote_hash_confirmed": true}'),
+          (1, 'REMOVED', '2026-10-24T10:00:00+00:00', 5, '{"remote_hash_confirmed": true}'),
+          (2, 'REQUESTED', '2026-10-25T11:00:00+00:00', 5, '{}');
+        """)
+        let since = Ledger.stamp(ISO8601DateFormatter().date(from: "2026-10-25T09:00:00Z")!)
+        XCTAssertEqual(since, "2026-10-25T09:00:00+00:00")
+        let p = try Ledger.proof(db, since: since)
+        XCTAssertEqual(p.total, 3)
+        XCTAssertEqual(p.confirmed, 2)
+        XCTAssertEqual(p.stillVerified, 2)
+        XCTAssertFalse(p.allConfirmed)
+        XCTAssertEqual(p.rows.first?.drivePath, "Drive/c")
+    }
+}
+
+final class TaskTests: XCTestCase {
+    func testRemovalPlanDecodesTheCLIJSON() throws {
+        let json = """
+        {"applied": false, "scanId": 31, "examined": 10795, "eligible": 8451, "eligibleBytes": 12972961501,
+         "blocked": 2344, "blockedReasons": {"flagged as a suspected proxy": 2226},
+         "blockedAssets": [{"id": 4, "filename": "IMG_1.PNG", "reason": "flagged as a suspected proxy"}]}
+        """
+        let p = try JSONDecoder().decode(RemovalPlan.self, from: Data(json.utf8))
+        XCTAssertEqual(p.phrase, "remove 8451 photos from my iphone")
+        XCTAssertNil(p.removed)
+    }
+
+    func testTheNewCountIsReadFromARefusal() {
+        let msg = "--apply needs the confirmation phrase for this exact plan. Re-run with:\n    --confirm \"remove 8460 photos from my iphone\"\n"
+        XCTAssertEqual(RemovalPlan.expectedCount(inError: msg), 8460)
+        XCTAssertNil(RemovalPlan.expectedCount(inError: "nothing is safe to remove"))
+    }
+
+    func testAuditIsCleanOnlyWhenTheRemoteWasAsked() throws {
+        let offline = try JSONDecoder().decode(AuditReport.self, from: Data(#"{"rowsExamined": 5, "conflicts": []}"#.utf8))
+        XCTAssertFalse(offline.clean, "an audit that never asked Drive proves nothing")
+        let clean = try JSONDecoder().decode(AuditReport.self, from: Data(#"{"rowsExamined": 5, "conflicts": [], "matched": 5, "missing": [], "hashMismatch": []}"#.utf8))
+        XCTAssertTrue(clean.clean)
+    }
+
+    /// The real CLI, detached, read back from disk: what the app does for audit and plan.
+    func testATaskRunsDetachedAndIsReadBack() throws {
+        let saved = TaskStore.root
+        TaskStore.root = NSTemporaryDirectory() + "tasks-\(UUID().uuidString)"
+        defer { TaskStore.root = saved }
+        let t = try TaskStore.start(kind: .audit, recipe: nil, title: "t", args: ["audit", "--offline"])
+        var s = TaskStore.status(of: t.id)
+        for _ in 0..<300 where s?.running == true {
+            Thread.sleep(forTimeInterval: 0.1)
+            s = TaskStore.status(of: t.id)
+        }
+        let done = try XCTUnwrap(s)
+        XCTAssertEqual(done.state, .finished(0), done.stderr)
+        let report = try XCTUnwrap(done.decode(AuditReport.self))
+        XCTAssertGreaterThan(report.rowsExamined, 0)
+        XCTAssertFalse(report.clean, "--offline never asks Drive, so it must not read as clean")
+        XCTAssertEqual(TaskStore.all().map(\.task.id), [t.id])
+    }
+
+    func testSelectorArgsMatchTheCLI() {
+        XCTAssertEqual(Recipe(kind: .whatsapp, age: Age(18, "m")).selectorArgs, ["--source", "whatsapp", "--older-than", "18m"])
+        XCTAssertEqual(Recipe(kind: .largeVideos, minBytes: 500_000_000).selectorArgs, ["--type", "video", "--min-size", "500MB"])
+        XCTAssertEqual(Recipe(kind: .whatsapp, age: Age(18, "m")).backups.map(\.type), ["photo", "video"])
     }
 }
 

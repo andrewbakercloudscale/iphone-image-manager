@@ -16,6 +16,8 @@ enum Snapshot {
         model.library = try? model.engine.library()
         model.jobs = model.engine.jobs()
         model.doctor = try? model.engine.doctor()
+        model.tasks = TaskStore.all()
+        model.allProof = try? Ledger.proof(SQLiteReader(path: model.ledgerPath), since: "", limit: 0)
 
         for tab in Tab.allCases {
             model.tab = tab
@@ -32,6 +34,14 @@ enum Snapshot {
             if let img = r.nsImage, let tiff = img.tiffRepresentation,
                let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
                 try? png.write(to: dir.appendingPathComponent("\(tab.rawValue)-\(tab.title).png"))
+            }
+        }
+        for recipe in model.recipes {
+            let r = ImageRenderer(content: RemovalSheet(model: model, recipe: recipe, scrolls: false).frame(height: 1100))
+            r.scale = 1
+            if let img = r.nsImage, let tiff = img.tiffRepresentation,
+               let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                try? png.write(to: dir.appendingPathComponent("remove-\(recipe.id).png"))
             }
         }
         exit(0)

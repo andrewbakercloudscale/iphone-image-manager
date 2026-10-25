@@ -158,10 +158,13 @@ struct CleanUpView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("PICK A CLEAN-UP · EVERY ONE BACKS UP TO GOOGLE DRIVE FIRST").sectionLabel()
-            Text("Phase A shows what each clean-up would do. Removal still runs from the command line, which is printed under each one; the sheet that runs it comes in Phase B.")
+            Text("Numbers here are estimates from the last scan. The plan in each clean-up scans the phone and re-checks Google Drive, and its numbers are the ones that count.")
                 .font(.callout).foregroundStyle(.secondary)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12)], spacing: 12) {
-                ForEach(model.library?.recipes ?? []) { r in RecipeCard(stats: r) }
+                ForEach(model.library?.recipes ?? []) { r in
+                    RecipeCard(stats: r, queued: model.queue.contains { q in r.recipe.backups.contains { $0.source == q.source && $0.type == q.type } },
+                               backUp: { model.backUp(r.recipe) }, review: { model.removing = r.recipe })
+                }
             }
         }
     }
@@ -169,6 +172,9 @@ struct CleanUpView: View {
 
 struct RecipeCard: View {
     let stats: RecipeStats
+    var queued = false
+    var backUp: () -> Void = {}
+    var review: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -179,15 +185,18 @@ struct RecipeCard: View {
             Text(stats.recipe.detail).font(.callout).foregroundStyle(.secondary)
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
                 row("On the phone", stats.selected, .primary)
-                row("Ready to remove now", stats.removableNow, Theme.good)
+                row("In Drive, can go (est.)", stats.removableNow, Theme.good)
                 row("Not in Drive yet", stats.notBackedUp, Theme.warn)
                 row("Kept for safety", stats.kept, .secondary)
             }
             .font(.callout)
-            Text(stats.recipe.command).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(6).frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
+            HStack {
+                CapsuleButton(title: "Remove from iPhone…", symbol: "trash.fill", color: Tab.cleanUp.color, action: review)
+                if stats.notBackedUp.count > 0 && !stats.recipe.backups.isEmpty {
+                    if queued { Pill(text: "Backup queued", symbol: "clock.fill", color: Theme.warn) }
+                    else { CapsuleButton(title: "Back up", symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color, style: .soft, action: backUp) }
+                }
+            }
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 12).fill(Theme.cardFill))
@@ -229,10 +238,7 @@ struct BackupView: View {
                         }
                     }
                 }
-                Card(title: "Before any removal", symbol: "checkmark.seal.fill", tint: Theme.good) {
-                    Text("Run `iphone-image audit` first. It re-reads every hash from Google Drive and must exit clean; removal also re-checks Drive in the same run, so a copy that has gone missing since is caught twice.")
-                        .font(.callout).fixedSize(horizontal: false, vertical: true)
-                }
+                DriveCheckCard(model: model)
             }
         }
     }
@@ -256,7 +262,47 @@ struct BinView: View {
                     }
                     .font(.callout)
                 }
+                if let p = model.allProof, p.total > 0 {
+                    Card(title: "Proof every removed item is in Google Drive", symbol: "checkmark.seal.fill", tint: Theme.good) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 6) {
+                                Image(systemName: p.allConfirmed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                                    .foregroundStyle(p.allConfirmed ? Theme.good : Theme.warn)
+                                Text("\(Fmt.count(p.confirmed)) of \(Fmt.count(p.total)) removals had Drive's hash re-read and matched at the moment of removal.")
+                                    .fontWeight(.semibold)
+                            }
+                            Text("\(Fmt.count(p.stillVerified)) are still recorded as verified in Drive. Check Google Drive on the Backup tab re-reads every one of them.")
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.callout).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
+        }
+    }
+}
+
+/// The audit, run from the app: every verified file's hash re-read from Google Drive.
+struct DriveCheckCard: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        let audit = model.latest(.audit)
+        Card(title: "Is everything really in Google Drive?", symbol: "checkmark.seal.fill", tint: Theme.good,
+             trailing: (audit?.running ?? false) ? nil : AnyView(CapsuleButton(title: audit == nil ? "Check now" : "Check again", symbol: "arrow.clockwise", color: Theme.good, style: .soft) { model.runAudit() })) {
+            VStack(alignment: .leading, spacing: 6) {
+                if let a = audit, a.running {
+                    Running(text: "Asking Google Drive for every file's hash…", since: a.task.startedAt)
+                } else if let r = audit?.decode(AuditReport.self), let a = audit {
+                    AuditSummary(report: r, at: a.task.startedAt)
+                } else if let msg = audit?.errorMessage {
+                    Text("The check could not finish: \(msg)").font(.callout).foregroundStyle(Theme.bad)
+                } else {
+                    Text("Re-reads the SHA-256 of every file in Google Drive and compares it with the hash taken when it left the phone. Every removal also re-checks its own items in the same run.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

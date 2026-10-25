@@ -68,7 +68,7 @@ public enum Detector {
         for r in s.recipes where r.recipe.kind != .largeVideos {
             if r.removableNow.count > 0 {
                 out.append(Finding(id: "ready.\(r.id)", kind: .space, symbol: r.recipe.symbol,
-                                   title: "\(Fmt.count(r.removableNow.count)) \(noun(r.recipe)) are safe in Google Drive",
+                                   title: "About \(Fmt.count(r.removableNow.count)) \(noun(r.recipe)) are safe in Google Drive",
                                    detail: "\(Fmt.bytes(r.removableNow.bytes)) you can take off the phone now.",
                                    actionTitle: "Remove from iPhone", action: .recipe(r.id), bytes: r.removableNow.bytes))
             } else if r.notBackedUp.count > 0 {

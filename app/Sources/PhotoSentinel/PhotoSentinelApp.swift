@@ -91,6 +91,7 @@ struct ContentView: View {
         .sheet(isPresented: Binding(get: { !model.onboarded }, set: { if !$0 { model.onboarded = true } })) {
             OnboardingView(model: model)
         }
+        .sheet(item: $model.removing) { r in RemovalSheet(model: model, recipe: r) }
     }
 
     @ViewBuilder private var page: some View {
@@ -132,8 +133,8 @@ struct Header: View {
     }
 
     private var subtitle: String {
-        guard let s = model.library else { return "Phase A preview · reading the ledger" }
-        return "Phase A preview · \(Fmt.count(s.onPhone.count)) items on your iPhone · \(Fmt.bytes(s.onPhone.bytes))"
+        guard let s = model.library else { return "Reading the ledger" }
+        return "\(Fmt.count(s.onPhone.count)) items on your iPhone · \(Fmt.bytes(s.onPhone.bytes))"
     }
 
     @ViewBuilder private var jobPill: some View {

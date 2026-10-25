@@ -41,7 +41,13 @@ public struct Job: Identifiable, Hashable, Sendable {
 
     /// The age cycle.sh was given, which its log does not record. These are the
     /// owner's choices so far (HANDOVER.md); a new source starts with no age.
-    public static let ages: [String: String] = ["screenshot": "1y", "whatsapp": "18m"]
+    public static var ages: [String: String] {
+        var a = ["screenshot": "1y", "whatsapp": "18m"]
+        // Ages of the jobs this app started, so Resume repeats the same selection.
+        if let d = FileManager.default.contents(atPath: Jobs.agesPath),
+           let saved = try? JSONDecoder().decode([String: String].self, from: d) { a.merge(saved) { $1 } }
+        return a
+    }
 
     /// The command that resumes this job from the ledger, the same one HANDOVER.md gives.
     public var resumeArguments: [String] {
@@ -189,14 +195,35 @@ public enum Jobs {
     /// outlives this app. Backup only: cycle.sh never removes anything from the phone.
     /// Refuses when any cycle.sh is already running (one PhotoKit exporter at a time).
     public static func resume(_ job: Job, processes: [String]) -> Result<Void, JobError> {
-        if processes.contains(where: { $0.contains("/cycle.sh ") && !$0.hasPrefix("caffeinate") }) {
+        start(job.resumeArguments, source: job.source, processes: processes)
+    }
+
+    static var agesPath: String { home + "/ui/ages.json" }
+
+    public static func anyRunning(_ processes: [String]) -> Bool {
+        processes.contains(where: { $0.contains("/cycle.sh ") && !$0.hasPrefix("caffeinate") })
+    }
+
+    /// Starts a new backup job: `cycle.sh <type> 40 <source> [older]`. Same rules as resume.
+    public static func start(type: String, source: String, older: String?, processes: [String]) -> Result<Void, JobError> {
+        if let older {
+            var saved = (FileManager.default.contents(atPath: agesPath)).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+            saved[source] = older
+            try? FileManager.default.createDirectory(atPath: home + "/ui", withIntermediateDirectories: true)
+            try? JSONEncoder().encode(saved).write(to: URL(fileURLWithPath: agesPath))
+        }
+        return start([type, "40", source] + (older.map { [$0] } ?? []), source: source, processes: processes)
+    }
+
+    static func start(_ arguments: [String], source: String, processes: [String]) -> Result<Void, JobError> {
+        if anyRunning(processes) {
             return .failure(.message("Another job is running. Only one runs at a time, so this one waits until it ends."))
         }
         guard FileManager.default.isExecutableFile(atPath: cyclePath) else {
             return .failure(.message("cycle.sh is not at \(cyclePath)."))
         }
-        let out = home + "/cycle-\(job.source).out"
-        let args = job.resumeArguments.map { "'\($0)'" }.joined(separator: " ")
+        let out = home + "/cycle-\(source).out"
+        let args = arguments.map { "'\($0)'" }.joined(separator: " ")
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/bash")
         p.arguments = ["-c", "cd ~ && nohup caffeinate -dimsu '\(cyclePath)' \(args) > '\(out)' 2>&1 & disown"]
