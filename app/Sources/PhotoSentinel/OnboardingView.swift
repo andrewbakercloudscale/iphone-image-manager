@@ -1,13 +1,12 @@
 import PhotoCore
 import SwiftUI
 
-/// First run. Phase A sits on the owner's existing setup, so the steps check rather than
-/// configure: the promise, doctor's checks, and what the ledger already knows. Phase C
-/// replaces step 2 with PhotoKit access and Sign in with Google.
+/// First run, in the order the owner asked for: the promise, whether this Mac is ready,
+/// what is going on with the library, then the options and what each would do.
 struct OnboardingView: View {
     @ObservedObject var model: Model
     @State private var step = 0
-    static let steps = 3
+    static let steps = 4
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -21,8 +20,9 @@ struct OnboardingView: View {
             Group {
                 switch step {
                 case 0: promise
-                case 1: ScrollView { DoctorList(report: model.doctor, running: model.doctorRunning) }
-                default: firstLook
+                case 1: ScrollView { DoctorPanel(model: model) }
+                case 2: ScrollView { account }
+                default: ScrollView { options }
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 300, alignment: .topLeading)
@@ -38,14 +38,15 @@ struct OnboardingView: View {
             }
         }
         .padding(24)
-        .frame(width: 580)
+        .frame(width: 720, height: 720)
     }
 
     private var title: String {
         switch step {
         case 0: "Free up your iPhone without losing a photo"
         case 1: "Checking this Mac"
-        default: "What it found"
+        case 2: "What's on your iPhone"
+        default: "Your options, and what each would do"
         }
     }
 
@@ -68,22 +69,61 @@ struct OnboardingView: View {
         }
     }
 
-    private var firstLook: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let s = model.library {
-                Text("\(Fmt.count(s.onPhone.count)) items on your iPhone, \(Fmt.bytes(s.onPhone.bytes)). \(Fmt.pct(s.coverage)) is already safe in Google Drive.")
+    /// Every source, WhatsApp included, with how much of it is already safe in Drive.
+    @ViewBuilder private var account: some View {
+        if let s = model.library {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    Kpi(label: "ON YOUR IPHONE", value: Fmt.bytes(s.onPhone.bytes), note: "\(Fmt.count(s.onPhone.count)) items")
+                    Kpi(label: "SAFE IN GOOGLE DRIVE", value: Fmt.pct(s.coverage), note: Fmt.bytes(s.verified.bytes), color: Theme.good)
+                    Kpi(label: "ONLY ON THE PHONE", value: Fmt.bytes(s.onPhone.bytes - s.verified.bytes), note: "not backed up yet", color: Theme.warn)
+                }
                 StackBar(parts: s.channels.map { (Theme.color($0.channel), Double($0.total.bytes)) })
-                ForEach(s.recipes.filter { $0.selected.count > 0 && $0.recipe.kind != .largeVideos }) { r in
-                    HStack {
-                        Image(systemName: r.recipe.symbol).foregroundStyle(Tab.cleanUp.color).frame(width: 20)
-                        Text(r.recipe.title)
-                        Spacer()
-                        Text("frees \(Fmt.bytes(r.selected.bytes))").fontWeight(.semibold).monospacedDigit()
+                VStack(spacing: 8) {
+                    ForEach(s.channels) { c in
+                        HStack(spacing: 10) {
+                            RoundedRectangle(cornerRadius: 3).fill(Theme.color(c.channel)).frame(width: 12, height: 12)
+                            Text(c.channel.title).fontWeight(.semibold).frame(width: 140, alignment: .leading)
+                            Text("\(Fmt.count(c.photos.count)) photos · \(Fmt.count(c.videos.count)) videos")
+                                .foregroundStyle(.secondary).frame(width: 190, alignment: .leading)
+                            Text(Fmt.bytes(c.total.bytes)).fontWeight(.semibold).monospacedDigit().frame(width: 70, alignment: .trailing)
+                            Meter(value: c.coverage, color: c.coverage >= 0.999 ? Theme.good : Tab.backup.color, height: 6)
+                            Text("\(Fmt.pct(c.coverage)) in Drive").foregroundStyle(.secondary).monospacedDigit().frame(width: 90, alignment: .trailing)
+                        }
+                        .font(.callout)
                     }
                 }
-                Text("Change the ages any time in Settings.").font(.callout).foregroundStyle(.secondary)
-            } else {
-                ProgressView("Reading your library…")
+                if let j = model.activeJob {
+                    Label("Backing up \(j.title) now. It carries on in the background.", systemImage: "icloud.and.arrow.up.fill")
+                        .font(.callout).foregroundStyle(Tab.backup.color)
+                }
+            }
+        } else {
+            ProgressView("Reading your library…")
+        }
+    }
+
+    /// The choices, each with its effect beside it, then what the library itself suggests.
+    private var options: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Pick how old things must be before they leave the phone. Every option backs up to Google Drive first, and nothing is removed until you confirm it.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            AgesCard(model: model)
+            if !model.suggestions.isEmpty {
+                Card(title: "Also worth a look", symbol: "sparkles", tint: Tab.cleanUp.color) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(model.suggestions.prefix(4)) { sg in
+                            HStack {
+                                Text(sg.stats.recipe.title)
+                                Spacer()
+                                Text("frees \(Fmt.bytes(sg.stats.selected.bytes))").fontWeight(.semibold).monospacedDigit()
+                                Text("· \(Fmt.bytes(sg.stats.removableNow.bytes)) today").foregroundStyle(.secondary).monospacedDigit()
+                            }
+                            .font(.callout)
+                        }
+                        Text("All of these, and your own filters, are on the Clean up tab.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
         }
     }

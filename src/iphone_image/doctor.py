@@ -741,21 +741,40 @@ CHECKS: list[Callable[[Config], Check]] = [
 ]
 
 
-def run_all(config: Config, *, skip_slow: bool = False) -> list[Check]:
-    """Run every check. A crashing check reports FAIL rather than taking the run down."""
+def check_key(func: Callable[[Config], Check]) -> str:
+    """A check's stable name, `check_icloud_mode` -> `icloud_mode`. What --progress reports."""
+    return func.__name__.removeprefix("check_")
+
+
+def planned(*, skip_slow: bool = False) -> list[Callable[[Config], Check]]:
+    return [f for f in CHECKS if not (skip_slow and f is check_photos_authorisation)]
+
+
+def run_all(
+    config: Config,
+    *,
+    skip_slow: bool = False,
+    on_check: Callable[[str, Check | None], None] | None = None,
+) -> list[Check]:
+    """Run every check. A crashing check reports FAIL rather than taking the run down.
+
+    `on_check(key, None)` fires as a check starts and `on_check(key, result)` as it
+    ends, so a caller can show what is happening while the slow ones run.
+    """
     results: list[Check] = []
-    for func in CHECKS:
-        if skip_slow and func is check_photos_authorisation:
-            continue
+    for func in planned(skip_slow=skip_slow):
+        if on_check:
+            on_check(check_key(func), None)
         try:
-            results.append(func(config))
+            result = func(config)
         except Exception as exc:  # a broken check must not hide the others
-            results.append(
-                Check(
-                    func.__name__.removeprefix("check_").replace("_", " "),
-                    FAIL,
-                    f"the check itself failed: {type(exc).__name__}: {exc}",
-                    "This is a bug. Please report it.",
-                )
+            result = Check(
+                check_key(func).replace("_", " "),
+                FAIL,
+                f"the check itself failed: {type(exc).__name__}: {exc}",
+                "This is a bug. Please report it.",
             )
+        results.append(result)
+        if on_check:
+            on_check(check_key(func), result)
     return results

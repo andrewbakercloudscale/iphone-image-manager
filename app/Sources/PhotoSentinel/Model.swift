@@ -12,6 +12,9 @@ final class Model: ObservableObject {
     @Published var error: String?
     @Published var loading = false
     @Published var doctorRunning = false
+    /// Doctor's checks as they run: key and status ("" waiting, "RUNNING", then PASS/WARN/FAIL).
+    @Published var doctorSteps: [(key: String, status: String)] = []
+    @Published var doctorStarted = Date()
     @Published var notice: String?
     @Published var tab: Tab = .checkup
     @Published var tasks: [TaskStatus] = []
@@ -207,14 +210,30 @@ final class Model: ObservableObject {
 
     func refreshDoctor() {
         doctorRunning = true
+        doctorSteps = []
+        doctorStarted = Date()
         let engine = engine
         Task.detached {
-            let report = try? engine.doctor()
+            let report = try? engine.doctor { p in
+                Task { @MainActor in self.apply(p) }
+            }
             await MainActor.run {
                 self.doctor = report
                 self.doctorRunning = false
             }
         }
+    }
+
+    private func apply(_ p: DoctorProgress) {
+        switch p {
+        case .plan(let keys): doctorSteps = keys.map { ($0, "") }
+        case .started(let k): set(k, "RUNNING")
+        case .finished(let k, let status): set(k, status)
+        }
+    }
+
+    private func set(_ key: String, _ status: String) {
+        if let i = doctorSteps.firstIndex(where: { $0.key == key }) { doctorSteps[i].status = status }
     }
 
     func resume(_ id: String) {

@@ -264,3 +264,32 @@ final class FilterTests: XCTestCase {
         }
     }
 }
+
+final class DoctorProgressTests: XCTestCase {
+    func testLinesArriveWhole() {
+        final class Box: @unchecked Sendable { var lines: [String] = [] }
+        let box = Box()
+        let b = LineBuffer { box.lines.append($0) }
+        b.feed(Data(#"{"plan": ["a"]}"#.utf8))
+        b.feed(Data("\n{\"start\"".utf8))
+        b.feed(Data(": \"a\"}\n".utf8))
+        XCTAssertEqual(box.lines, [#"{"plan": ["a"]}"#, #"{"start": "a"}"#])
+    }
+
+    /// The real doctor, about a minute. `PS_SLOW=1 swift test --filter DoctorProgress`.
+    func testTheRealDoctorReportsEachCheck() throws {
+        guard ProcessInfo.processInfo.environment["PS_SLOW"] == "1" else { throw XCTSkip("slow") }
+        final class Box: @unchecked Sendable { var events: [String] = [] ; let lock = NSLock() }
+        let box = Box()
+        let report = try CLIEngine().doctor { p in
+            box.lock.lock(); defer { box.lock.unlock() }
+            switch p {
+            case .plan(let k): box.events.append("plan:\(k.count)")
+            case .started(let k): box.events.append("start:\(k)")
+            case .finished(let k, let s): box.events.append("done:\(k):\(s)")
+            }
+        }
+        XCTAssertEqual(box.events.first, "plan:\(report.checks)")
+        XCTAssertEqual(box.events.filter { $0.hasPrefix("done:") }.count, report.checks)
+    }
+}

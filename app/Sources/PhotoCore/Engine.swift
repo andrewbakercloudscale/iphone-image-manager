@@ -11,6 +11,32 @@ public struct Check: Codable, Identifiable, Hashable, Sendable {
     public var failed: Bool { status == "FAIL" }
 }
 
+public enum DoctorProgress: Sendable {
+    case plan([String])
+    case started(String)
+    case finished(String, String)
+}
+
+/// Splits a pipe's output into lines as it arrives.
+final class LineBuffer: @unchecked Sendable {
+    private var pending = Data()
+    private let lock = NSLock()
+    private let emit: @Sendable (String) -> Void
+    init(_ emit: @escaping @Sendable (String) -> Void) { self.emit = emit }
+
+    func feed(_ data: Data) {
+        lock.lock()
+        pending.append(data)
+        var lines: [String] = []
+        while let i = pending.firstIndex(of: 0x0A) {
+            lines.append(String(decoding: pending[pending.startIndex..<i], as: UTF8.self))
+            pending.removeSubrange(pending.startIndex...i)
+        }
+        lock.unlock()
+        lines.forEach(emit)
+    }
+}
+
 public struct DoctorReport: Codable, Sendable {
     public let checks: Int
     public let passed: Int
@@ -55,7 +81,19 @@ public struct CLIEngine: Engine {
         return try JSONDecoder().decode(DoctorReport.self, from: data)
     }
 
-    func run(_ args: [String]) throws -> Data {
+    /// The same, reporting each check as it starts and ends (`doctor --progress`), so the
+    /// app can say what it is doing during the minute this takes.
+    public func doctor(progress: @escaping @Sendable (DoctorProgress) -> Void) throws -> DoctorReport {
+        let data = try run(["--json", "doctor", "--skip-slow", "--progress"]) { line in
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { return }
+            if let plan = obj["plan"] as? [String] { progress(.plan(plan)) }
+            if let key = obj["start"] as? String { progress(.started(key)) }
+            if let key = obj["done"] as? String { progress(.finished(key, obj["status"] as? String ?? "")) }
+        }
+        return try JSONDecoder().decode(DoctorReport.self, from: data)
+    }
+
+    func run(_ args: [String], stderrLine: (@Sendable (String) -> Void)? = nil) throws -> Data {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: repo + "/.venv/bin/python")
         p.arguments = ["-m", "iphone_image"] + args
@@ -65,7 +103,14 @@ public struct CLIEngine: Engine {
         p.environment = env
         let out = Pipe()
         p.standardOutput = out
-        p.standardError = FileHandle.nullDevice
+        if let stderrLine {
+            let err = Pipe()
+            p.standardError = err
+            let buffer = LineBuffer(stderrLine)
+            err.fileHandleForReading.readabilityHandler = { h in buffer.feed(h.availableData) }
+        } else {
+            p.standardError = FileHandle.nullDevice
+        }
         try p.run()
         let data = out.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()

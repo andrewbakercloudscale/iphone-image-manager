@@ -321,15 +321,8 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Card(title: "Clean-up ages", symbol: "calendar.badge.clock", tint: Tab.settings.color) {
-                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
-                    ageRow("Camera videos older than", $model.videoAge)
-                    ageRow("WhatsApp older than", $model.whatsappAge)
-                    ageRow("Screenshots older than", $model.screenshotAge)
-                    ageRow("Screen recordings older than", $model.recordingAge)
-                }
-            }
-            Card(title: "Where things are", symbol: "folder.fill", tint: Tab.settings.color) {
+            AgesCard(model: model)
+            Card(title: "Where things are", symbol: "folder.fill", tint: Tab.backup.color) {
                 Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
                     GridRow { Text("Ledger"); TextField("", text: $model.ledgerPath).textFieldStyle(.roundedBorder) }
                     GridRow { Text("iphone-image repo"); TextField("", text: $model.repoPath).textFieldStyle(.roundedBorder) }
@@ -337,44 +330,55 @@ struct SettingsView: View {
                 }
                 .font(.callout)
             }
-            Card(title: "Doctor", symbol: "stethoscope", tint: Tab.settings.color,
-                 trailing: AnyView(CapsuleButton(title: model.doctorRunning ? "Checking…" : "Run again", symbol: "arrow.clockwise", color: Tab.settings.color, style: .soft) { model.refreshDoctor() })) {
-                DoctorList(report: model.doctor, running: model.doctorRunning)
+            Card(title: "Is this Mac ready?", symbol: "stethoscope", tint: Tab.checkup.color,
+                 trailing: model.doctorRunning ? nil : AnyView(CapsuleButton(title: "Run again", symbol: "arrow.clockwise", color: Tab.checkup.color, style: .soft) { model.refreshDoctor() })) {
+                DoctorPanel(model: model)
             }
         }
-        .onChange(of: [model.videoAge, model.whatsappAge, model.screenshotAge, model.recordingAge, model.ledgerPath]) { model.refresh() }
+        .onChange(of: model.ledgerPath) { model.refresh() }
+    }
+}
+
+/// The ages each clean-up uses. In Settings, and in onboarding before the first look,
+/// so the numbers shown there are already the owner's.
+struct AgesCard: View {
+    @ObservedObject var model: Model
+    /// Show what each choice frees, next to it.
+    var impact = true
+
+    var body: some View {
+        Card(title: "Clean-up ages", symbol: "calendar.badge.clock", tint: Tab.cleanUp.color) {
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
+                ageRow("Camera videos older than", $model.videoAge, .oldVideos)
+                ageRow("WhatsApp older than", $model.whatsappAge, .whatsapp)
+                ageRow("Screenshots older than", $model.screenshotAge, .screenshots)
+                ageRow("Screen recordings older than", $model.recordingAge, .screenRecordings)
+            }
+        }
+        .onChange(of: [model.videoAge, model.whatsappAge, model.screenshotAge, model.recordingAge]) { model.refresh() }
     }
 
-    private func ageRow(_ label: String, _ value: Binding<String>) -> some View {
+    /// "frees 21.3 GB · 1.6 GB today": all of it once backed up, and what can go now.
+    @ViewBuilder private func effect(_ kind: Recipe.Kind) -> some View {
+        if impact, let r = model.library?.recipes.first(where: { $0.recipe.kind == kind }) {
+            HStack(spacing: 6) {
+                Text("frees \(Fmt.bytes(r.selected.bytes))").fontWeight(.semibold).monospacedDigit()
+                Text("· \(Fmt.count(r.selected.count)) items · \(Fmt.bytes(r.removableNow.bytes)) can go today")
+                    .foregroundStyle(.secondary).monospacedDigit()
+                if model.loading { ProgressView().controlSize(.mini) }
+            }
+            .font(.callout)
+        }
+    }
+
+    private func ageRow(_ label: String, _ value: Binding<String>, _ kind: Recipe.Kind) -> some View {
         GridRow {
             Text(label)
             Picker("", selection: value) {
                 ForEach(["30d", "60d", "90d", "6m", "1y", "18m", "2y", "3y"], id: \.self) { Text(Age($0)?.words ?? $0).tag($0) }
             }
             .labelsHidden().frame(width: 140)
-        }
-    }
-}
-
-struct DoctorList: View {
-    let report: DoctorReport?
-    let running: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if report == nil { Text(running ? "Running doctor…" : "Doctor did not run. Check the repo path.").foregroundStyle(.secondary) }
-            ForEach(report?.results ?? []) { c in
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: c.passed ? "checkmark.circle.fill" : (c.failed ? "xmark.octagon.fill" : "exclamationmark.triangle.fill"))
-                        .foregroundStyle(c.passed ? Theme.good : (c.failed ? Theme.bad : Theme.warn))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(c.name).fontWeight(.semibold)
-                        Text(c.detail).foregroundStyle(.secondary)
-                        if !c.remedy.isEmpty { Text(c.remedy).foregroundStyle(Theme.warn) }
-                    }
-                }
-                .font(.callout)
-            }
+            effect(kind)
         }
     }
 }

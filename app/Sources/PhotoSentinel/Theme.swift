@@ -83,7 +83,8 @@ struct Card<Content: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.cardFill))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.cardStroke, lineWidth: 1.5))
+        // The border carries the card's colour too, so each panel reads as its own kind.
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(title == nil ? Theme.cardStroke : tint.opacity(0.55), lineWidth: 1.5))
         .shadow(color: .black.opacity(0.14), radius: 4, y: 2)
     }
 }

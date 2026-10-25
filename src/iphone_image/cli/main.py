@@ -7,6 +7,7 @@ destructive yet; removal arrives in P10, gated on its own test harness.
 
 from __future__ import annotations
 
+import json
 import sys
 import textwrap
 from dataclasses import dataclass, replace
@@ -30,7 +31,7 @@ from ..config import (
     load_config,
 )
 from ..db.database import Database, DatabaseError
-from ..doctor import FAIL, PASS, WARN, run_all
+from ..doctor import FAIL, PASS, WARN, Check, check_key, planned, run_all
 from ..journal import Journal
 from ..logs import get_logger, setup_logging
 from ..output import Output, human_bytes
@@ -1430,10 +1431,27 @@ def release(ctx: Context, apply_: bool, **kwargs: Any) -> None:
     is_flag=True,
     help="Skip checks that may prompt or take time, such as Photos authorisation.",
 )
+@click.option(
+    "--progress",
+    is_flag=True,
+    help="Write one JSON line per check to stderr as it starts and ends, for the Mac app.",
+)
 @pass_context
-def doctor(ctx: Context, skip_slow: bool) -> None:
+def doctor(ctx: Context, skip_slow: bool, progress: bool) -> None:
     """Check the machine, not just the config, and say what to change."""
-    results = run_all(ctx.config, skip_slow=skip_slow)
+
+    def report(key: str, check: Check | None) -> None:
+        line: dict[str, Any] = (
+            {"start": key} if check is None else {"done": key, "status": check.status}
+        )
+        sys.stderr.write(json.dumps(line) + "\n")
+        sys.stderr.flush()
+
+    if progress:
+        keys = [check_key(f) for f in planned(skip_slow=skip_slow)]
+        sys.stderr.write(json.dumps({"plan": keys}) + "\n")
+        sys.stderr.flush()
+    results = run_all(ctx.config, skip_slow=skip_slow, on_check=report if progress else None)
     failures = [c for c in results if c.status == FAIL]
     warnings = [c for c in results if c.status == WARN]
 
