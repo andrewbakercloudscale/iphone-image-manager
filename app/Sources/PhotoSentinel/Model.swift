@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import PhotoCore
 import SwiftUI
@@ -22,6 +23,12 @@ final class Model: ObservableObject {
     /// A section to scroll to once its tab shows ("builder").
     @Published var scrollTarget: String?
     let permissions = Permissions()
+    let updates = UpdateChecker()
+    private var forwarding: AnyCancellable?
+    /// A backup or move is running from this copy's code or settings: updates and saves wait.
+    var backupBusy: Bool {
+        jobs.contains { $0.state == .running } || tasks.contains { $0.running && ($0.task.kind == .backup || $0.task.kind == .refile) }
+    }
     /// "Apply my plan": the clean-ups still to walk through, one removal sheet at a time.
     @Published var plan: [Recipe] = []
     @Published var planDone: [String] = []
@@ -78,6 +85,9 @@ final class Model: ObservableObject {
     var activeJob: Job? { jobs.first { if case .running = $0.state { return true }; if case .paused = $0.state { return true }; return false } }
 
     func start() {
+        // The menu bar and footer read the update through this model.
+        forwarding = updates.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        updates.schedule()
         loadQueue()
         loadFilters()
         refreshTasks()

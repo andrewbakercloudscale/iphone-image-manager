@@ -46,6 +46,7 @@ struct AboutView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Photo Sentinel").font(.largeTitle.weight(.bold))
                 Text("Version \(Self.version) (build \(Self.build))").font(.title3.weight(.medium)).monospacedDigit()
+                UpdatesRow(updates: model.updates, busy: model.backupBusy).padding(.vertical, 4)
                 Text("The backup manager for your iPhone: everything copied to your own Google Drive and checked, then cleared off the phone with proof for every item.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Button { ShareApp.show() } label: {

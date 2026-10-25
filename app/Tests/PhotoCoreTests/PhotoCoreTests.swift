@@ -306,3 +306,18 @@ final class DoctorProgressTests: XCTestCase {
         XCTAssertEqual(box.events.filter { $0.hasPrefix("done:") }.count, report.checks)
     }
 }
+
+final class UpdatesTests: XCTestCase {
+    func testVersionsCompareByNumberNotText() {
+        XCTAssertTrue(Updates.isNewer("0.10.0", than: "0.9.1"))
+        XCTAssertTrue(Updates.isNewer("v0.2", than: "0.1.9"))
+        XCTAssertFalse(Updates.isNewer("0.1.0", than: "0.1"))
+    }
+
+    func testParsesARelease() {
+        let json = ###"{"tag_name":"v0.2.0","html_url":"https://github.com/x/y/releases/tag/v0.2.0","body":"## New\n- **Folders** per source\n- Updates\n- third"}"###
+        let rel = Updates.parse(Data(json.utf8))
+        XCTAssertEqual(rel?.version, "0.2.0")
+        XCTAssertEqual(Updates.highlights(rel?.notes ?? ""), ["Folders per source", "Updates"])
+    }
+}

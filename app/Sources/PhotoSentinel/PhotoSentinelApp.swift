@@ -26,7 +26,9 @@ struct PhotoSentinelApp: App {
             MenuView(model: model)
         } label: {
             Image(systemName: menuSymbol)
-            if let j = model.activeJob, let p = j.progress { Text(Fmt.pct(p)).monospacedDigit() }
+            let pct = model.activeJob?.progress.map { Fmt.pct($0) }
+            let label = [pct, model.updates.update == nil ? nil : "● update"].compactMap { $0 }.joined(separator: " ")
+            if !label.isEmpty { Text(label).monospacedDigit() }
         }
         .menuBarExtraStyle(.window)
     }
@@ -64,6 +66,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             Header(model: model)
             TabBar(selection: $model.tab, badges: badges)
+            UpdateBanner(updates: model.updates, busy: model.backupBusy)
             PermissionsBanner(permissions: model.permissions)
             if let notice = model.notice {
                 HStack {
@@ -188,7 +191,11 @@ struct Footer: View {
             CapsuleButton(title: "Open cycle.log", symbol: "doc.text.fill", color: Tab.backup.color, style: .soft) {
                 NSWorkspace.shared.open(URL(fileURLWithPath: Jobs.logPath))
             }
-            CapsuleButton(title: "About", symbol: "info.circle.fill", color: Tab.library.color, style: .soft) { AboutWindow.show(model) }
+            if let rel = model.updates.update {
+                CapsuleButton(title: "About: v\(rel.version) is out", symbol: "arrow.down.circle.fill", color: Color(hex: "#ea580c")) { AboutWindow.show(model) }
+            } else {
+                CapsuleButton(title: "About", symbol: "info.circle.fill", color: Tab.library.color, style: .soft) { AboutWindow.show(model) }
+            }
             CapsuleButton(title: "Share", symbol: "square.and.arrow.up", color: Tab.checkup.color, style: .soft) { ShareApp.show() }
                 .help("Share with a friend by Messages, Mail, WhatsApp, AirDrop and more")
             CapsuleButton(title: "Quit", symbol: "power", color: Theme.bad, style: .soft) { NSApp.terminate(nil) }
@@ -205,6 +212,12 @@ struct MenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Photo Sentinel").font(.headline)
+            if let rel = model.updates.update {
+                Button { model.updates.install(busy: model.backupBusy) } label: {
+                    Label("Update available: v\(rel.version)", systemImage: "arrow.down.circle.fill").foregroundStyle(Color(hex: "#2563eb"))
+                }
+                .buttonStyle(.plain)
+            }
             if model.jobs.isEmpty { Text("No backup jobs yet.").foregroundStyle(.secondary) }
             ForEach(model.jobs.prefix(4)) { j in
                 JobRow(job: j, compact: true) { model.resume(j.id) }
