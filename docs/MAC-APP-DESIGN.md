@@ -207,6 +207,8 @@ Tests/ImageCoreTests/         ported from tests/*.py first
 
 Removal is the last thing ported and the first thing tested.
 
+**Phase A status (2026-10-25):** built in `app/` (see `app/README.md`). All seven tabs read the real ledger; Activity shows jobs in flight from `cycle.log` and resumes a stopped backup job; the menu bar shows the job in flight. Clean-up shows each recipe's numbers and its CLI command; the sheet that runs removal is Phase B. Onboarding is three steps (promise, doctor, first look) until Phase C adds PhotoKit access and Sign in with Google.
+
 ## 11. Open questions for the owner
 
 None open. All settled 2026-10-25.

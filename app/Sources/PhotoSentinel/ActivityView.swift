@@ -1,0 +1,120 @@
+import PhotoCore
+import SwiftUI
+
+/// Jobs in flight, and resuming them: the owner's ask of 2026-10-25.
+struct ActivityView: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if let j = model.activeJob { hero(j) }
+            Card(title: "Jobs in flight", symbol: "waveform.path.ecg", tint: Tab.activity.color,
+                 trailing: AnyView(Text("each resumes where it stopped; nothing is redone").font(.callout).foregroundStyle(.secondary))) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if model.jobs.isEmpty { Text("No backup jobs in cycle.log yet.").foregroundStyle(.secondary) }
+                    ForEach(model.jobs) { j in JobRow(job: j) { model.resume(j.id) } }
+                }
+            }
+            if let ops = model.library?.unfinishedOperations, !ops.isEmpty {
+                Card(title: "Unfinished steps from earlier runs", symbol: "list.bullet.clipboard", tint: Tab.activity.color) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(ops) { op in
+                            HStack(spacing: 10) {
+                                Image(systemName: op.needsPerson ? "hand.raised.fill" : "arrow.triangle.2.circlepath")
+                                    .foregroundStyle(op.needsPerson ? Theme.warn : Theme.good)
+                                Text(op.plain).font(.body.weight(.medium))
+                                Text(local(op.startedAt)).foregroundStyle(.secondary).monospacedDigit()
+                                Spacer()
+                                Text(op.needsPerson ? "Needs you: re-plan and re-check Drive before it runs again"
+                                     : inProgress(op, ops) ? "In progress now" : "Safe: the next run picks it up")
+                                    .font(.callout).foregroundStyle(.secondary)
+                            }
+                        }
+                        Text("A removal never resumes by itself. Copy, upload and check steps are safe to repeat: anything already verified in Drive is skipped.")
+                            .font(.callout).foregroundStyle(.secondary).padding(.top, 4)
+                    }
+                }
+            }
+        }
+    }
+
+    /// The newest step of its kind, started in the last 3 hours while a job runs, is that
+    /// job's current step rather than a leftover.
+    private func inProgress(_ op: PhotoCore.Operation, _ ops: [PhotoCore.Operation]) -> Bool {
+        guard model.activeJob != nil, ops.first(where: { $0.operation == op.operation })?.id == op.id,
+              let d = ISO8601DateFormatter().date(from: op.startedAt) else { return false }
+        return Date().timeIntervalSince(d) < 3 * 3600
+    }
+
+    private func local(_ iso: String) -> String {
+        guard let d = ISO8601DateFormatter().date(from: iso) else { return String(iso.prefix(16)) }
+        return d.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private func hero(_ j: Job) -> some View {
+        let paused: String? = { if case .paused(let why) = j.state { return why }; return nil }()
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 14) {
+                Image(systemName: paused == nil ? "icloud.and.arrow.up.fill" : "pause.fill").font(.system(size: 36, weight: .semibold))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Backing up \(j.title)" + (paused == nil ? "" : " · paused")).font(.title2.weight(.bold))
+                    Text(paused ?? j.lastLine).font(.body).lineLimit(2)
+                }
+                Spacer()
+            }
+            if let p = j.progress, let left = j.left {
+                HStack {
+                    Text("\(Fmt.count(left)) left to copy from Photos")
+                    Spacer()
+                    Text(Fmt.pct(p))
+                }
+                .font(.callout.weight(.semibold)).monospacedDigit()
+                Meter(value: p, color: .white, height: 10).opacity(0.95)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(20)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Theme.calmGradient))
+    }
+}
+
+struct JobRow: View {
+    let job: Job
+    var compact = false
+    let resume: () -> Void
+
+    private var look: (color: Color, label: String, why: String?) {
+        switch job.state {
+        case .running: (Theme.good, "Running", nil)
+        case .paused(let why): (Theme.warn, "Paused", why)
+        case .stopped(let why): (Theme.bad, "Stopped", why)
+        case .finished: (Color.secondary, "Finished", nil)
+        }
+    }
+
+    var body: some View {
+        let l = look
+        HStack(alignment: .top, spacing: 10) {
+            Circle().fill(l.color).frame(width: 10, height: 10).padding(.top, 5)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text(job.title).font(.body.weight(.semibold))
+                    Text(l.label).font(.callout.weight(.semibold)).foregroundStyle(l.color)
+                    if let left = job.left, left > 0 {
+                        Text("· \(Fmt.count(left)) left").font(.callout).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                }
+                if let why = l.why { Text(why).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                if !compact { Text("Last: \(job.lastAt) · \(job.lastLine)").font(.caption).foregroundStyle(.tertiary).lineLimit(1) }
+                if !compact, let p = job.progress, job.state != .finished { Meter(value: p, color: l.color, height: 6).padding(.top, 2) }
+            }
+            Spacer(minLength: 6)
+            if case .stopped = job.state {
+                CapsuleButton(title: "Resume", symbol: "play.fill", color: Tab.cleanUp.color, action: resume)
+                    .help("Runs cycle.sh \(job.resumeArguments.joined(separator: " ")) under caffeinate. Backup only: nothing is removed from the phone.")
+            }
+        }
+        .padding(compact ? 6 : 10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(l.color.opacity(0.07)))
+    }
+}

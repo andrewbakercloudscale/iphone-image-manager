@@ -1,0 +1,325 @@
+import PhotoCore
+import SwiftUI
+
+struct LibraryView: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        if let s = model.library {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    Kpi(label: "ON YOUR IPHONE", value: Fmt.bytes(s.onPhone.bytes), note: "\(Fmt.count(s.onPhone.count)) items")
+                    Kpi(label: "SAFE IN GOOGLE DRIVE", value: Fmt.pct(s.coverage), note: "\(Fmt.bytes(s.verified.bytes)) checked", color: Theme.good)
+                    Kpi(label: "YOU COULD FREE", value: Fmt.bytes(s.couldFree), note: "with the clean-ups below", color: Tab.cleanUp.color)
+                    Kpi(label: "GROWING", value: "\(Fmt.bytes(s.weeklyGrowth)) / wk", note: "average of the last 3 months", color: Tab.library.color)
+                }
+                Card(title: "Where the space goes", symbol: "chart.pie.fill", tint: Tab.library.color) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        StackBar(parts: s.channels.map { (Theme.color($0.channel), Double($0.total.bytes)) })
+                        ForEach(s.channels) { c in
+                            HStack {
+                                RoundedRectangle(cornerRadius: 3).fill(Theme.color(c.channel)).frame(width: 11, height: 11)
+                                Text(c.channel.title).frame(width: 150, alignment: .leading)
+                                Text("\(Fmt.count(c.photos.count)) photos · \(Fmt.count(c.videos.count)) videos").foregroundStyle(.secondary)
+                                Spacer()
+                                Text(Fmt.bytes(c.total.bytes)).fontWeight(.semibold).monospacedDigit()
+                            }
+                            .font(.callout)
+                        }
+                    }
+                }
+                HStack(alignment: .top, spacing: 14) {
+                    Card(title: "What you could free", symbol: "sparkles", tint: Tab.cleanUp.color) {
+                        let top = Double(s.recipes.map(\.selected.bytes).max() ?? 1)
+                        VStack(spacing: 8) {
+                            ForEach(s.recipes) { r in
+                                BarRow(label: r.recipe.title, value: Double(r.selected.bytes) / max(top, 1), text: Fmt.bytes(r.selected.bytes), color: Tab.cleanUp.color)
+                            }
+                        }
+                    }
+                    Card(title: "Safe in Google Drive", symbol: "checkmark.shield.fill", tint: Theme.good) {
+                        VStack(spacing: 8) {
+                            ForEach(s.channels) { c in
+                                BarRow(label: c.channel.title, value: c.coverage, text: Fmt.pct(c.coverage), color: Theme.good)
+                            }
+                        }
+                    }
+                }
+                Card(title: "By year taken", symbol: "calendar", tint: Tab.library.color) {
+                    YearChart(years: s.years)
+                }
+                HStack(alignment: .top, spacing: 14) {
+                    Card(title: "Biggest videos", symbol: "video.fill", tint: Tab.backup.color) {
+                        VStack(spacing: 6) {
+                            ForEach(s.biggestVideos.prefix(8)) { v in
+                                HStack {
+                                    Text(v.filename).lineLimit(1)
+                                    Text(String(v.created.prefix(7))).foregroundStyle(.secondary)
+                                    Spacer()
+                                    Text(Fmt.bytes(v.bytes)).fontWeight(.semibold).monospacedDigit()
+                                    Text(v.inDrive ? "in Drive" : "phone only").foregroundStyle(v.inDrive ? Theme.good : Theme.warn).frame(width: 78, alignment: .trailing)
+                                }
+                                .font(.callout)
+                            }
+                        }
+                    }
+                    Card(title: "Apps that fill your library", symbol: "square.grid.2x2.fill", tint: Theme.good) {
+                        let top = Double(s.apps.first?.tally.bytes ?? 1)
+                        VStack(spacing: 8) {
+                            ForEach(s.apps, id: \.bundle) { a in
+                                BarRow(label: Fmt.app(a.bundle), value: Double(a.tally.bytes) / max(top, 1), text: Fmt.bytes(a.tally.bytes), color: Theme.series[2])
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct Kpi: View {
+    let label: String
+    let value: String
+    let note: String
+    var color: Color = .primary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).sectionLabel()
+            Text(value).font(.system(size: 26, weight: .bold)).foregroundStyle(color).monospacedDigit()
+            Text(note).font(.callout).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.cardFill))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.cardStroke, lineWidth: 1.5))
+    }
+}
+
+struct BarRow: View {
+    let label: String
+    let value: Double
+    let text: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(label).frame(width: 170, alignment: .leading).lineLimit(1)
+            Meter(value: value, color: color)
+            Text(text).fontWeight(.semibold).monospacedDigit().frame(width: 70, alignment: .trailing)
+        }
+        .font(.callout)
+    }
+}
+
+struct StackBar: View {
+    let parts: [(Color, Double)]
+
+    var body: some View {
+        GeometryReader { g in
+            let total = max(parts.reduce(0) { $0 + $1.1 }, 1)
+            HStack(spacing: 0) {
+                ForEach(parts.indices, id: \.self) { i in
+                    Rectangle().fill(parts[i].0).frame(width: g.size.width * parts[i].1 / total)
+                }
+            }
+        }
+        .frame(height: 24)
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+}
+
+struct YearChart: View {
+    let years: [(year: String, bytes: Int64, count: Int)]
+
+    var body: some View {
+        let top = Double(years.map(\.bytes).max() ?? 1)
+        let thisYear = Calendar.current.component(.year, from: Date())
+        HStack(alignment: .bottom, spacing: 6) {
+            ForEach(years, id: \.year) { y in
+                VStack(spacing: 4) {
+                    Text(Fmt.bytes(y.bytes)).font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill((Int(y.year) ?? thisYear) < thisYear - 1 ? Tab.library.color : Tab.library.color.opacity(0.45))
+                        .frame(height: max(2, 140 * Double(y.bytes) / max(top, 1)))
+                    Text(y.year).font(.caption).monospacedDigit()
+                }
+                .frame(maxWidth: .infinity)
+                .help("\(y.year): \(Fmt.count(y.count)) items, \(Fmt.bytes(y.bytes))")
+            }
+        }
+        .frame(height: 190, alignment: .bottom)
+    }
+}
+
+struct CleanUpView: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("PICK A CLEAN-UP · EVERY ONE BACKS UP TO GOOGLE DRIVE FIRST").sectionLabel()
+            Text("Phase A shows what each clean-up would do. Removal still runs from the command line, which is printed under each one; the sheet that runs it comes in Phase B.")
+                .font(.callout).foregroundStyle(.secondary)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12)], spacing: 12) {
+                ForEach(model.library?.recipes ?? []) { r in RecipeCard(stats: r) }
+            }
+        }
+    }
+}
+
+struct RecipeCard: View {
+    let stats: RecipeStats
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                SymbolTile(symbol: stats.recipe.symbol, color: Tab.cleanUp.color, size: 34)
+                Text(stats.recipe.title).font(.headline)
+            }
+            Text(stats.recipe.detail).font(.callout).foregroundStyle(.secondary)
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
+                row("On the phone", stats.selected, .primary)
+                row("Ready to remove now", stats.removableNow, Theme.good)
+                row("Not in Drive yet", stats.notBackedUp, Theme.warn)
+                row("Kept for safety", stats.kept, .secondary)
+            }
+            .font(.callout)
+            Text(stats.recipe.command).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(6).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.cardFill))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.cardStroke, lineWidth: 1.5))
+    }
+
+    private func row(_ label: String, _ t: Tally, _ color: Color) -> some View {
+        GridRow {
+            Text(label)
+            Text(Fmt.count(t.count)).monospacedDigit().foregroundStyle(color)
+            Text(Fmt.bytes(t.bytes)).monospacedDigit().foregroundStyle(color).fontWeight(.semibold)
+        }
+    }
+}
+
+struct BackupView: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        if let s = model.library {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    Kpi(label: "CHECKED IN DRIVE", value: Fmt.count(s.verified.count), note: Fmt.bytes(s.verified.bytes), color: Theme.good)
+                    Kpi(label: "ONLY ON THE PHONE", value: Fmt.count(s.onPhone.count - s.verified.count), note: Fmt.bytes(s.onPhone.bytes - s.verified.bytes), color: Theme.warn)
+                }
+                Card(title: "Coverage by source", symbol: "icloud.and.arrow.up.fill", tint: Tab.backup.color) {
+                    VStack(spacing: 10) {
+                        ForEach(s.channels) { c in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(c.channel.title).fontWeight(.semibold)
+                                    Spacer()
+                                    Text("\(Fmt.count(c.verified.count)) of \(Fmt.count(c.total.count)) · \(Fmt.bytes(c.total.bytes - c.verified.bytes)) to go")
+                                        .foregroundStyle(.secondary).monospacedDigit()
+                                }
+                                Meter(value: c.coverage, color: c.coverage >= 0.999 ? Theme.good : Tab.backup.color)
+                            }
+                            .font(.callout)
+                        }
+                    }
+                }
+                Card(title: "Before any removal", symbol: "checkmark.seal.fill", tint: Theme.good) {
+                    Text("Run `iphone-image audit` first. It re-reads every hash from Google Drive and must exit clean; removal also re-checks Drive in the same run, so a copy that has gone missing since is caught twice.")
+                        .font(.callout).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+}
+
+struct BinView: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        if let s = model.library {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    Kpi(label: "REMOVED FROM IPHONE", value: Fmt.count(s.removed.total.count), note: Fmt.bytes(s.removed.total.bytes), color: Tab.bin.color)
+                    Kpi(label: "STILL UNDOABLE", value: Fmt.count(s.removed.recent.count), note: "removed in the last 30 days", color: Theme.good)
+                }
+                Card(title: "How to get something back", symbol: "arrow.uturn.backward.circle.fill", tint: Tab.bin.color) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("For 30 days after removal: Photos on the iPhone › Albums › Recently Deleted › Recover.")
+                        Text("After that: every removed item is in Google Drive. Removal only ever happened after Drive's copy was checked.")
+                        if let last = s.removed.lastAt { Text("Last removal: \(last.prefix(16).replacingOccurrences(of: "T", with: " "))").foregroundStyle(.secondary) }
+                    }
+                    .font(.callout)
+                }
+            }
+        }
+    }
+}
+
+struct SettingsView: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Card(title: "Clean-up ages", symbol: "calendar.badge.clock", tint: Tab.settings.color) {
+                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
+                    ageRow("Camera videos older than", $model.videoAge)
+                    ageRow("WhatsApp older than", $model.whatsappAge)
+                    ageRow("Screenshots older than", $model.screenshotAge)
+                    ageRow("Screen recordings older than", $model.recordingAge)
+                }
+            }
+            Card(title: "Where things are", symbol: "folder.fill", tint: Tab.settings.color) {
+                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
+                    GridRow { Text("Ledger"); TextField("", text: $model.ledgerPath).textFieldStyle(.roundedBorder) }
+                    GridRow { Text("iphone-image repo"); TextField("", text: $model.repoPath).textFieldStyle(.roundedBorder) }
+                    GridRow { Text("Job log"); Text(Jobs.logPath).foregroundStyle(.secondary).textSelection(.enabled) }
+                }
+                .font(.callout)
+            }
+            Card(title: "Doctor", symbol: "stethoscope", tint: Tab.settings.color,
+                 trailing: AnyView(CapsuleButton(title: model.doctorRunning ? "Checking…" : "Run again", symbol: "arrow.clockwise", color: Tab.settings.color, style: .soft) { model.refreshDoctor() })) {
+                DoctorList(report: model.doctor, running: model.doctorRunning)
+            }
+        }
+        .onChange(of: [model.videoAge, model.whatsappAge, model.screenshotAge, model.recordingAge, model.ledgerPath]) { model.refresh() }
+    }
+
+    private func ageRow(_ label: String, _ value: Binding<String>) -> some View {
+        GridRow {
+            Text(label)
+            Picker("", selection: value) {
+                ForEach(["30d", "60d", "90d", "6m", "1y", "18m", "2y", "3y"], id: \.self) { Text(Age($0)?.words ?? $0).tag($0) }
+            }
+            .labelsHidden().frame(width: 140)
+        }
+    }
+}
+
+struct DoctorList: View {
+    let report: DoctorReport?
+    let running: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if report == nil { Text(running ? "Running doctor…" : "Doctor did not run. Check the repo path.").foregroundStyle(.secondary) }
+            ForEach(report?.results ?? []) { c in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: c.passed ? "checkmark.circle.fill" : (c.failed ? "xmark.octagon.fill" : "exclamationmark.triangle.fill"))
+                        .foregroundStyle(c.passed ? Theme.good : (c.failed ? Theme.bad : Theme.warn))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(c.name).fontWeight(.semibold)
+                        Text(c.detail).foregroundStyle(.secondary)
+                        if !c.remedy.isEmpty { Text(c.remedy).foregroundStyle(Theme.warn) }
+                    }
+                }
+                .font(.callout)
+            }
+        }
+    }
+}
