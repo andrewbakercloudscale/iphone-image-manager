@@ -1,6 +1,7 @@
 import AppKit
 import Photos
 import SwiftUI
+import UserNotifications
 
 /// The permissions Photo Sentinel needs, asked for together so macOS does not stop a backup
 /// or a removal half way to ask. The engine and its PhotoKit helper run as this app's
@@ -18,7 +19,9 @@ final class Permissions: ObservableObject {
     }
 
     @Published var items: [Item] = []
-    @AppStorage("permissionsDismissed") var dismissed = false
+    /// "Not now" hides the banner for a week; then it asks again if anything is still missing.
+    @AppStorage("permissionsDismissedAt") var dismissedAt = 0.0
+    var dismissed: Bool { Date().timeIntervalSince1970 - dismissedAt < 7 * 86_400 }
     private var timer: Timer?
 
     init() {
@@ -44,11 +47,27 @@ final class Permissions: ObservableObject {
                  why: "Read the Photos library's places and the ledger and archive on your Desktop, without macOS asking folder by folder.",
                  symbol: "lock.open.fill", state: Self.hasFullDiskAccess() ? .granted : .notAsked),
         ]
-        if list != items { items = list }
+        // Notifications answer asynchronously: keep the last known state until they do.
+        let old = items.first { $0.id == "notifications" }?.state ?? .notAsked
+        let full = list + [Item(id: "notifications", title: "Notifications",
+                                why: "Tell you when a backup finishes or stops, and when a check or a removal finishes.",
+                                symbol: "bell.badge.fill", state: old)]
+        if full != items { items = full }
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            let s: State = switch settings.authorizationStatus {
+            case .authorized, .provisional: .granted
+            case .denied: .denied
+            default: .notAsked
+            }
+            Task { @MainActor in
+                if let i = self.items.firstIndex(where: { $0.id == "notifications" }), self.items[i].state != s { self.items[i].state = s }
+            }
+        }
     }
 
-    /// Asks for Photos in place, then opens Full Disk Access.
+    /// Asks for notifications and Photos in place, then opens Full Disk Access.
     func requestAll() {
+        if let n = items.first(where: { $0.id == "notifications" }), n.state == .notAsked { request(n) }
         if let photos = items.first(where: { $0.id == "photos" }), photos.state != .granted {
             request(photos)
         } else if !Self.hasFullDiskAccess() {
@@ -67,12 +86,21 @@ final class Permissions: ObservableObject {
             }
         // Once turned down, macOS never asks again: only System Settings can turn it back on.
         case "photos": Self.showSettings("Privacy_Photos")
+        case "notifications" where item.state == .notAsked:
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in
+                Task { @MainActor in self.refresh() }
+            }
+        case "notifications": Self.showURL("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(Bundle.main.bundleIdentifier ?? "consulting.cloudscale.photosentinel")")
         default: Self.showSettings("Privacy_AllFiles")
         }
     }
 
     static func showSettings(_ pane: String) {
-        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")!)
+        showURL("x-apple.systempreferences:com.apple.preference.security?\(pane)")
+    }
+
+    static func showURL(_ url: String) {
+        NSWorkspace.shared.open(URL(string: url)!)
         // Opening a URL leaves System Settings behind this app's window; bring it forward.
         for delay in [0.5, 1.5] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
@@ -110,13 +138,13 @@ struct PermissionsBanner: View {
                         .font(.caption).foregroundStyle(.white.opacity(0.92)).lineLimit(2)
                 }
                 Spacer(minLength: 6)
-                Button { permissions.dismissed = true } label: {
+                Button { permissions.dismissedAt = Date().timeIntervalSince1970 } label: {
                     Text("Not now").font(.callout.weight(.medium)).foregroundStyle(.white)
                         .padding(.horizontal, 10).padding(.vertical, 6)
                         .background(Capsule().strokeBorder(.white.opacity(0.8), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
-                .help("Hide this banner. Settings, Permissions has the same buttons")
+                .help("Hide this banner for a week. Settings, Permissions has the same buttons")
                 Button { permissions.requestAll() } label: {
                     Label("Grant all", systemImage: "hand.raised.fill")
                         .font(.callout.weight(.semibold)).foregroundStyle(tint)
@@ -124,7 +152,7 @@ struct PermissionsBanner: View {
                         .background(Capsule().fill(.white))
                 }
                 .buttonStyle(.plain)
-                .help("Ask macOS for Photos access, then open Full Disk Access in System Settings")
+                .help("Ask macOS for notifications and Photos access, then open Full Disk Access in System Settings")
             }
             .padding(.horizontal, 12).padding(.vertical, 10)
             .background(RoundedRectangle(cornerRadius: 10).fill(tint))
@@ -150,7 +178,7 @@ struct PermissionsCard: View {
                         }
                         Spacer(minLength: 8)
                         if p.state != .granted {
-                            Button(p.id == "photos" && p.state == .notAsked ? "Allow" : "Open settings") { permissions.request(p) }
+                            Button(p.id != "fda" && p.state == .notAsked ? "Allow" : "Open settings") { permissions.request(p) }
                         }
                     }
                 }
@@ -158,5 +186,17 @@ struct PermissionsCard: View {
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+}
+
+/// Banners from macOS when work the user is waiting on moves on. Silent when not allowed.
+enum Notify {
+    static func send(_ title: String, _ body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
 }

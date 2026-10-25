@@ -153,6 +153,7 @@ struct BackupView: View {
                     }
                 }
                 DriveCheckCard(model: model)
+                LayoutCard(model: model)
             }
         }
     }

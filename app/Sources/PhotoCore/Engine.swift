@@ -119,3 +119,49 @@ public struct CLIEngine: Engine {
         return data
     }
 }
+
+/// `config layout`: the archive's folder layout, a preview of it, and saving it.
+public struct LayoutReport: Codable, Sendable {
+    public struct Settings: Codable, Hashable, Sendable {
+        public var pattern: String
+        public var minPhotos: Int
+        public var gapDays: Int
+        public var flat: [String]
+    }
+    public struct Folder: Codable, Hashable, Sendable {
+        public let folder: String
+        public let count: Int
+    }
+    public struct Preview: Codable, Sendable {
+        public let assets: Int
+        public let folders: Int
+        public let placeFolders: Int
+        public let biggest: [Folder]
+        public let places: [Folder]
+        public let smallest: Int
+    }
+    public let current: Settings
+    public let proposed: Settings
+    public let changed: Bool
+    public let applied: Bool
+    public let preview: Preview?
+    public let error: String?
+}
+
+extension CLIEngine {
+    /// Without `apply` nothing is written; `preview` reads a Photos database copy (seconds).
+    public func layout(_ s: LayoutReport.Settings? = nil, preview: Bool = false, apply: Bool = false) throws -> LayoutReport {
+        var args = ["--json", "config", "layout"]
+        if let s {
+            args += ["--pattern", s.pattern, "--min-photos", String(s.minPhotos), "--gap-days", String(s.gapDays),
+                     "--flat", s.flat.joined(separator: ",")]
+        }
+        if preview { args.append("--preview") }
+        if apply { args.append("--apply") }
+        let data = try run(args)
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let e = obj["error"] as? String {
+            throw JobError.message(e)
+        }
+        return try JSONDecoder().decode(LayoutReport.self, from: data)
+    }
+}

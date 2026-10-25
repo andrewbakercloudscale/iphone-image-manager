@@ -109,6 +109,7 @@ final class Model: ObservableObject {
                 self.suggestions = suggestions
                 self.loading = false
                 self.allProof = proof
+                self.notifyChanges(from: self.jobs, to: jobs)
                 self.jobs = jobs
                 switch result {
                 case .success(let s): self.library = s; self.error = nil; self.placesIfStale()
@@ -123,8 +124,22 @@ final class Model: ObservableObject {
         Task.detached {
             let jobs = engine.jobs()
             await MainActor.run {
+                self.notifyChanges(from: self.jobs, to: jobs)
                 self.jobs = jobs
                 self.pumpQueue()
+            }
+        }
+    }
+
+    /// A backup job that was running and is not any more.
+    private func notifyChanges(from old: [Job], to new: [Job]) {
+        for job in new {
+            guard old.first(where: { $0.id == job.id })?.state == .running else { continue }
+            switch job.state {
+            case .running: break
+            case .finished: Notify.send("\(job.title) backed up", "The backup finished.")
+            case .paused(let why): Notify.send("\(job.title) paused", why)
+            case .stopped(let why): Notify.send("\(job.title) stopped", "\(why) Open Photo Sentinel to resume it.")
             }
         }
     }
@@ -135,7 +150,12 @@ final class Model: ObservableObject {
         let before = Set(tasks.filter(\.running).map(\.task.id))
         tasks = TaskStore.all()
         // Something just finished: the ledger has moved.
-        if tasks.contains(where: { before.contains($0.task.id) && !$0.running }) {
+        let ended = tasks.filter { before.contains($0.task.id) && !$0.running }
+        for t in ended where t.task.kind != .places {
+            if let e = t.errorMessage { Notify.send("\(t.task.title) failed", e) }
+            else { Notify.send("\(t.task.title) finished", "Open Photo Sentinel to see the result.") }
+        }
+        if !ended.isEmpty {
             refresh()
             pumpQueue()
         }

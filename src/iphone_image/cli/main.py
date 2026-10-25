@@ -29,6 +29,7 @@ from ..config import (
     DEFAULT_CONFIG_PATH,
     Config,
     ConfigError,
+    OrganizationConfig,
     RemovalPolicy,
     load_config,
 )
@@ -301,6 +302,112 @@ def config_init(ctx: Context, path: Path | None, force: bool) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(EXAMPLE_CONFIG)
     ctx.out.result({"written": str(target)}, lambda: ctx.out.ok(f"wrote {target}"))
+
+
+@config.command("layout")
+@click.option("--pattern", default=None, help='Folder pattern, e.g. "{source}/{year}/{event}".')
+@click.option("--min-photos", type=int, default=None, help="Items a place needs to get a folder.")
+@click.option("--gap-days", type=int, default=None, help="Days apart that start a new visit.")
+@click.option(
+    "--flat", default=None, help='Channels filed in one folder, comma separated; "" for none.'
+)
+@click.option("--preview", "show_preview", is_flag=True, help="Count the folders it would make.")
+@click.option("--apply", "apply_", is_flag=True, help="Save it to the configuration file.")
+@pass_context
+def config_layout(
+    ctx: Context,
+    pattern: str | None,
+    min_photos: int | None,
+    gap_days: int | None,
+    flat: str | None,
+    show_preview: bool,
+    apply_: bool,
+) -> None:
+    """Show or change the archive's folder layout. Applies to new backups only."""
+    from .. import layout as layout_engine
+
+    org = ctx.config.organization
+    changes: dict[str, Any] = {}
+    if pattern is not None:
+        changes["pattern"] = pattern
+    if min_photos is not None:
+        changes["event_min_photos"] = min_photos
+    if gap_days is not None:
+        changes["event_gap_days"] = gap_days
+    if flat is not None:
+        changes["flat_channels"] = [c.strip() for c in flat.split(",") if c.strip()]
+    if pattern is not None and not pattern.startswith("{source}/"):
+        # Upload strips the channel folder to reach each source's own remote
+        # destination (cloud.py), so a pattern without it uploads nothing.
+        _fail(ctx.out, 'the pattern must start with "{source}/": each source has its own folder.')
+        return
+    try:
+        proposed = OrganizationConfig.model_validate({**org.model_dump(), **changes})
+    except ValueError as e:
+        _fail(ctx.out, f"that layout cannot be used: {e}")
+        return
+
+    def describe(o: OrganizationConfig) -> dict[str, Any]:
+        return {
+            "pattern": o.pattern,
+            "minPhotos": o.event_min_photos,
+            "gapDays": o.event_gap_days,
+            "flat": o.flat_channels,
+        }
+
+    data: dict[str, Any] = {
+        "current": describe(org),
+        "proposed": describe(proposed),
+        "changed": proposed != org,
+        "applied": False,
+        "configPath": str(ctx.config.source_path) if ctx.config.source_path else None,
+    }
+    if show_preview:
+        db = ctx.database()
+        try:
+            data["preview"] = layout_engine.preview(ctx.config, db, proposed)
+        finally:
+            db.close()
+    if apply_ and data["changed"]:
+        if not ctx.config.source_path:
+            _fail(ctx.out, "no configuration file to save to. Run `config init` first.")
+            return
+        path = Path(ctx.config.source_path)
+        text = layout_engine.edit_organization(path.read_text(), changes)
+        tmp = path.with_suffix(".yaml.tmp")
+        tmp.write_text(text)
+        try:
+            saved = load_config(tmp).organization
+        except ConfigError as e:
+            tmp.unlink()
+            _fail(ctx.out, f"not saved, the edited file did not load: {e}")
+            return
+        if saved != proposed:
+            tmp.unlink()
+            _fail(ctx.out, "not saved, the edited file did not say what was asked.")
+            return
+        tmp.replace(path)
+        data["applied"] = True
+
+    def render() -> None:
+        ctx.out.title("Folder layout")
+        ctx.out.pairs([(k, v) for k, v in data["proposed"].items()])
+        if "preview" in data:
+            p = data["preview"]
+            ctx.out.line()
+            ctx.out.pairs(
+                [
+                    ("archived items", f"{p['assets']:,}"),
+                    ("folders", f"{p['folders']:,}"),
+                    ("place folders", f"{p['placeFolders']:,}"),
+                ]
+            )
+            for row in p["places"]:
+                ctx.out.line(f"    {row['folder']:<50}{row['count']:>7,}")
+        if data["applied"]:
+            ctx.out.ok("saved. New backups use it; files already backed up stay where they are.")
+
+    ctx.out.result(data, render)
 
 
 # ---------------------------------------------------------------------------

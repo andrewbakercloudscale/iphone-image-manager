@@ -58,6 +58,7 @@ struct FilterBuilder: View {
                     }
                 }
                 .disabled(model.draft.isEmpty)
+                .help(model.draft.isEmpty ? "Pick at least one filter first: with every filter on Any this would take your whole phone" : "")
             }
         }
         .task(id: model.draft) {
@@ -72,8 +73,9 @@ struct FilterBuilder: View {
 
     @ViewBuilder private var preview: some View {
         if model.draft.isEmpty {
-            Text("Pick at least one filter. For example: From WhatsApp, Kind Videos, Bigger than 20 MB, Older than 6 months.")
-                .font(.callout).foregroundStyle(.secondary)
+            Label("Pick at least one filter to turn the buttons on. With every filter on Any the rule would take your whole phone, so it waits. For example: From WhatsApp, Older than 6 months.",
+                  systemImage: "hand.point.up.left.fill")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         } else if let s = stats {
             VStack(alignment: .leading, spacing: 4) {
                 Text(model.draft.summary).font(.body.weight(.semibold))
