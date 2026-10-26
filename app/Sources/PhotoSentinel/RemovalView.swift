@@ -193,7 +193,7 @@ struct RemovalSheet: View {
                 if !driveBlocks && !(plan?.running ?? false) && !(planFresh && planResult != nil && removal == nil) {
                     CapsuleButton(title: planResult == nil ? "Make the plan" : "Plan again", symbol: "list.bullet.clipboard.fill", color: Tab.cleanUp.color) { model.plan(recipe) }
                 } else if planFresh && planResult != nil && removal == nil {
-                    CapsuleButton(title: "Plan again", symbol: "arrow.clockwise", color: Tab.cleanUp.color, style: .ghost) { model.plan(recipe) }
+                    CapsuleButton(title: "Plan again", symbol: "arrow.clockwise", color: Tab.cleanUp.color, style: .soft) { model.plan(recipe) }
                 }
             }
         }
@@ -420,8 +420,11 @@ struct PlanSummary: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Image(systemName: "checkmark.shield.fill").foregroundStyle(Theme.good)
-                Text("\(Fmt.count(plan.eligible)) items, \(Fmt.bytes(plan.eligibleBytes)), can go. Each one's Drive copy was re-read just now and matched.")
+                Image(systemName: plan.eligible > 0 ? "checkmark.shield.fill" : "info.circle.fill")
+                    .foregroundStyle(plan.eligible > 0 ? Theme.good : Color.secondary)
+                Text(plan.eligible > 0
+                     ? "\(Fmt.count(plan.eligible)) items, \(Fmt.bytes(plan.eligibleBytes)), can go. Each one's Drive copy was re-read just now and matched."
+                     : "Nothing can go yet. Everything this clean-up found stays on the phone, for the reasons below.")
                     .font(.callout.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
             }
             if plan.blocked > 0 {
