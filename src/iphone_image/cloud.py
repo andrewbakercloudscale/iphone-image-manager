@@ -28,6 +28,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import IO, Any, Protocol
@@ -605,6 +606,23 @@ class RcloneProvider:
             path = f"{subdir}/{row['Path']}" if subdir else row["Path"]
             found[path] = digest
         return found
+
+
+def list_hashes(provider: CloudProvider, wanted: Iterable[str]) -> dict[str, dict[str, str]]:
+    """`provider.hashes` for each destination, the listings run side by side.
+
+    Each listing is one rclone process waiting on Drive, so four of them in a
+    row cost four waits; side by side they cost the longest. Measured
+    2026-10-26: a screenshots listing alone was 43s, and `--fast-list` made it
+    113s, so that flag is not the speed-up. A failed listing fails the call,
+    exactly as it did one at a time.
+    """
+    wanted = sorted(set(wanted))
+    if len(wanted) <= 1:
+        return {d: provider.hashes(d) for d in wanted}
+    with ThreadPoolExecutor(max_workers=len(wanted)) as pool:
+        futures = {d: pool.submit(provider.hashes, d) for d in wanted}
+        return {d: f.result() for d, f in futures.items()}
 
 
 def _remote_path_owner(db: Database, cloud_path: str, asset_id: int) -> int | None:

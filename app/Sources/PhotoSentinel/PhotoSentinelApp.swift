@@ -95,7 +95,11 @@ struct ContentView: View {
                     }
                 }
                 .padding(.bottom, 12)
+                // The scroller draws over the content's right edge: keep the cards clear of
+                // it, and move it out into the window margin so the cards still line up.
+                .padding(.trailing, 14)
             }
+            .padding(.trailing, -14)
             .onChange(of: model.scrollTarget) {
                 guard let target = model.scrollTarget else { return }
                 // After the tab has drawn, so the target exists.

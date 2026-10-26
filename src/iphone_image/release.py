@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .cloud import CloudProvider, RcloneProvider, split_cloud_path
+from .cloud import CloudProvider, RcloneProvider, list_hashes, split_cloud_path
 from .config import Config
 from .db.database import Database, utcnow
 from .journal import Journal, Op
@@ -148,9 +148,8 @@ def plan(
     # top-level archives, and asking the wrong one would report every file
     # missing and block the lot -- or, worse, match an unrelated file of the
     # same name in the other archive.
-    remote: dict[str, dict[str, str]] = {}
-    for destination in sorted({c.destination for c in wanted}):
-        remote[destination] = provider.hashes(destination)
+    remote = list_hashes(provider, {c.destination for c in wanted})
+    for destination in sorted(remote):
         log.info("the remote reports %d file(s) at %s", len(remote[destination]), destination)
 
     eligible: list[Candidate] = []

@@ -113,12 +113,32 @@ final class LedgerTests: XCTestCase {
         XCTAssertEqual(all.byYear.map(\.period), ["2019", "2026"])
         XCTAssertEqual(all.byYear[0].inDrive.bytes, 100)
         XCTAssertEqual(all.byYear[0].notInDrive.bytes, 200)
-        XCTAssertEqual(all.byMonth.map(\.period), ["2026-09", "2026-10"], "only the last 24 months")
+        XCTAssertEqual(all.byMonth.map(\.period), ["2019-03", "2019-04", "2026-09", "2026-10"], "every month, not only recent ones")
 
         let wa = try Ledger.breakdown(db, filter: Filter(source: "whatsapp"), now: now)
         XCTAssertEqual(wa.total, Tally(count: 2, bytes: 300))
         XCTAssertEqual(wa.bySource.map(\.key), ["whatsapp"])
         XCTAssertEqual(wa.oldest?.prefix(7), "2019-03")
+    }
+
+    func testRoutesSayWhichDriveFolderEachItemIsOrWillBeIn() throws {
+        let db = try makeDB()
+        let wa = "net.whatsapp.WhatsApp"
+        try insert(db, 1, file: "x.jpg", bundle: wa, bytes: 10, cloud: "CLOUD_VERIFIED")  // cloud_path Drive/x.jpg
+        try db.exec("UPDATE assets SET cloud_path = 'P/WA/x.jpg' WHERE id = 1")
+        try insert(db, 2, file: "y.mp4", type: "VIDEO", bundle: wa, bytes: 20)              // WhatsApp video: WhatsApp's folder
+        try insert(db, 3, file: "z.mp4", type: "VIDEO", bundle: "com.apple.camera", bytes: 30)
+        let json = """
+        {"remote":"gdrive","account":{"name":"gdrive","kind":"drive","title":"Google Drive","canVerify":true},
+         "accounts":[],"archive":"/a","destinations":{"photos":"P","videos":"V","screenshots":"","whatsapp":"P/WA"},
+         "backedUp":{"count":1,"bytes":10},"proposed":{"remote":"gdrive","archive":"/a"},"changed":false,"applied":false}
+        """
+        let storage = try JSONDecoder().decode(StorageReport.self, from: Data(json.utf8))
+        let routes = try Ledger.routes(db, Recipe(custom: Filter(type: "photo")), storage: storage)
+        XCTAssertEqual(routes.map(\.folder), ["P/WA"])
+        let all = try Ledger.routes(db, Recipe(custom: Filter(minMB: 0)), storage: storage)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: all.map { ($0.folder, [$0.inDrive.bytes, $0.toBackUp.bytes]) }),
+                       ["P/WA": [10, 20], "V": [0, 30]], "the longest matching folder wins, so P/WA is not P")
     }
 
     func testProofCountsOnlyDriveConfirmedRemovals() throws {

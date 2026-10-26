@@ -13,6 +13,7 @@ struct RemovalSheet: View {
     var scrolls = true
     @State private var typed = ""
     @State private var proof: Proof?
+    @State private var routes: [Route]?
 
     /// An audit counts for six hours: long enough to plan and remove after it, short
     /// enough that a Drive change since is unlikely. The removal re-checks Drive anyway.
@@ -69,11 +70,13 @@ struct RemovalSheet: View {
         .frame(width: 720, height: 760)
         .background(Color(light: "#f5f5f7", dark: "#1c1c1f"))
         .onChange(of: removal?.running) { loadProof() }
-        .onAppear { loadProof() }
+        .onChange(of: model.storage?.destinations) { routes = loadRoutes() }
+        .onAppear { loadProof(); routes = loadRoutes() }
     }
 
     private var steps: some View {
         VStack(alignment: .leading, spacing: 14) {
+            WhereTheyGo(model: model, routes: routes ?? loadRoutes())
             backupStep
             driveStep
             planStep
@@ -209,7 +212,7 @@ struct RemovalSheet: View {
                              : "The removal stopped: \(msg)")
                             .font(.callout).foregroundStyle(Theme.warn).fixedSize(horizontal: false, vertical: true)
                     }
-                    Text("This deletes them from your iPhone and every device on the same iCloud account. Type the phrase to confirm:")
+                    Text("This deletes them from your iPhone and every device on the same iCloud account. They go to Recently Deleted on the phone for 30 days; the copies stay in \(model.storage?.accountTitle ?? "Google Drive"), in the folders above. Type the phrase to confirm:")
                         .font(.callout).fixedSize(horizontal: false, vertical: true)
                     Text(phrase).font(.body.monospaced().weight(.semibold)).textSelection(.enabled)
                     HStack {
@@ -239,6 +242,11 @@ struct RemovalSheet: View {
         }
     }
 
+    private func loadRoutes() -> [Route] {
+        guard let st = model.storage else { return [] }
+        return (try? Ledger.routes(SQLiteReader(path: model.ledgerPath), recipe, storage: st)) ?? []
+    }
+
     private func loadProof() {
         guard let r = removal, !r.running else { proof = nil; return }
         proof = try? Ledger.proof(SQLiteReader(path: model.ledgerPath), since: Ledger.stamp(r.task.startedAt))
@@ -246,6 +254,55 @@ struct RemovalSheet: View {
 }
 
 // MARK: Pieces
+
+/// Every confirmation says where things go: which account, which folders, and how much of
+/// it is there already. Both can be changed from here.
+struct WhereTheyGo: View {
+    @ObservedObject var model: Model
+    let routes: [Route]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "externaldrive.fill.badge.icloud").foregroundStyle(Tab.backup.color)
+                Text("Where they go").font(.headline)
+                Text(model.storage?.accountTitle ?? "Google Drive").foregroundStyle(.secondary)
+                Spacer()
+                CapsuleButton(title: "Change folders", symbol: "folder.badge.gearshape", color: Tab.backup.color, style: .soft) {
+                    model.removing = nil
+                    model.tab = .backup
+                }
+                CapsuleButton(title: "Change account", symbol: "person.crop.circle.badge.questionmark", color: Tab.backup.color, style: .ghost) {
+                    model.removing = nil
+                    model.tab = .settings
+                }
+            }
+            if routes.isEmpty {
+                Text("Nothing on the phone matches this clean-up.").font(.callout).foregroundStyle(.secondary)
+            }
+            ForEach(routes) { r in
+                HStack(spacing: 8) {
+                    Image(systemName: "folder.fill").foregroundStyle(Tab.backup.color)
+                    Text(r.folder).font(.callout.monospaced()).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    Text(Self.detail(r)).font(.callout).foregroundStyle(.secondary).monospacedDigit()
+                }
+            }
+            Text("Removed items go to Recently Deleted on the phone for 30 days. Nothing is deleted from Drive.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.cardFill))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Tab.backup.color.opacity(0.5), lineWidth: 1.5))
+    }
+
+    static func detail(_ r: Route) -> String {
+        var parts: [String] = []
+        if r.inDrive.count > 0 { parts.append("\(Fmt.count(r.inDrive.count)) there (\(Fmt.bytes(r.inDrive.bytes)))") }
+        if r.toBackUp.count > 0 { parts.append("\(Fmt.count(r.toBackUp.count)) to back up (\(Fmt.bytes(r.toBackUp.bytes)))") }
+        return parts.joined(separator: " · ")
+    }
+}
 
 struct Step<Content: View>: View {
     let number: Int

@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .cloud import CloudProvider, RcloneProvider, split_cloud_path
+from .cloud import CloudProvider, RcloneProvider, list_hashes, split_cloud_path
 from .config import Config, RemovalPolicy
 from .db.database import Database, utcnow
 from .journal import Journal, Op
@@ -390,9 +390,8 @@ def plan(
     # video checked against the photo archive is reported missing, and this is
     # the code path where "missing" decides whether a photograph is deleted.
     wanted_destinations = sorted({split_cloud_path(config, c.cloud_path)[0] for c in wanted})
-    remote: dict[str, dict[str, str]] = {}
+    remote = list_hashes(provider, wanted_destinations)
     for destination in wanted_destinations:
-        remote[destination] = provider.hashes(destination)
         log.info("the remote reports %d file(s) at %s", len(remote[destination]), destination)
 
     eligible: list[Candidate] = []

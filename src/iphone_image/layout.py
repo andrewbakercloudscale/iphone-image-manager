@@ -32,7 +32,14 @@ KEYS = {
         "event_min_photos",
         "event_gap_days",
     ),
-    "cloud": ("destination", "video_destination", "screenshot_destination", "whatsapp_destination"),
+    "cloud": (
+        "remote",
+        "destination",
+        "video_destination",
+        "screenshot_destination",
+        "whatsapp_destination",
+    ),
+    "archive": ("local_path",),
 }
 
 

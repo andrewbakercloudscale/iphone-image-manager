@@ -24,7 +24,7 @@ public struct Breakdown: Sendable {
     /// In Drive and can go, in Drive but kept by a safety rule, not in Drive yet.
     public var byStatus: [Slice] = []
     public var byYear: [Period] = []
-    /// The last 24 months, oldest first.
+    /// Every month with media, oldest first.
     public var byMonth: [Period] = []
     public var oldest: String?
     public var newest: String?
@@ -74,17 +74,57 @@ extension Ledger {
             .init(key: "notInDrive", title: "Not in Drive yet", tally: tally(s, 4)),
         ].filter { $0.tally.count > 0 }
 
-        func periods(_ expr: String, extra: String = "", _ more: [Any?] = []) throws -> [Breakdown.Period] {
+        func periods(_ expr: String) throws -> [Breakdown.Period] {
             try db.rows("""
                 SELECT \(expr) p, COUNT(*), COALESCE(SUM(a.size_bytes), 0),
                        SUM(\(verified)), COALESCE(SUM(CASE WHEN \(verified) THEN a.size_bytes END), 0)
-                \(base) AND a.created_at_device IS NOT NULL \(extra) GROUP BY p ORDER BY p
-                """, args + more)
+                \(base) AND a.created_at_device IS NOT NULL GROUP BY p ORDER BY p
+                """, args)
                 .map { r in Breakdown.Period(period: r.str(0), total: tally(r, 1), inDrive: tally(r, 3)) }
         }
         b.byYear = try periods("substr(a.created_at_device, 1, 4)")
-        b.byMonth = try periods("substr(a.created_at_device, 1, 7)", extra: "AND a.created_at_device >= ?",
-                                [Age(24, "m").cutoff(now: now)])
+        b.byMonth = try periods("substr(a.created_at_device, 1, 7)")
         return b
     }
+}
+
+/// One Drive folder a selection goes to: what is there already, and what a backup would add.
+public struct Route: Identifiable, Hashable, Sendable {
+    public let folder: String
+    public var inDrive = Tally()
+    public var toBackUp = Tally()
+    public var id: String { folder }
+}
+
+extension Ledger {
+    /// Where what `recipe` selects is, or will be, in Drive. Items already there are placed
+    /// by their recorded path, so a folder changed since still shows where they really are;
+    /// the rest by `storage`'s rule for new backups.
+    public static func routes(_ db: SQLiteReader, _ recipe: Recipe, storage: StorageReport, now: Date = Date()) throws -> [Route] {
+        let (w, args) = recipe.whereClause(now: now)
+        let folders = Set(storage.destinations.values.filter { !$0.isEmpty }).sorted { $0.count > $1.count }
+        // Longest first, as cloud.py's split_cloud_path matches.
+        let placed = folders.isEmpty ? "''" : "CASE " + folders.map { _ in "WHEN substr(a.cloud_path, 1, ?) = ? THEN ? " }.joined() + "ELSE '' END"
+        let placedArgs: [Any?] = folders.flatMap { [$0.count + 1, $0 + "/", $0] as [Any?] }
+        var byFolder: [String: Route] = [:]
+        for r in try db.rows("""
+            SELECT \(Channel.sql) ch, a.media_type = 'VIDEO', a.cloud_status = 'CLOUD_VERIFIED' v,
+                   CASE WHEN a.cloud_status = 'CLOUD_VERIFIED' THEN \(placed) ELSE '' END f,
+                   COUNT(*), COALESCE(SUM(a.size_bytes), 0)
+            FROM assets a WHERE a.present_on_phone = 1 AND \(w) GROUP BY ch, 2, v, f
+            """, placedArgs + args) {
+            let verified = r.int(2) == 1
+            var folder = r.str(3)
+            if folder.isEmpty { folder = verified ? "elsewhere in \(storage.accountTitle)" : storage.folder(channel: r.str(0), video: r.int(1) == 1) }
+            var route = byFolder[folder] ?? Route(folder: folder)
+            let t = Tally(count: r.int(4), bytes: Int64(r.int(5)))
+            if verified { route.inDrive = route.inDrive + t } else { route.toBackUp = route.toBackUp + t }
+            byFolder[folder] = route
+        }
+        return byFolder.values.sorted { $0.inDrive.bytes + $0.toBackUp.bytes > $1.inDrive.bytes + $1.toBackUp.bytes }
+    }
+}
+
+extension Tally {
+    public static func + (a: Tally, b: Tally) -> Tally { Tally(count: a.count + b.count, bytes: a.bytes + b.bytes) }
 }

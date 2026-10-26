@@ -16,6 +16,7 @@ enum Snapshot {
         model.library = try? model.engine.library()
         model.everything = try? Ledger.breakdown(SQLiteReader(path: model.ledgerPath))
         model.jobs = model.engine.jobs()
+        model.storage = try? model.engine.storage()
         model.doctor = try? model.engine.doctor()
         model.tasks = TaskStore.all()
         if let s = model.library { model.suggestions = (try? Ledger.suggestions(SQLiteReader(path: model.ledgerPath), apps: s.apps)) ?? [] }

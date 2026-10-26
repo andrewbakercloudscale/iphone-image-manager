@@ -151,6 +151,49 @@ public struct LayoutReport: Codable, Sendable {
     public let preview: Preview?
 }
 
+/// `config storage`: the account backups go to and the archive folder on this Mac.
+public struct StorageReport: Codable, Sendable {
+    public struct Account: Codable, Hashable, Sendable, Identifiable {
+        public let name: String
+        public let kind: String
+        public let title: String
+        /// Reports SHA-256, so a backup there can be checked before removal.
+        public let canVerify: Bool
+        public var id: String { name }
+    }
+    public struct Count: Codable, Hashable, Sendable {
+        public let count: Int
+        public let bytes: Int64
+    }
+    public struct Proposed: Codable, Hashable, Sendable {
+        public let remote: String
+        public let archive: String
+    }
+    public let remote: String
+    public let account: Account?
+    public let accounts: [Account]
+    public let archive: String
+    /// photos, videos, screenshots, whatsapp; empty means with the photos.
+    public let destinations: [String: String]
+    public let backedUp: Count
+    public let proposed: Proposed
+    public let changed: Bool
+    public let applied: Bool
+
+    /// "Google Drive (gdrive)".
+    public var accountTitle: String { account.map { "\($0.title) (\($0.name))" } ?? remote }
+
+    /// Where an item goes, the same rule as cloud.py's `destination_for`: channel first,
+    /// because a screenshot or a WhatsApp photo is a PHOTO by type.
+    public func folder(channel: String, video: Bool) -> String {
+        let d = destinations
+        if channel == Channel.screenshot.rawValue, let f = d["screenshots"], !f.isEmpty { return f }
+        if channel == Channel.whatsapp.rawValue, let f = d["whatsapp"], !f.isEmpty { return f }
+        if video, let f = d["videos"], !f.isEmpty { return f }
+        return d["photos"] ?? ""
+    }
+}
+
 /// `refile`: files already in Drive that the layout now puts somewhere else.
 public struct RefileReport: Codable, Sendable {
     public struct Example: Codable, Hashable, Sendable {
@@ -187,6 +230,15 @@ extension CLIEngine {
         if preview { args.append("--preview") }
         if apply { args.append("--apply") }
         return try decode(LayoutReport.self, run(args))
+    }
+
+    /// The backup account and archive folder; with `remote` or `archive`, what changing them would do.
+    public func storage(remote: String? = nil, archive: String? = nil, apply: Bool = false) throws -> StorageReport {
+        var args = ["--json", "config", "storage"]
+        if let remote { args += ["--remote", remote] }
+        if let archive { args += ["--archive", archive] }
+        if apply { args.append("--apply") }
+        return try decode(StorageReport.self, run(args))
     }
 
     /// What `refile` would move. Reads the ledger only: seconds.

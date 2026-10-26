@@ -6,6 +6,7 @@ import SwiftUI
 struct FilterBuilder: View {
     @ObservedObject var model: Model
     @State private var stats: RecipeStats?
+    @State private var routes: [Route] = []
     @State private var counting = false
     @State private var saveName = ""
 
@@ -67,6 +68,9 @@ struct FilterBuilder: View {
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled else { return }
             stats = await model.preview(model.draft, ledger: model.ledgerPath)
+            if let st = model.storage {
+                routes = (try? Ledger.routes(SQLiteReader(path: model.ledgerPath), Recipe(custom: model.draft), storage: st)) ?? []
+            }
             counting = false
         }
     }
@@ -85,6 +89,15 @@ struct FilterBuilder: View {
                     figure("Not in Drive yet", s.notBackedUp, Theme.warn)
                     figure("Kept for safety", s.kept, .secondary)
                     if counting { ProgressView().controlSize(.small) }
+                }
+                if !routes.isEmpty, let st = model.storage {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: "folder.fill").foregroundStyle(Tab.backup.color)
+                        Text("In \(st.accountTitle): " + routes.map(\.folder).joined(separator: " · "))
+                            .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                        Button("Change") { model.tab = .backup }.buttonStyle(.link).font(.callout)
+                    }
+                    .padding(.top, 2)
                 }
             }
         }

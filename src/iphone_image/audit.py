@@ -43,6 +43,7 @@ from .cloud import (
     CloudProvider,
     RcloneProvider,
     destinations,
+    list_hashes,
     nested_destinations,
     split_cloud_path,
 )
@@ -211,9 +212,10 @@ def remote(
     provider.check()
 
     holdings: dict[str, dict[str, str]] = {}
+    log.info("listing %s", ", ".join(destinations(config)))
+    listings = list_hashes(provider, destinations(config))
     for destination in destinations(config):
-        log.info("listing %s", destination)
-        listing = provider.hashes(destination)
+        listing = listings[destination]
         # A recursive listing of a parent contains its nested destinations'
         # files. Left in, every screenshot is counted twice as a file at the
         # remote and once as "unclaimed" at the photo archive, which makes the

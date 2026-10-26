@@ -11,6 +11,8 @@ final class Model: ObservableObject {
     /// The Library charts: everything on the phone, and what the rule builder selects.
     @Published var everything: Breakdown?
     @Published var selection: Breakdown?
+    /// The backup account, its folders and the archive folder, from `config storage`.
+    @Published var storage: StorageReport?
     @Published var jobs: [Job] = []
     @Published var doctor: DoctorReport?
     @Published var error: String?
@@ -116,12 +118,14 @@ final class Model: ObservableObject {
             let jobs = engine.jobs()
             let proof = try? Ledger.proof(SQLiteReader(path: engine.ledgerPath), since: "", limit: 0)
             let everything = try? Ledger.breakdown(SQLiteReader(path: engine.ledgerPath))
+            let storage = try? engine.storage()
             let suggestions = (try? result.get()).flatMap { s in
                 try? Ledger.suggestions(SQLiteReader(path: engine.ledgerPath), apps: s.apps)
             } ?? []
             await MainActor.run {
                 self.suggestions = suggestions
                 if let everything { self.everything = everything }
+                if let storage { self.storage = storage }
                 self.loading = false
                 self.allProof = proof
                 self.notifyChanges(from: self.jobs, to: jobs)

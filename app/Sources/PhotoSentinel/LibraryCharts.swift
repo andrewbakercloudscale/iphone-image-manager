@@ -6,6 +6,19 @@ import SwiftUI
 /// donuts by source, kind and Drive status, then by year and by month.
 struct MediaCharts: View {
     @ObservedObject var model: Model
+    @AppStorage("timelineUnit") private var unit: TimeUnit = .year
+    @AppStorage("timelineSpan") private var span: TimeSpan = .all
+
+    /// The bars for the chosen unit and span. The span counts back from today, so an
+    /// empty recent month still has a place.
+    private func periods(_ b: Breakdown) -> [Breakdown.Period] {
+        let rows = unit == .year ? b.byYear : b.byMonth
+        guard let years = span.years else { return rows }
+        let cutoff = Calendar.current.date(byAdding: .month, value: -years * 12 + 1, to: Date())!
+        let key = unit == .year ? String(Calendar.current.component(.year, from: cutoff))
+                                : String(format: "%04d-%02d", Calendar.current.component(.year, from: cutoff), Calendar.current.component(.month, from: cutoff))
+        return rows.filter { $0.period >= key }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -24,23 +37,24 @@ struct MediaCharts: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(model.draft.summary).font(.body.weight(.semibold))
                         Donuts(b: sel, onSource: nil)
-                        Text("BY YEAR TAKEN").sectionLabel().padding(.top, 4)
-                        Timeline(all: sel.byYear, label: { $0 }, onPick: nil)
+                        Text("OVER TIME").sectionLabel().padding(.top, 4)
+                        Timeline(all: periods(sel), label: unit == .year ? { $0 } : Self.shortMonth, onPick: nil)
                     }
                 } else {
                     Text("Nothing on the phone matches these filters.").font(.callout).foregroundStyle(.secondary)
                 }
             }
             if let all = model.everything {
-                Card(title: "By year taken", symbol: "calendar", tint: Tab.library.color,
-                     trailing: AnyView(Text("click a year to pick it").font(.callout).foregroundStyle(.secondary))) {
-                    Timeline(all: all.byYear, label: { $0 }) { y in
-                        model.draft.year = Int(y)
-                        model.openBuilder()
+                Card(title: "Over time", symbol: "calendar", tint: Tab.library.color,
+                     trailing: AnyView(TimeControls(unit: $unit, span: $span))) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Timeline(all: periods(all), label: unit == .year ? { $0 } : Self.shortMonth) { p in
+                            model.draft.year = Int(p.prefix(4))
+                            model.openBuilder()
+                        }
+                        Text("Click a bar to build a rule for that year. \(Self.date(all.oldest)) to \(Self.date(all.newest)).")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
-                }
-                Card(title: "The last 24 months", symbol: "chart.bar.fill", tint: Tab.library.color) {
-                    Timeline(all: all.byMonth, label: Self.shortMonth, onPick: nil)
                 }
             }
         }
@@ -86,6 +100,33 @@ struct MediaCharts: View {
     static func shortMonth(_ p: String) -> String {
         let m = month(p)
         return m.count > 4 ? String(m.dropLast(4)) + String(m.suffix(2)) : m
+    }
+}
+
+enum TimeUnit: String, CaseIterable { case year, month }
+
+enum TimeSpan: String, CaseIterable {
+    case all, five, two, one
+    var years: Int? { switch self { case .all: nil; case .five: 5; case .two: 2; case .one: 1 } }
+    var title: String { switch self { case .all: "All time"; case .five: "Last 5 years"; case .two: "Last 2 years"; case .one: "Last 12 months" } }
+}
+
+private struct TimeControls: View {
+    @Binding var unit: TimeUnit
+    @Binding var span: TimeSpan
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Picker("", selection: $unit) {
+                Text("By year").tag(TimeUnit.year)
+                Text("By month").tag(TimeUnit.month)
+            }
+            .pickerStyle(.segmented).labelsHidden().fixedSize()
+            Picker("", selection: $span) {
+                ForEach(TimeSpan.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            .labelsHidden().fixedSize()
+        }
     }
 }
 
@@ -193,8 +234,8 @@ private struct Timeline: View {
             }
             .chartForegroundStyleScale(["In Drive": Theme.good, "Not in Drive yet": Theme.warn])
             .chartXAxis {
-                // Every label fits up to a dozen bars; beyond that, every third.
-                let step = all.count > 12 ? 3 : 1
+                // About a dozen labels, however many bars.
+                let step = max(1, Int((Double(all.count) / 12).rounded(.up)))
                 AxisMarks(values: all.enumerated().filter { $0.offset % step == 0 }.map(\.element.period)) { v in
                     AxisGridLine()
                     AxisValueLabel { if let p = v.as(String.self) { Text(label(p)).fixedSize() } }

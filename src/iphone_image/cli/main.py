@@ -486,6 +486,123 @@ def config_layout(
     ctx.out.result(data, render)
 
 
+@config.command("storage")
+@click.option("--remote", default=None, help="The rclone account new backups go to.")
+@click.option("--archive", default=None, help="The folder on this Mac files are copied into.")
+@click.option("--apply", "apply_", is_flag=True, help="Save it to the configuration file.")
+@pass_context
+def config_storage(
+    ctx: Context, remote: str | None, archive: str | None, apply_: bool
+) -> None:
+    """Show or change the backup account and the archive folder on this Mac.
+
+    Accounts come from your rclone config (`rclone config` adds one). Only an
+    account that reports SHA-256 can be chosen: that hash is what removal
+    from the phone is checked against. Changing either applies to new
+    backups; nothing already backed up is moved.
+    """
+    from .. import layout as layout_engine
+    from .. import storage
+
+    c = ctx.config
+    found = storage.accounts()
+    current = next((a for a in found if a.name == c.cloud.remote), None)
+    cloud_changes: dict[str, Any] = {}
+    archive_changes: dict[str, Any] = {}
+    if remote is not None and remote != c.cloud.remote:
+        chosen = next((a for a in found if a.name == remote), None)
+        if chosen is None:
+            _fail(ctx.out, f"no rclone account named {remote!r}. Add it with `rclone config`.")
+            return
+        if not chosen.can_verify:
+            _fail(
+                ctx.out,
+                f"{chosen.title} does not report SHA-256, so a backup there could never be "
+                "checked before removal. Only Google Drive can be used for now.",
+            )
+            return
+        cloud_changes["remote"] = remote
+    if archive is not None:
+        path = Path(archive).expanduser()
+        if path != c.archive.local_path:
+            problem = storage.archive_problem(path)
+            if problem:
+                _fail(ctx.out, f"that folder cannot hold the archive: {problem}")
+                return
+            archive_changes["local_path"] = str(path)
+
+    db = ctx.database()
+    try:
+        backed_up = db.conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM assets "
+            "WHERE cloud_status = 'CLOUD_VERIFIED'"
+        ).fetchone()
+    finally:
+        db.close()
+
+    data: dict[str, Any] = {
+        "remote": c.cloud.remote,
+        "account": current.as_dict() if current else None,
+        "accounts": [a.as_dict() for a in found],
+        "archive": str(c.archive.local_path),
+        "destinations": {k: getattr(c.cloud, v) for k, v in DESTINATION_KEYS.items()},
+        "backedUp": {"count": int(backed_up[0]), "bytes": int(backed_up[1])},
+        "proposed": {
+            "remote": cloud_changes.get("remote", c.cloud.remote),
+            "archive": archive_changes.get("local_path", str(c.archive.local_path)),
+        },
+        "changed": bool(cloud_changes or archive_changes),
+        "applied": False,
+        "configPath": str(c.source_path) if c.source_path else None,
+    }
+    if apply_ and data["changed"]:
+        if not c.source_path:
+            _fail(ctx.out, "no configuration file to save to. Run `config init` first.")
+            return
+        path = Path(c.source_path)
+        text = path.read_text()
+        if cloud_changes:
+            text = layout_engine.edit_section(text, "cloud", cloud_changes)
+        if archive_changes:
+            text = layout_engine.edit_section(text, "archive", archive_changes)
+        tmp = path.with_suffix(".yaml.tmp")
+        tmp.write_text(text)
+        try:
+            saved = load_config(tmp)
+        except ConfigError as e:
+            tmp.unlink()
+            _fail(ctx.out, f"not saved, the edited file did not load: {e}")
+            return
+        if (saved.cloud.remote, str(saved.archive.local_path)) != (
+            data["proposed"]["remote"],
+            data["proposed"]["archive"],
+        ):
+            tmp.unlink()
+            _fail(ctx.out, "not saved, the edited file did not say what was asked.")
+            return
+        tmp.replace(path)
+        data["applied"] = True
+
+    def render() -> None:
+        ctx.out.title("Backup storage")
+        acct = f"{c.cloud.remote} ({current.title})" if current else f"{c.cloud.remote} (not found)"
+        ctx.out.pairs(
+            [
+                ("account", acct),
+                ("archive on this Mac", str(c.archive.local_path)),
+                *[(f"{k} go to", v or "(with photos)") for k, v in data["destinations"].items()],
+            ]
+        )
+        ctx.out.line()
+        for a in found:
+            ok = "can be used" if a.can_verify else "no SHA-256, cannot be used yet"
+            ctx.out.line(f"    {a.name:<20}{a.title:<22}{ok}")
+        if data["applied"]:
+            ctx.out.ok("saved. New backups use it; nothing already backed up was moved.")
+
+    ctx.out.result(data, render)
+
+
 @cli.command()
 @click.option(
     "--source", "sources", multiple=True, required=True, help="Source to re-file, e.g. whatsapp."
