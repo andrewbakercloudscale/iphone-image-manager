@@ -24,13 +24,18 @@ struct RemovalSheet: View {
 
     private var stats: RecipeStats? { model.library?.recipes.first { $0.id == recipe.id } }
     private var audit: TaskStatus? { model.latest(.audit) }
-    private var plan: TaskStatus? { model.latest(.plan, recipe: recipe) }
-    private var removal: TaskStatus? {
+    private var latestPlan: TaskStatus? { model.latest(.plan, recipe: recipe) }
+    /// The removal that follows the latest plan.
+    private var lastRemoval: TaskStatus? {
         guard let r = model.latest(.remove, recipe: recipe) else { return nil }
-        // Only the removal that follows the current plan belongs to this sheet.
-        if let p = plan, r.task.startedAt < p.task.startedAt { return nil }
+        if let p = latestPlan, r.task.startedAt < p.task.startedAt { return nil }
         return r
     }
+    /// A removal that had already finished when the sheet opened. Its plan is used up, so
+    /// the sheet starts again from a new plan rather than showing the old one.
+    @State private var spent: String?
+    private var plan: TaskStatus? { spent == nil ? latestPlan : nil }
+    private var removal: TaskStatus? { spent == nil ? lastRemoval : nil }
 
     private var auditReport: AuditReport? { audit?.decode(AuditReport.self) }
     private var auditFresh: Bool {
@@ -81,7 +86,10 @@ struct RemovalSheet: View {
         .background(Color(light: "#f5f5f7", dark: "#1c1c1f"))
         .onChange(of: removal?.running) { loadProof() }
         .onChange(of: model.storage?.destinations) { routes = loadRoutes() }
-        .onAppear { loadProof(); routes = loadRoutes() }
+        .onAppear {
+            if let r = lastRemoval, !r.running, r.errorMessage == nil { spent = r.task.id }
+            loadProof(); routes = loadRoutes()
+        }
     }
 
     private var steps: some View {
@@ -246,6 +254,10 @@ struct RemovalSheet: View {
                     Text("After a few minutes macOS asks to allow deleting them. Click Delete in that box.")
                         .font(.callout).foregroundStyle(.secondary)
                 } else {
+                    if spent != nil, let last = lastRemoval?.decode(RemovalPlan.self) {
+                        Text("Last time: removed \(Fmt.count(last.removed ?? 0)) items, \(Fmt.bytes(last.bytesRemoved ?? 0)), on \(lastRemoval!.task.startedAt.formatted(date: .abbreviated, time: .shortened)).")
+                            .font(.callout).foregroundStyle(Theme.good)
+                    }
                     Text("Unlocks when the plan in step 3 has items to remove.").font(.callout).foregroundStyle(.secondary)
                 }
             }
