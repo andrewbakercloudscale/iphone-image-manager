@@ -334,6 +334,9 @@ class RcloneProvider:
         self.no_progress_timeout = no_progress_timeout
         self.tps_limit = tps_limit
         self.last_transfer_bytes: int | None = None
+        #: The size of every file the listings have seen, keyed "destination/path"
+        #: like a recorded cloud path. Removal compares it with the original's size.
+        self.sizes: dict[str, int] = {}
         self._hash_name: str | None = None
 
     @property
@@ -678,6 +681,8 @@ class RcloneProvider:
                 continue
             path = f"{subdir}/{row['Path']}" if subdir else row["Path"]
             found[path] = digest
+            if isinstance(row.get("Size"), int):
+                self.sizes[f"{destination}/{path}"] = row["Size"]
         return found
 
 

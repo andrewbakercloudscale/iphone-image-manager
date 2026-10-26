@@ -213,9 +213,48 @@ def test_the_default_policy_refuses_outright(env) -> None:
         plan(config, db)
 
 
-def test_any_suspicion_blocks_removal_by_default(env) -> None:
-    """A score below the scanner's flag still blocks: the default tolerates nothing."""
+def test_any_suspicion_blocks_removal_when_drive_cannot_say_the_size(env) -> None:
+    """A score below the scanner's flag still blocks without a size to settle it."""
     config, db = env
+    on_phone(config, db, "a", "2019/11/IMG_1.PNG", proxy=0.1)
+    remote = {"2019/11/IMG_1.PNG": hashlib.sha256(b"photo").hexdigest()}
+    eligible, result = plan(config, db, FakeCloud(remote))
+    assert eligible == []
+    assert result.blocks == {"flagged as a suspected proxy": 1}
+
+
+class SizedCloud(FakeCloud):
+    """A remote that, like rclone, reports each file's size with its hash."""
+
+    def __init__(self, stored: dict[str, str], size: int) -> None:
+        super().__init__(stored)
+        self.sizes = {f"{DEST}/{path}": size for path in stored}
+
+
+def test_a_suspect_goes_when_drive_holds_the_full_size_original(env) -> None:
+    """The guess is settled by fact: Drive's copy is exactly the original's size."""
+    config, db = env
+    on_phone(config, db, "a", "2019/11/IMG_1.PNG", proxy=0.9)
+    remote = {"2019/11/IMG_1.PNG": hashlib.sha256(b"photo").hexdigest()}
+    eligible, _ = plan(config, db, SizedCloud(remote, len(b"photo")))
+    assert [c.filename for c in eligible] == ["IMG_1.PNG"]
+    assert eligible[0].evidence["original_size_confirmed"] == len(b"photo")
+    assert eligible[0].evidence["proxy_suspicion"] == 0.9, "the score is still recorded"
+
+
+def test_a_suspect_stays_when_drive_holds_a_smaller_file(env) -> None:
+    config, db = env
+    on_phone(config, db, "a", "2019/11/IMG_1.PNG", proxy=0.9)
+    remote = {"2019/11/IMG_1.PNG": hashlib.sha256(b"photo").hexdigest()}
+    eligible, result = plan(config, db, SizedCloud(remote, 3))
+    assert eligible == []
+    assert result.blocks == {"Drive's copy is not the size of the original": 1}
+
+
+def test_without_the_remote_as_evidence_a_suspect_is_still_blocked(env) -> None:
+    """`local_verified` never asks Drive, so there is no size to settle it."""
+    config, db = env
+    config = under_local_policy(config)
     on_phone(config, db, "a", "2019/11/IMG_1.PNG", proxy=0.1)
     eligible, result = plan(config, db)
     assert eligible == []
@@ -266,16 +305,19 @@ def test_a_burst_with_unfetched_frames_is_never_removed(env) -> None:
     assert any("burst" in reason for reason in result.blocks)
 
 
-def test_a_suspected_proxy_is_never_removed(env) -> None:
-    """SAFETY section 2: deleting a proxy destroys the only full-resolution original."""
+def test_a_suspected_proxy_is_never_removed_on_its_hash_alone(env) -> None:
+    """SAFETY section 2: deleting a proxy destroys the only full-resolution original.
+
+    A matching hash proves only that Drive holds what was copied. Until 2026-10-26
+    the selector dropped suspects outright; now they reach the remote check, and a
+    match without the size proving the copy is the original still keeps them.
+    """
     config, db = env
     on_phone(config, db, "a", "2019/11/IMG_1.JPG", proxy=0.9)
-    eligible, result = plan(config, db)
+    remote = {"2019/11/IMG_1.JPG": hashlib.sha256(b"photo").hexdigest()}
+    eligible, result = plan(config, db, FakeCloud(remote))
     assert eligible == []
-    assert result.examined == 0, (
-        "selector.for_removal() excludes it before eligibility is even considered, "
-        "and that exclusion cannot be overridden by any flag"
-    )
+    assert result.blocks == {"flagged as a suspected proxy": 1}
 
 
 def test_an_asset_missing_from_the_fresh_scan_is_never_removed(env) -> None:

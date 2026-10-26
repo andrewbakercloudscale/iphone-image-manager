@@ -365,7 +365,8 @@ public enum Ledger {
         // The per-asset rules of remove.py's `plan`, so the estimate matches the plan. Not
         // mirrored: user albums and incomplete Live Photo or burst groups, which the plan
         // still blocks, so this stays an estimate and the plan stays the truth.
-        // remove.py blocks any proxy suspicion above zero, not the 0.5 the scanner reports on.
+        // A suspected low-res stand-in is not kept here: the plan lets it go when Drive's
+        // copy is exactly the original's size, which only the plan can see.
         for recipe in recipes {
             s.recipes.append(try stats(db, recipe, now: now))
         }
@@ -460,8 +461,7 @@ public enum Ledger {
     /// still blocks, so this stays an estimate and the plan stays the truth.
     public static func stats(_ db: SQLiteReader, _ recipe: Recipe, now: Date = Date()) throws -> RecipeStats {
         let verified = "a.cloud_status = 'CLOUD_VERIFIED'"
-        let tolerance = recipe.filter.proxyTolerance
-        let keep = "(a.is_favourite = 1 OR a.proxy_suspicion > \(tolerance) OR COALESCE(a.sha256, '') = '' OR COALESCE(a.cloud_path, '') = '')"
+        let keep = "(a.is_favourite = 1 OR COALESCE(a.sha256, '') = '' OR COALESCE(a.cloud_path, '') = '')"
         let (w, args) = recipe.whereClause(now: now)
         let r = try db.rows("""
             SELECT COUNT(*), COALESCE(SUM(a.size_bytes), 0),

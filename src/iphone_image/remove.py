@@ -33,7 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -89,6 +89,8 @@ class Candidate:
     cloud_path: str
     evidence: dict[str, Any]
     md5: str | None = None
+    #: Over the low-res tolerance: it goes only if Drive's copy is the original's size.
+    needs_size_check: bool = False
 
 
 @dataclass
@@ -241,6 +243,13 @@ def plan(
     # suspected proxies and favourites, neither overridable. SAFETY sections 2
     # and 6.
     selector = selector.for_removal()
+    # With the remote as evidence, a suspected stand-in is settled by fact rather
+    # than by the guess: it goes only if Drive's copy is exactly the size Photos
+    # gives for the original. So suspects reach that check instead of being
+    # dropped here. Owner's call, 2026-10-26; SAFETY section 2.
+    size_check = policy == RemovalPolicy.CLOUD_VERIFIED
+    if size_check:
+        selector = replace(selector, include_proxy_suspects=True)
     where, params = selector.where()
     # --limit and --order applied in SQL, exactly as `cloud` and `sync` do. The
     # first cut of this hardcoded the ordering and dropped the limit entirely,
@@ -333,7 +342,8 @@ def plan(
         # 3. Proxy suspicion. The selector already excludes these and cannot be
         #    told not to, so reaching here means something changed underneath.
         suspicion = float(asset.get("proxy_suspicion") or 0)
-        if config.safety.block_suspected_proxies and suspicion > selector.proxy_threshold:
+        suspect = config.safety.block_suspected_proxies and suspicion > selector.proxy_threshold
+        if suspect and not size_check:
             result.block(asset, "flagged as a suspected proxy")
             continue
 
@@ -376,6 +386,7 @@ def plan(
                 size_bytes=int(asset.get("size_bytes") or 0),
                 cloud_path=str(asset.get("cloud_path") or ""),
                 md5=asset.get("md5"),
+                needs_size_check=suspect,
                 evidence={
                     "scan_id": scan_id,
                     "local_status": asset.get("local_status"),
@@ -456,6 +467,17 @@ def plan(
         if digest != expected:
             result.block(asset_row, "the remote copy does not match the recorded hash")
             continue
+        if candidate.needs_size_check:
+            # The hash proves Drive holds what was copied; the size proves what was
+            # copied was the original and not a low-res stand-in of it.
+            size = getattr(provider, "sizes", {}).get(candidate.cloud_path)
+            if size is None or candidate.size_bytes <= 0:
+                result.block(asset_row, "flagged as a suspected proxy")
+                continue
+            if size != candidate.size_bytes:
+                result.block(asset_row, "Drive's copy is not the size of the original")
+                continue
+            candidate.evidence["original_size_confirmed"] = size
         candidate.evidence["remote_hash_confirmed"] = True
         eligible.append(candidate)
 

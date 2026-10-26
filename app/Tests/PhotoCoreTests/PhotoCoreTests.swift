@@ -80,16 +80,16 @@ final class LedgerTests: XCTestCase {
         try insert(db, 4, file: "d", bundle: "net.whatsapp.WhatsApp", at: old, bytes: 400, proxy: 0.9, cloud: "CLOUD_VERIFIED")
         try insert(db, 5, file: "e", bundle: "net.whatsapp.WhatsApp", at: new, bytes: 500, cloud: "CLOUD_VERIFIED") // too new
         try insert(db, 6, file: "f", bundle: "net.whatsapp.WhatsApp", at: old, bytes: 600, cloud: "CLOUD_VERIFIED", present: 0) // gone
-        // remove.py blocks any suspicion above zero, and anything with no hash to compare.
+        // A suspect is estimated as removable (the plan settles it by Drive's size); no hash never is.
         try insert(db, 7, file: "g", bundle: "net.whatsapp.WhatsApp", at: old, bytes: 10, proxy: 0.1, cloud: "CLOUD_VERIFIED")
         try insert(db, 8, file: "h", bundle: "net.whatsapp.WhatsApp", at: old, bytes: 20, cloud: "CLOUD_VERIFIED", sha: nil)
         let now = ISO8601DateFormatter().date(from: "2026-10-25T00:00:00Z")!
         let s = try Ledger.read(db, recipes: [Recipe(kind: .whatsapp, age: Age(18, "m"))], now: now)
         let r = try XCTUnwrap(s.recipes.first)
         XCTAssertEqual(r.selected, Tally(count: 6, bytes: 1030))
-        XCTAssertEqual(r.removableNow, Tally(count: 1, bytes: 100), "favourites, proxies and unhashed items are never removable")
+        XCTAssertEqual(r.removableNow, Tally(count: 3, bytes: 510), "favourites and unhashed items are never removable; suspects are, pending the size check")
         XCTAssertEqual(r.notBackedUp, Tally(count: 1, bytes: 200))
-        XCTAssertEqual(r.kept, Tally(count: 4, bytes: 730), "only items in Drive count as kept; the rest are not backed up")
+        XCTAssertEqual(r.kept, Tally(count: 2, bytes: 320), "only items in Drive count as kept; the rest are not backed up")
         XCTAssertEqual(s.onPhone, Tally(count: 7, bytes: 1530))
         XCTAssertEqual(s.proxies, 2)
     }

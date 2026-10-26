@@ -40,8 +40,7 @@ extension Ledger {
         let (w, args) = filter?.whereClause(now: now) ?? ("1 = 1", [])
         let base = "FROM assets a WHERE a.present_on_phone = 1 AND \(w)"
         let verified = "a.cloud_status = 'CLOUD_VERIFIED'"
-        let tolerance = filter?.proxyTolerance ?? 0
-        let keep = "(a.is_favourite = 1 OR a.proxy_suspicion > \(tolerance) OR COALESCE(a.sha256, '') = '' OR COALESCE(a.cloud_path, '') = '')"
+        let keep = "(a.is_favourite = 1 OR COALESCE(a.sha256, '') = '' OR COALESCE(a.cloud_path, '') = '')"
         func tally(_ r: [Any?], _ i: Int) -> Tally { Tally(count: r.int(i), bytes: Int64(r.int(i + 1))) }
 
         let t = try db.rows("SELECT COUNT(*), COALESCE(SUM(a.size_bytes), 0), MIN(a.created_at_device), MAX(a.created_at_device) \(base)", args)[0]

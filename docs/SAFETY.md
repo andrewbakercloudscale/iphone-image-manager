@@ -135,6 +135,20 @@ everything. It is never a saved setting, so each removal chooses again, and ever
 removed despite some suspicion records its score and the tolerance in
 `deletion_events.evidence`. Videos always score 0, so the check never affects them.
 
+**Owner decision, 2026-10-26: the guess is settled by fact.** Under `cloud_verified`, a
+suspect is no longer dropped by the selector. It reaches the remote check and goes only
+if Drive's copy matches its recorded hash *and* is exactly the size Photos gives for the
+original resource (`PHAssetResource.fileSize`, read by the scan). The hash proves Drive
+holds what was copied; the size proves what was copied was the original. That holds
+even with Optimize Storage on: the export asks for the original resource with network
+access, so an iCloud-only original is downloaded in full, and the export already
+refuses any file whose size differs from the declared one (`SIZE_MISMATCH`). Measured
+the same day: the bytes-per-pixel score flagged 21,000 of 67,403 items, and was
+unrelated to whether the original was on the Mac (11,262 flagged were iCloud-only,
+9,738 local; 28,379 unflagged were iCloud-only). A remote that reports no size, or a
+size that differs, still blocks. `local_verified` never asks the remote, so there the
+score still blocks as before. The evidence records `original_size_confirmed`.
+
 ---
 
 ## 2b. The API hands out transcodes by default

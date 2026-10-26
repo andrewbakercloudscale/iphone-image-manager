@@ -460,6 +460,7 @@ struct PlanSummary: View {
     static func plain(_ r: String) -> String {
         switch r {
         case "flagged as a suspected proxy": "Might be a low-res stand-in for the real photo"
+        case "Drive's copy is not the size of the original": "Drive's copy is smaller than the original, so it may be a low-res stand-in"
         case "no hash recorded, so the remote copy cannot be compared": "No fingerprint taken, so Drive's copy can't be checked"
         case "not verified in the cloud": "Not in Google Drive yet"
         case "not at the remote right now": "Missing from Google Drive right now"
