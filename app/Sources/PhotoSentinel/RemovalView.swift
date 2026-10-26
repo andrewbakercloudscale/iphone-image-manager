@@ -56,6 +56,12 @@ struct RemovalSheet: View {
         return planResult.map(\.phrase)
     }
 
+    /// How many items the phrase removes.
+    private var phraseCount: Int {
+        if let msg = removal?.errorMessage, let n = RemovalPlan.expectedCount(inError: msg) { return n }
+        return planResult?.eligible ?? 0
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
@@ -207,8 +213,8 @@ struct RemovalSheet: View {
         Step(number: 4, title: "Remove from iPhone", done: done, locked: !ready && removal == nil) {
             VStack(alignment: .leading, spacing: 10) {
                 if let r = removal, r.running {
-                    Running(text: r.progressText.map { "Removing. \($0)…" } ?? "Removing. Click Delete when the dialog appears.", since: r.task.startedAt)
-                    Text("It re-scans and re-checks Google Drive first, so the dialog comes after a few minutes. Click Delete when it appears.")
+                    Running(text: r.progressText.map { "Removing. \($0)…" } ?? "Removing…", since: r.task.startedAt)
+                    Text("It re-scans and re-checks Google Drive first. Then macOS shows its own box asking to allow deleting the photos: click Delete in that box.")
                         .font(.callout).foregroundStyle(.secondary)
                 } else if done {
                     if let r = removal?.decode(RemovalPlan.self) {
@@ -220,28 +226,34 @@ struct RemovalSheet: View {
                 } else if let phrase, ready || removal?.errorMessage != nil {
                     if let msg = removal?.errorMessage {
                         Text(RemovalPlan.expectedCount(inError: msg) != nil
-                             ? "The phone changed since the plan, so the count changed. Type the new phrase."
+                             ? "The phone changed since the plan, so the count is now \(Fmt.count(phraseCount)). Type Confirm again."
                              : "The removal stopped: \(msg)")
                             .font(.callout).foregroundStyle(Theme.warn).fixedSize(horizontal: false, vertical: true)
                     }
-                    Text("This deletes them from your iPhone and every device on the same iCloud account. They go to Recently Deleted on the phone for 30 days; the copies stay in \(model.storage?.accountTitle ?? "Google Drive"), in the folders above. Type the phrase to confirm:")
+                    Text("This deletes them from your iPhone and every device on the same iCloud account. They go to Recently Deleted on the phone for 30 days; the copies stay in \(model.storage?.accountTitle ?? "Google Drive"), in the folders above. Type Confirm to remove \(Fmt.count(phraseCount)) items:")
                         .font(.callout).fixedSize(horizontal: false, vertical: true)
-                    Text(phrase).font(.body.monospaced().weight(.semibold)).textSelection(.enabled)
                     HStack {
-                        TextField(phrase, text: $typed).textFieldStyle(.roundedBorder).font(.body.monospaced())
-                        CapsuleButton(title: "Remove", symbol: "trash.fill", color: typed.lowercased() == phrase ? Theme.bad : .secondary) {
-                            guard typed.lowercased() == phrase else { return }
-                            model.remove(recipe, phrase: phrase)
-                            typed = ""
-                        }
-                        .disabled(typed.lowercased() != phrase)
+                        // The app passes the CLI its count-bound phrase; the person only confirms.
+                        TextField("Confirm", text: $typed).textFieldStyle(.roundedBorder)
+                            .onSubmit { if confirmed { start(phrase) } }
+                        CapsuleButton(title: "Remove", symbol: "trash.fill", color: confirmed ? Theme.bad : .secondary) { start(phrase) }
+                            .disabled(!confirmed)
                     }
-                    Text("Click Delete when the dialog appears.").font(.callout.weight(.semibold))
+                    Text("After a few minutes macOS asks to allow deleting them. Click Delete in that box.")
+                        .font(.callout).foregroundStyle(.secondary)
                 } else {
                     Text("Unlocks when the plan in step 3 has items to remove.").font(.callout).foregroundStyle(.secondary)
                 }
             }
         }
+    }
+
+    private var confirmed: Bool { typed.trimmingCharacters(in: .whitespaces).lowercased() == "confirm" }
+
+    private func start(_ phrase: String) {
+        guard confirmed else { return }
+        model.remove(recipe, phrase: phrase)
+        typed = ""
     }
 
     // MARK: 5. Proof
