@@ -53,7 +53,7 @@ struct CoverageCard: View {
             VStack(spacing: 10) {
                 ForEach(library.channels) { c in
                     ActionRow(label: c.channel.title, value: c.coverage, text: Fmt.pct(c.coverage), color: Theme.good,
-                              note: c.coverage >= 0.999 ? "all \(Fmt.count(c.total.count)) in Drive"
+                              note: c.coverage >= 0.999 ? "all \(Fmt.count(c.total.count)) in Google Drive"
                                   : "\(Fmt.bytes(c.total.bytes - c.verified.bytes)) only on the phone"
                                     + (c.notBackedUpAge.map { ", \($0)" } ?? "")) {
                         if let source = c.channel.cliSource {
@@ -96,7 +96,7 @@ struct BiggestVideosCard: View {
                         Text(String(v.created.prefix(7))).foregroundStyle(.secondary)
                         Spacer()
                         Text(Fmt.bytes(v.bytes)).fontWeight(.semibold).monospacedDigit()
-                        Text(v.inDrive ? "in Drive" : "phone only").foregroundStyle(v.inDrive ? Theme.good : Theme.warn).frame(width: 78, alignment: .trailing)
+                        Text(v.inDrive ? "in Google Drive" : "phone only").foregroundStyle(v.inDrive ? Theme.good : Theme.warn).frame(width: 78, alignment: .trailing)
                         if v.inDrive {
                             RowButton(title: "Delete from iPhone…", symbol: "iphone.and.arrow.forward", style: .fill) { remove([v]) }
                         } else {
@@ -119,7 +119,7 @@ struct BiggestVideosCard: View {
                         RowButton(title: "Delete picked from iPhone…", symbol: "iphone.and.arrow.forward", style: .fill) { remove(chosen) }
                     }
                 }
-                Text("Back up copies a video off the phone, uploads it and checks it in Drive. Remove only ever takes what Drive has checked.")
+                Text("Back up copies a video off the phone, uploads it and checks it in Google Drive. Remove only ever takes what Google Drive has checked.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -159,7 +159,7 @@ struct PlacesCard: View {
                     ForEach(library.places.prefix(12)) { p in
                         ActionRow(label: p.country, value: Double(p.total.bytes) / max(top, 1), text: Fmt.bytes(p.total.bytes),
                                   color: Tab.library.color,
-                                  note: "\(Fmt.count(p.total.count)) items · \(Fmt.pct(p.coverage)) in Drive") {
+                                  note: "\(Fmt.count(p.total.count)) items · \(Fmt.pct(p.coverage)) in Google Drive") {
                             if p.cities.count > 1 {
                                 RowButton(title: open.contains(p.id) ? "Hide cities" : "\(p.cities.count) cities",
                                           symbol: open.contains(p.id) ? "chevron.up" : "chevron.down", color: Tab.library.color, style: .ghost) {
@@ -172,7 +172,7 @@ struct PlacesCard: View {
                             ForEach(p.cities.prefix(15)) { c in
                                 ActionRow(label: "    " + c.city, value: Double(c.total.bytes) / max(top, 1), text: Fmt.bytes(c.total.bytes),
                                           color: Tab.library.color.opacity(0.55),
-                                          note: "    \(Fmt.count(c.total.count)) items · \(Fmt.pct(c.coverage)) in Drive") {
+                                          note: "    \(Fmt.count(c.total.count)) items · \(Fmt.pct(c.coverage)) in Google Drive") {
                                     RowButton(title: "Clean up", symbol: "line.3.horizontal.decrease") { model.showPlace(country: p.country, city: c.city) }
                                 }
                             }

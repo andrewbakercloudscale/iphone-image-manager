@@ -88,7 +88,7 @@ struct OnboardingView: View {
                                 .foregroundStyle(.secondary).frame(width: 190, alignment: .leading)
                             Text(Fmt.bytes(c.total.bytes)).fontWeight(.semibold).monospacedDigit().frame(width: 70, alignment: .trailing)
                             Meter(value: c.coverage, color: c.coverage >= 0.999 ? Theme.good : Tab.backup.color, height: 6)
-                            Text("\(Fmt.pct(c.coverage)) in Drive").foregroundStyle(.secondary).monospacedDigit().frame(width: 90, alignment: .trailing)
+                            Text("\(Fmt.pct(c.coverage)) in Google Drive").foregroundStyle(.secondary).monospacedDigit().frame(width: 90, alignment: .trailing)
                         }
                         .font(.callout)
                     }

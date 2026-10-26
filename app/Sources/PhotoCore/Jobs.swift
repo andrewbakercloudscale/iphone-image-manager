@@ -95,8 +95,8 @@ public struct Job: Identifiable, Hashable, Sendable {
         let n = Fmt.count
         switch phase {
         case .uploading:
-            guard let uploaded, let toUpload else { return "uploading to Drive" }
-            var text = "uploading to Drive, \(n(uploaded)) of \(n(toUpload)) files"
+            guard let uploaded, let toUpload else { return "uploading to Google Drive" }
+            var text = "uploading to Google Drive, \(n(uploaded)) of \(n(toUpload)) files"
             if let rate = uploadRate {
                 text += ", about \(n(Int(rate.rounded()))) a minute"
                 let hours = Double(max(0, toUpload - uploaded)) / rate / 60
@@ -106,7 +106,7 @@ public struct Job: Identifiable, Hashable, Sendable {
         case .fetching:
             guard let left else { return "copying from Photos" }
             return left == 0 ? "copying the last items from Photos" : "copying from Photos, \(n(left)) left"
-        case .releasing: return "tidying the Mac copies already in Drive"
+        case .releasing: return "tidying the Mac copies already in Google Drive"
         case .other: return nil
         }
     }
@@ -183,7 +183,7 @@ public enum Jobs {
         }
         if m.contains("metered connection") { return .paused("On your iPhone's hotspot. Carries on by itself on normal wifi.") }
         if m.hasPrefix("network is down") { return .paused("No network. Waiting up to 3 hours.") }
-        if m.contains("Drive quota/rate limit") { return .paused("Google Drive asked it to slow down. Retrying.") }
+        if m.contains("Google Drive quota/rate limit") { return .paused("Google Drive asked it to slow down. Retrying.") }
         return .running
     }
 
@@ -191,7 +191,7 @@ public enum Jobs {
     static func plain(_ m: String) -> String {
         if m.hasPrefix("no progress") { return "No progress for 2 cycles: Photos could not download items from iCloud. Usually a network blip; resuming normally works." }
         if m.contains("network still down") { return "The network was down for 3 hours." }
-        if m.contains("Drive still over quota") { return "Google Drive refused uploads for 3 hours (quota)." }
+        if m.contains("Google Drive still over quota") { return "Google Drive refused uploads for 3 hours (quota)." }
         if m.contains("EMPTY THE BIN") { return "Not enough disk space: empty the Bin or free some space, then resume." }
         if m.hasPrefix("release failed") { return "Tidying the Mac copies failed. Read cycle.log before resuming." }
         return m

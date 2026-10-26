@@ -146,10 +146,10 @@ struct BinView: View {
                             HStack(spacing: 6) {
                                 Image(systemName: p.allConfirmed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                                     .foregroundStyle(p.allConfirmed ? Theme.good : Theme.warn)
-                                Text("\(Fmt.count(p.confirmed)) of \(Fmt.count(p.total)) removals had Drive's hash re-read and matched at the moment of removal.")
+                                Text("\(Fmt.count(p.confirmed)) of \(Fmt.count(p.total)) removals had Google Drive's hash re-read and matched at the moment of removal.")
                                     .fontWeight(.semibold)
                             }
-                            Text("\(Fmt.count(p.stillVerified)) are still recorded as verified in Drive. Check Google Drive on the Backup tab re-reads every one of them.")
+                            Text("\(Fmt.count(p.stillVerified)) are still recorded as verified in Google Drive. Check Google Drive on the Backup tab re-reads every one of them.")
                                 .foregroundStyle(.secondary)
                         }
                         .font(.callout).fixedSize(horizontal: false, vertical: true)
@@ -339,7 +339,7 @@ struct CoverageRow: View {
     private func why(_ c: ChannelStats, _ left: Tally) -> String {
         let age = c.notBackedUpAge.map { ", \($0)" } ?? ""
         if c.verified.count == 0 { return "Never backed up: no backup has been run for this source yet\(age)." }
-        return "\(Fmt.count(left.count)) not in Drive yet\(age)."
+        return "\(Fmt.count(left.count)) not in Google Drive yet\(age)."
     }
 }
 

@@ -28,7 +28,7 @@ struct RecoverCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Label("Removed in the last 30 days: in Photos, open Recently Deleted (iPhone: Albums › Recently Deleted; Mac: the sidebar), select, Recover.",
                           systemImage: "1.circle.fill")
-                    Label("Older: pick them below and Download from Drive. Each file is checked against the fingerprint taken when it left the phone, then you can add it back to Photos.",
+                    Label("Older: pick them below and Download from Google Drive. Each file is checked against the fingerprint taken when it left the phone, then you can add it back to Photos.",
                           systemImage: "2.circle.fill")
                 }
                 .font(.callout).fixedSize(horizontal: false, vertical: true)
@@ -39,7 +39,7 @@ struct RecoverCard: View {
                     if !picked.isEmpty {
                         Text("\(picked.count) picked").font(.callout.weight(.semibold))
                         Button("Clear") { picked = [] }.buttonStyle(.link)
-                        RowButton(title: "Download from Drive", symbol: "icloud.and.arrow.down.fill", color: Tab.backup.color, style: .fill) {
+                        RowButton(title: "Download from Google Drive", symbol: "icloud.and.arrow.down.fill", color: Tab.backup.color, style: .fill) {
                             model.recover(Array(picked))
                             picked = []
                         }
@@ -55,7 +55,7 @@ struct RecoverCard: View {
                                     .labelsHidden().toggleStyle(.checkbox)
                                 Text(r.filename).lineLimit(1).frame(width: 220, alignment: .leading)
                                 Text(String(r.removedAt.prefix(10))).foregroundStyle(.secondary).monospacedDigit()
-                                Text(inRecentlyDeleted(r) ? "in Recently Deleted" : "in Drive only")
+                                Text(inRecentlyDeleted(r) ? "in Recently Deleted" : "in Google Drive only")
                                     .foregroundStyle(inRecentlyDeleted(r) ? Theme.good : Tab.backup.color)
                                     .frame(width: 140, alignment: .leading)
                                 Spacer()

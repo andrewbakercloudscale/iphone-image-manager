@@ -204,19 +204,19 @@ struct LayoutCard: View {
                     Text("\(Fmt.count(n)) stay where they are: \(reason).").font(.caption).foregroundStyle(.secondary)
                 }
                 HStack {
-                    CapsuleButton(title: "Move them in Drive", symbol: "arrow.right.doc.on.clipboard", color: Tab.backup.color) {
+                    CapsuleButton(title: "Move them in Google Drive", symbol: "arrow.right.doc.on.clipboard", color: Tab.backup.color) {
                         model.refile(Self.refileSources)
                         refile = nil
                     }
                     .disabled(busy)
                     .help(busy ? "Wait for the backup under way to finish" : "Each file is found by its fingerprint at the new place before the ledger changes")
-                    Text("Moves inside Drive; nothing is re-uploaded. Progress is in Activity.").font(.caption).foregroundStyle(.secondary)
+                    Text("Moves inside Google Drive; nothing is re-uploaded. Progress is in Activity.").font(.caption).foregroundStyle(.secondary)
                 }
             }
             .padding(10)
             .background(RoundedRectangle(cornerRadius: 8).fill(Tab.backup.color.opacity(0.08)))
         } else {
-            Text("Saving changes new backups. If files already in Drive are then in the old place, a button here moves them.")
+            Text("Saving changes new backups. If files already in Google Drive are then in the old place, a button here moves them.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }

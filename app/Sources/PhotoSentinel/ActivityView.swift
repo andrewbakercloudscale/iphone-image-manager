@@ -58,7 +58,7 @@ struct ActivityView: View {
                                 }
                             }
                         }
-                        Text("A removal never resumes by itself. Copy, upload and check steps are safe to repeat: anything already verified in Drive is skipped.")
+                        Text("A removal never resumes by itself. Copy, upload and check steps are safe to repeat: anything already verified in Google Drive is skipped.")
                             .font(.callout).foregroundStyle(.secondary).padding(.top, 4)
                     }
                 }

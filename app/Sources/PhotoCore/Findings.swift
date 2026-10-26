@@ -76,7 +76,7 @@ public enum Detector {
             } else if r.notBackedUp.count > 0 {
                 out.append(Finding(id: "todo.\(r.id)", kind: .space, symbol: r.recipe.symbol,
                                    title: "\(Fmt.count(r.selected.count)) \(noun(r.recipe))",
-                                   detail: "\(Fmt.bytes(r.selected.bytes)). Each gets a copy in Drive first; you see them before anything goes.",
+                                   detail: "\(Fmt.bytes(r.selected.bytes)). Each gets a copy in Google Drive first; you see them before anything goes.",
                                    actionTitle: "Clean up", action: .recipe(r.id), bytes: r.selected.bytes))
             }
         }

@@ -214,13 +214,13 @@ final class Model: ObservableObject {
 
     /// Downloads removed items back from Drive into a new folder in Downloads, hash-checked.
     func recover(_ ids: [Int]) {
-        launch(.recover, recipe: nil, title: "Recover \(ids.count) item\(ids.count == 1 ? "" : "s") from Drive",
+        launch(.recover, recipe: nil, title: "Recover \(ids.count) item\(ids.count == 1 ? "" : "s") from Google Drive",
                args: ["recover"] + ids.flatMap { ["--id", String($0)] })
     }
 
     /// Moves files already in Drive to where the saved layout puts them (`refile`).
     func refile(_ sources: [String]) {
-        launch(.refile, recipe: nil, title: "Move existing files in Drive",
+        launch(.refile, recipe: nil, title: "Move existing files in Google Drive",
                args: ["refile", "--apply"] + sources.flatMap { ["--source", $0] })
     }
 
@@ -321,11 +321,11 @@ final class Model: ObservableObject {
         guard let source = c.cliSource else {
             let ids = (try? Ledger.notBackedUpIds(SQLiteReader(path: ledgerPath), channel: c)) ?? []
             let bytes = library?.channels.first { $0.channel == c }.map { $0.total.bytes - $0.verified.bytes } ?? 0
-            if !ids.isEmpty { backUpItems(ids, bytes: bytes, label: "\(c.title): everything not in Drive") }
+            if !ids.isEmpty { backUpItems(ids, bytes: bytes, label: "\(c.title): everything not in Google Drive") }
             return
         }
         let wanted = ["photo", "video"].map {
-            QueuedBackup(type: $0, source: source, older: "0d", label: "\(c.title) \($0 == "video" ? "videos" : "photos"): everything not in Drive")
+            QueuedBackup(type: $0, source: source, older: "0d", label: "\(c.title) \($0 == "video" ? "videos" : "photos"): everything not in Google Drive")
         }
         queue += wanted.filter { !queue.contains($0) }
         pumpQueue()

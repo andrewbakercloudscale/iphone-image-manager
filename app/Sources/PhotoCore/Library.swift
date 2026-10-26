@@ -319,7 +319,7 @@ public struct Operation: Identifiable, Hashable, Sendable {
     public var plain: String {
         switch operation {
         case "DOWNLOAD": "Copy from Photos"
-        case "CLOUD_UPLOAD": "Upload to Drive"
+        case "CLOUD_UPLOAD": "Upload to Google Drive"
         case "REMOVE": "Remove from iPhone"
         default: operation.replacingOccurrences(of: "_", with: " ").capitalized
         }

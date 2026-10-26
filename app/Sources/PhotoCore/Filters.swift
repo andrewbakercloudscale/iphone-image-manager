@@ -180,15 +180,15 @@ extension Ledger {
              Filter(name: "WhatsApp photos over a year old", source: "whatsapp", type: "photo", olderThan: "1y")),
             ("Single videos that each cost a gigabyte",
              Filter(name: "Camera videos over 1 GB", source: "camera", type: "video", minMB: 1024)),
-            ("Videos from more than two years ago, safe in Drive",
+            ("Videos from more than two years ago, safe in Google Drive",
              Filter(name: "Camera videos over 2 years old", source: "camera", type: "video", olderThan: "2y")),
             ("Screenshots are rarely needed after a few months",
              Filter(name: "Screenshots over 90 days old", source: "screenshot", olderThan: "90d")),
             ("Screen recordings are big and usually one-off",
              Filter(name: "Screen recordings over 30 days old", source: "screenrecording", olderThan: "30d")),
-            ("Burst shots: the picks stay with the rest of the burst in Drive",
+            ("Burst shots: the picks stay with the rest of the burst in Google Drive",
              Filter(name: "Bursts over 30 days old", type: "burst", olderThan: "30d")),
-            ("Old videos: once in your Drive archive they need not fill the phone",
+            ("Old videos: once in your Google Drive archive they need not fill the phone",
              Filter(name: "Videos over 5 years old", type: "video", olderThan: "5y")),
         ]
         let known: Set<String> = ["com.apple.camera", "net.whatsapp.WhatsApp", "com.apple.springboard", "com.apple.replayd"]

@@ -89,7 +89,7 @@ final class LedgerTests: XCTestCase {
         XCTAssertEqual(r.selected, Tally(count: 6, bytes: 1030))
         XCTAssertEqual(r.removableNow, Tally(count: 3, bytes: 510), "favourites and unhashed items are never removable; suspects are, pending the size check")
         XCTAssertEqual(r.notBackedUp, Tally(count: 1, bytes: 200))
-        XCTAssertEqual(r.kept, Tally(count: 2, bytes: 320), "only items in Drive count as kept; the rest are not backed up")
+        XCTAssertEqual(r.kept, Tally(count: 2, bytes: 320), "only items in Google Drive count as kept; the rest are not backed up")
         XCTAssertEqual(s.onPhone, Tally(count: 7, bytes: 1530))
         XCTAssertEqual(s.proxies, 2)
     }
@@ -109,7 +109,7 @@ final class LedgerTests: XCTestCase {
         XCTAssertEqual(Dictionary(uniqueKeysWithValues: all.byKind.map { ($0.key, $0.tally.bytes) }),
                        ["photo": 100, "video": 200, "live": 300, "screenshot": 400])
         XCTAssertEqual(Dictionary(uniqueKeysWithValues: all.byStatus.map { ($0.key, $0.tally.bytes) }),
-                       ["canGo": 100, "kept": 300, "notInDrive": 600], "a favourite in Drive is kept, not counted as can go")
+                       ["canGo": 100, "kept": 300, "notInDrive": 600], "a favourite in Google Drive is kept, not counted as can go")
         XCTAssertEqual(all.byYear.map(\.period), ["2019", "2026"])
         XCTAssertEqual(all.byYear[0].inDrive.bytes, 100)
         XCTAssertEqual(all.byYear[0].notInDrive.bytes, 200)
@@ -185,7 +185,7 @@ final class TaskTests: XCTestCase {
 
     func testAuditIsCleanOnlyWhenTheRemoteWasAsked() throws {
         let offline = try JSONDecoder().decode(AuditReport.self, from: Data(#"{"rowsExamined": 5, "conflicts": []}"#.utf8))
-        XCTAssertFalse(offline.clean, "an audit that never asked Drive proves nothing")
+        XCTAssertFalse(offline.clean, "an audit that never asked Google Drive proves nothing")
         let clean = try JSONDecoder().decode(AuditReport.self, from: Data(#"{"rowsExamined": 5, "conflicts": [], "matched": 5, "missing": [], "hashMismatch": []}"#.utf8))
         XCTAssertTrue(clean.clean)
     }
@@ -205,7 +205,7 @@ final class TaskTests: XCTestCase {
         XCTAssertEqual(done.state, .finished(0), done.stderr)
         let report = try XCTUnwrap(done.decode(AuditReport.self))
         XCTAssertGreaterThan(report.rowsExamined, 0)
-        XCTAssertFalse(report.clean, "--offline never asks Drive, so it must not read as clean")
+        XCTAssertFalse(report.clean, "--offline never asks Google Drive, so it must not read as clean")
         XCTAssertEqual(TaskStore.all().map(\.task.id), [t.id])
     }
 
@@ -270,7 +270,7 @@ final class JobsTests: XCTestCase {
         XCTAssertEqual(j.uploaded, 1585)
         XCTAssertEqual(j.toUpload, 11602)
         XCTAssertEqual(j.progress!, 1585.0 / 11602.0, accuracy: 0.0001)
-        XCTAssertEqual(j.step, "uploading to Drive, \(Fmt.count(1585)) of \(Fmt.count(11602)) files")
+        XCTAssertEqual(j.step, "uploading to Google Drive, \(Fmt.count(1585)) of \(Fmt.count(11602)) files")
     }
 
     func testUploadPaceAndTimeLeft() {

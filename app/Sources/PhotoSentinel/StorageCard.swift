@@ -79,7 +79,7 @@ struct StorageCard: View {
     /// rclone's built-in Google project is shared by every rclone user, so Drive throttles it.
     @ViewBuilder private func clientIdHint(_ s: StorageReport) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("Uploads to \(s.accountTitle) are slowed down: it signs in through rclone's shared Google project, and Drive limits how fast everyone using it can upload. Your own client ID, free, lifts that.",
+            Label("Uploads to \(s.accountTitle) are slowed down: it signs in through rclone's shared Google project, and Google Drive limits how fast everyone using it can upload. Your own client ID, free, lifts that.",
                   systemImage: "tortoise.fill")
                 .foregroundStyle(Theme.warn)
             Text("""

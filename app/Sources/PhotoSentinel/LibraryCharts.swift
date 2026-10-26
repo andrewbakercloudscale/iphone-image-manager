@@ -227,12 +227,12 @@ private struct Timeline: View {
             Chart {
                 ForEach(all) { p in
                     BarMark(x: .value("When", p.period), y: .value("GB", gb(p.inDrive.bytes)))
-                        .foregroundStyle(by: .value("Status", "In Drive"))
+                        .foregroundStyle(by: .value("Status", "In Google Drive"))
                     BarMark(x: .value("When", p.period), y: .value("GB", gb(p.notInDrive.bytes)))
-                        .foregroundStyle(by: .value("Status", "Not in Drive yet"))
+                        .foregroundStyle(by: .value("Status", "Not in Google Drive yet"))
                 }
             }
-            .chartForegroundStyleScale(["In Drive": Theme.good, "Not in Drive yet": Theme.warn])
+            .chartForegroundStyleScale(["In Google Drive": Theme.good, "Not in Google Drive yet": Theme.warn])
             .chartXAxis {
                 // About a dozen labels, however many bars.
                 let step = max(1, Int((Double(all.count) / 12).rounded(.up)))
