@@ -180,6 +180,11 @@ struct RemovalSheet: View {
                         .font(.callout).foregroundStyle(.secondary)
                 } else if let r = planResult, planFresh {
                     PlanSummary(plan: r)
+                    if let p = plan {
+                        // Re-planning on a reused scan takes seconds, so say when, or Plan again looks dead.
+                        Text("Planned at \(p.task.startedAt.formatted(date: .omitted, time: .shortened)).")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
                     if let n = r.blockedReasons["flagged as a suspected proxy"], n > 0, recipe.filter.proxyTolerance < 1 {
                         lowResChoice(n)
                     }
@@ -358,8 +363,8 @@ struct Step<Content: View>: View {
         HStack(alignment: .top, spacing: 12) {
             ZStack {
                 Circle().fill(done ? Theme.good : (locked ? Color.secondary.opacity(0.3) : Tab.cleanUp.color))
-                if done { Image(systemName: "checkmark").font(.callout.weight(.bold)).foregroundStyle(.white) }
-                else { Text("\(number)").font(.callout.weight(.bold)).foregroundStyle(.white) }
+                // A done step keeps its number, so "step 3" still points at it; green says done.
+                Text("\(number)").font(.callout.weight(.bold)).foregroundStyle(.white)
             }
             .frame(width: 28, height: 28)
             VStack(alignment: .leading, spacing: 6) {
