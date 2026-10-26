@@ -404,7 +404,7 @@ final class TaskProgressTests: XCTestCase {
             some log line
             {"phase": "scan", "done": 12500, "total": 75854}
             """)
-        XCTAssertEqual(s.progressText, "Scanning the phone: \(Fmt.count(12500)) of about \(Fmt.count(75854))")
+        XCTAssertEqual(s.progressText, "Reading the whole Photos library: \(Fmt.count(12500)) of about \(Fmt.count(75854)) items")
     }
 
     func testDriveAndReusedScan() {
