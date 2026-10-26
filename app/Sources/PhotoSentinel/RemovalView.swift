@@ -207,20 +207,27 @@ struct RemovalSheet: View {
     /// The owner's choice (SAFETY.md section 2): loosen the low-res check for this removal
     /// only. It becomes its own clean-up, so it needs its own plan.
     private func lowResChoice(_ n: Int) -> some View {
-        HStack(spacing: 8) {
-            Text("\(Fmt.count(n)) kept by the low-res check (\(recipe.filter.proxyTolerance == 0 ? "strict" : "relaxed")).")
-                .font(.callout)
-            Spacer()
-            ForEach([(0.5, "Relax"), (1.0, "Turn off")].filter { $0.0 > recipe.filter.proxyTolerance }, id: \.0) { level, label in
-                CapsuleButton(title: label, symbol: "slider.horizontal.3", color: Theme.warn, style: .soft) {
-                    var f = recipe.filter
-                    f.proxyTolerance = level
-                    if f.name.isEmpty { f.name = recipe.title + (level >= 1 ? ", low-res check off" : ", low-res check relaxed") }
-                    model.removing = Recipe(custom: f)
+        let relaxed = recipe.filter.proxyTolerance > 0
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Why \(Fmt.count(n)) were kept")
+                .font(.callout.weight(.semibold))
+            Text("They are small files for their size. Sometimes that means the phone only holds a low-res copy and the original is in iCloud, so the app keeps them to be safe. Screenshots are often just small, so this is usually a false alarm.\(relaxed ? " The check is already relaxed." : "")")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                ForEach([(0.5, "Let most of them go"), (1.0, "Let all of them go")].filter { $0.0 > recipe.filter.proxyTolerance }, id: \.0) { level, label in
+                    CapsuleButton(title: label, symbol: "slider.horizontal.3", color: Theme.warn, style: .soft) {
+                        var f = recipe.filter
+                        f.proxyTolerance = level
+                        if f.name.isEmpty { f.name = recipe.title + (level >= 1 ? ", low-res check off" : ", low-res check relaxed") }
+                        model.removing = Recipe(custom: f)
+                    }
                 }
             }
+            Text("Each button makes a new plan, so you see the new count first. Nothing is removed until step 4.")
+                .font(.caption).foregroundStyle(.secondary)
         }
-        .help("A photo that is small for its size might be a low-res stand-in whose original is only in iCloud. Screenshots are often flagged without being stand-ins. Each item removed this way records its score.")
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.warn.opacity(0.08)))
     }
 
     // MARK: 4. Remove
