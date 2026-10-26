@@ -204,6 +204,9 @@ struct Footer: View {
             CapsuleButton(title: "Quit", symbol: "power", color: Theme.bad, style: .soft) { NSApp.terminate(nil) }
             Spacer()
         }
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.cardFill))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.cardStroke, lineWidth: 1.5))
     }
 }
 
