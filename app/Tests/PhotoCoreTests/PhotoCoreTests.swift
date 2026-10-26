@@ -413,4 +413,13 @@ final class TaskProgressTests: XCTestCase {
         XCTAssertEqual(status(#"{"phase": "scan", "reused": 27}"#).progressText, "Using the phone scan from a few minutes ago")
         XCTAssertNil(status("plain text").progressText)
     }
+
+    func testDriveListingAndRemovalCounts() {
+        XCTAssertEqual(status(#"{"phase": "drive", "items": 2226, "listed": 1200, "expected": 2907}"#).progressText,
+                       "Checking each of the \(Fmt.count(2226)) against Google Drive: read \(Fmt.count(1200)) of about \(Fmt.count(2907)) files there")
+        XCTAssertEqual(status(#"{"phase": "drive", "items": 2226, "listed": 3100, "expected": 2907}"#).progressText,
+                       "Checking each of the \(Fmt.count(2226)) against Google Drive: read \(Fmt.count(3100)) files there")
+        XCTAssertEqual(status(#"{"phase": "remove", "done": 500, "total": 2226}"#).progressText,
+                       "Removed \(Fmt.count(500)) of \(Fmt.count(2226))")
+    }
 }

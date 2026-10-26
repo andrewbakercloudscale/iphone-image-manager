@@ -21,6 +21,7 @@ network and no account.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -261,9 +262,16 @@ class CloudProvider(Protocol):
     def upload(self, root: Path, relatives: list[str], destination: str) -> None:
         """Copy `relatives`, resolved under `root`, to `destination`."""
 
-    def hashes(self, destination: str, subdir: str | None = None) -> dict[str, str]:
+    def hashes(
+        self,
+        destination: str,
+        subdir: str | None = None,
+        on_count: Callable[[int], None] | None = None,
+    ) -> dict[str, str]:
         """The digest per path already at `destination`, keyed relative to it, in
         the provider's `hash_name` (SHA-256 unless it says otherwise).
+
+        `on_count`, when given, hears roughly how many files have been listed so far.
 
         `subdir` narrows the listing to one folder. Keys stay relative to
         `destination` either way, so a caller never has to know which was
@@ -372,6 +380,7 @@ class RcloneProvider:
         timeout: float,
         stall_timeout: float | None = None,
         no_progress_timeout: float | None = None,
+        on_lines: Callable[[int], None] | None = None,
     ) -> str:
         """Run rclone and return its stdout, reporting stderr as it arrives.
 
@@ -458,6 +467,21 @@ class RcloneProvider:
             assert process.stderr is not None
             pump = threading.Thread(target=drain, args=(process.stderr,), daemon=True)
             pump.start()
+            counting = threading.Event()
+            if on_lines:
+                # lsjson writes one file per line as it goes, so the lines so far are
+                # the files listed so far: the only progress a silent listing has.
+                def count() -> None:
+                    offset = lines = 0
+                    while not counting.wait(1.0):
+                        chunk = os.pread(sink.fileno(), 1 << 20, offset)
+                        while chunk:
+                            offset += len(chunk)
+                            lines += chunk.count(b"\n")
+                            chunk = os.pread(sink.fileno(), 1 << 20, offset)
+                        on_lines(lines)
+
+                threading.Thread(target=count, daemon=True).start()
             try:
                 code = self._wait(
                     process,
@@ -475,6 +499,7 @@ class RcloneProvider:
                     f"rclone {args[0]} {expiry.why} and was killed. Last output: {diagnostic()}"
                 ) from None
             finally:
+                counting.set()
                 pump.join(timeout=5)
                 process.stderr.close()
             sink.seek(0)
@@ -618,7 +643,12 @@ class RcloneProvider:
     def _pacing(self) -> list[str]:
         return ["--tpslimit", str(self.tps_limit)] if self.tps_limit else []
 
-    def hashes(self, destination: str, subdir: str | None = None) -> dict[str, str]:
+    def hashes(
+        self,
+        destination: str,
+        subdir: str | None = None,
+        on_count: Callable[[int], None] | None = None,
+    ) -> dict[str, str]:
         where = f"{destination}/{subdir}" if subdir else destination
         try:
             out = self._run(
@@ -632,6 +662,7 @@ class RcloneProvider:
                 ],
                 timeout=self.batch_timeout,
                 stall_timeout=None,  # lsjson is silent by design; only the clock applies
+                on_lines=on_count,
             )
         except CloudError as exc:
             # A folder that is not there yet is an empty folder, not an error:
@@ -650,7 +681,11 @@ class RcloneProvider:
         return found
 
 
-def list_hashes(provider: CloudProvider, wanted: Iterable[str]) -> dict[str, dict[str, str]]:
+def list_hashes(
+    provider: CloudProvider,
+    wanted: Iterable[str],
+    on_count: Callable[[int], None] | None = None,
+) -> dict[str, dict[str, str]]:
     """`provider.hashes` for each destination, the listings run side by side.
 
     Each listing is one rclone process waiting on Drive, so four of them in a
@@ -658,12 +693,28 @@ def list_hashes(provider: CloudProvider, wanted: Iterable[str]) -> dict[str, dic
     2026-10-26: a screenshots listing alone was 43s, and `--fast-list` made it
     113s, so that flag is not the speed-up. A failed listing fails the call,
     exactly as it did one at a time.
+
+    `on_count` hears the files listed so far, summed across the listings.
     """
     wanted = sorted(set(wanted))
+    counts: dict[str, int] = {}
+    lock = threading.Lock()
+
+    def listing(destination: str) -> dict[str, str]:
+        if not on_count:
+            return provider.hashes(destination)
+
+        def heard(n: int) -> None:
+            with lock:
+                counts[destination] = n
+                on_count(sum(counts.values()))
+
+        return provider.hashes(destination, on_count=heard)
+
     if len(wanted) <= 1:
-        return {d: provider.hashes(d) for d in wanted}
+        return {d: listing(d) for d in wanted}
     with ThreadPoolExecutor(max_workers=len(wanted)) as pool:
-        futures = {d: pool.submit(provider.hashes, d) for d in wanted}
+        futures = {d: pool.submit(listing, d) for d in wanted}
         return {d: f.result() for d, f in futures.items()}
 
 

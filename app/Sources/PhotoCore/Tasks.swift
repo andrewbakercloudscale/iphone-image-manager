@@ -54,7 +54,18 @@ public struct TaskStatus: Hashable, Sendable {
                 return total > 0 ? "Finding them in your library: looked at \(Fmt.count(min(done, total))) of \(Fmt.count(total)) photos and videos"
                                  : "Finding them in your library: looked at \(Fmt.count(done)) photos and videos"
             case "drive":
-                return "Checking each of the \(Fmt.count(obj["items"] as? Int ?? 0)) against its copy in Google Drive (about a minute)"
+                let items = Fmt.count(obj["items"] as? Int ?? 0)
+                guard let listed = obj["listed"] as? Int else {
+                    return "Checking each of the \(items) against its copy in Google Drive (about a minute)"
+                }
+                // The expected count comes from the ledger, so Drive can hold more; never show "12 of 10".
+                let expected = obj["expected"] as? Int ?? 0
+                return expected > listed
+                    ? "Checking each of the \(items) against Google Drive: read \(Fmt.count(listed)) of about \(Fmt.count(expected)) files there"
+                    : "Checking each of the \(items) against Google Drive: read \(Fmt.count(listed)) files there"
+            case "remove":
+                let done = obj["done"] as? Int ?? 0, total = obj["total"] as? Int ?? 0
+                return "Removed \(Fmt.count(done)) of \(Fmt.count(total))"
             default: continue
             }
         }

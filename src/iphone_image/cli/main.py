@@ -1747,12 +1747,23 @@ def remove_from_iphone(
                 progress=lambda r: report({"phase": "scan", "done": r.seen, "total": expected}),
                 every=500,
             ).scan_id
+        checking = 0
+
+        def on_drive(n: int) -> None:
+            nonlocal checking
+            checking = n
+            report({"phase": "drive", "items": n})
+
         eligible, preview = remove_engine.plan(
             config,
             db,
             selector,
             scan_id=scan_id,
-            on_drive=lambda n: report({"phase": "drive", "items": n}),
+            on_drive=on_drive,
+            # The listing is the slow part, so it counts the files Drive has sent so far.
+            on_listed=lambda n, total: report(
+                {"phase": "drive", "items": checking, "listed": n, "expected": total}
+            ),
         )
     except (remove_engine.RemoveError, cloud_engine.CloudError, HelperError) as exc:
         _fail(ctx.out, str(exc))
@@ -1828,6 +1839,7 @@ def remove_from_iphone(
         return
 
     def tick(result: Any) -> None:
+        report({"phase": "remove", "done": result.removed, "total": preview.eligible})
         ctx.out.line(
             f"  removed {result.removed:,} of {preview.eligible:,}, "
             f"{human_bytes(result.bytes_removed)}",

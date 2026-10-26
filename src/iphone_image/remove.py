@@ -207,6 +207,12 @@ def _user_album(config: Config, asset: dict[str, Any]) -> str | None:
     return next((a for a in albums if a not in ignore), None)
 
 
+def _like_prefix(destination: str) -> str:
+    """A LIKE pattern for every path under `destination`, its wildcards escaped."""
+    escaped = destination.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{escaped}/%"
+
+
 def plan(
     config: Config,
     db: Database,
@@ -215,11 +221,14 @@ def plan(
     scan_id: int,
     provider: CloudProvider | None = None,
     on_drive: Callable[[int], None] | None = None,
+    on_listed: Callable[[int, int], None] | None = None,
 ) -> tuple[list[Candidate], RemoveResult]:
     """Everything with positive evidence for every condition the policy needs.
 
     `on_drive` is told how many items are about to be checked against the remote,
-    before the listing, which is silent and takes a minute."""
+    before the listing, which takes a minute. `on_listed` then hears the files the
+    remote has listed so far, and roughly how many the ledger expects there.
+    """
     policy = config.remove_from_iphone.policy
     if policy == RemovalPolicy.NEVER:
         raise RemoveError(
@@ -405,7 +414,20 @@ def plan(
     # video checked against the photo archive is reported missing, and this is
     # the code path where "missing" decides whether a photograph is deleted.
     wanted_destinations = sorted({split_cloud_path(config, c.cloud_path)[0] for c in wanted})
-    remote = list_hashes(provider, wanted_destinations)
+    expected = sum(
+        int(
+            db.conn.execute(
+                "SELECT COUNT(*) FROM assets WHERE cloud_path LIKE ? ESCAPE '\\'",
+                (_like_prefix(d),),
+            ).fetchone()[0]
+        )
+        for d in wanted_destinations
+    )
+    remote = list_hashes(
+        provider,
+        wanted_destinations,
+        on_count=(lambda n: on_listed(n, expected)) if on_listed else None,
+    )
     for destination in wanted_destinations:
         log.info("the remote reports %d file(s) at %s", len(remote[destination]), destination)
 

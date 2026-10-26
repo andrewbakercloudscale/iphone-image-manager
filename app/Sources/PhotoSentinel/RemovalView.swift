@@ -53,6 +53,10 @@ struct RemovalSheet: View {
     private var planResult: RemovalPlan? { plan?.decode(RemovalPlan.self) }
     private var planFresh: Bool {
         guard let p = plan, !p.running else { return false }
+        // A removal by another clean-up since (the same screenshots, relaxed, say) changes
+        // what is on the phone, so this plan's count is out of date even within the hour.
+        if let r = model.latest(.remove), r.task.recipe != recipe.id, !r.running,
+           r.errorMessage == nil, r.task.startedAt > p.task.startedAt { return false }
         return Date().timeIntervalSince(p.task.startedAt) < Self.planLife
     }
 

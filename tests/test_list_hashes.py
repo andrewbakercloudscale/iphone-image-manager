@@ -43,3 +43,21 @@ def test_one_failed_listing_fails_the_call() -> None:
 
 def test_nothing_wanted_lists_nothing() -> None:
     assert list_hashes(Slow(), []) == {}
+
+
+class Counting:
+    def hashes(self, destination, subdir=None, on_count=None):
+        if on_count:
+            on_count(len(destination))
+        return {}
+
+
+def test_counts_are_summed_across_listings() -> None:
+    heard: list[int] = []
+    list_hashes(Counting(), ["ab", "abcd"], on_count=heard.append)
+    assert max(heard) == 6
+
+
+def test_no_counter_leaves_old_providers_alone() -> None:
+    # Slow takes no on_count: without a counter it must not be passed one.
+    assert list_hashes(Slow(), ["Photos"]) == {"Photos": {"Photos.jpg": "Photos"}}
