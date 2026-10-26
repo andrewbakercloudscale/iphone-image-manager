@@ -46,15 +46,17 @@ final class Model: ObservableObject {
     /// Clean-ups the owner built and saved.
     @Published var saved: [Filter] = [] { didSet { saveFilters() } }
 
+    // @AppStorage inside an ObservableObject does not publish: without this, Welcome
+    // set onboarded = false and no sheet appeared.
     /// "off" keeps every item of that type on the phone.
-    @AppStorage("age.cameraPhotos") var photoAge = "3y"
-    @AppStorage("age.oldVideos") var videoAge = "1y"
-    @AppStorage("age.whatsapp") var whatsappAge = "18m"
-    @AppStorage("age.screenshots") var screenshotAge = "1y"
-    @AppStorage("age.screenRecordings") var recordingAge = "30d"
-    @AppStorage("ledgerPath") var ledgerPath = Ledger.defaultPath
-    @AppStorage("repoPath") var repoPath = CLIEngine.defaultRepo
-    @AppStorage("onboarded") var onboarded = false
+    @AppStorage("age.cameraPhotos") var photoAge = "3y" { willSet { objectWillChange.send() } }
+    @AppStorage("age.oldVideos") var videoAge = "1y" { willSet { objectWillChange.send() } }
+    @AppStorage("age.whatsapp") var whatsappAge = "18m" { willSet { objectWillChange.send() } }
+    @AppStorage("age.screenshots") var screenshotAge = "1y" { willSet { objectWillChange.send() } }
+    @AppStorage("age.screenRecordings") var recordingAge = "30d" { willSet { objectWillChange.send() } }
+    @AppStorage("ledgerPath") var ledgerPath = Ledger.defaultPath { willSet { objectWillChange.send() } }
+    @AppStorage("repoPath") var repoPath = CLIEngine.defaultRepo { willSet { objectWillChange.send() } }
+    @AppStorage("onboarded") var onboarded = false { willSet { objectWillChange.send() } }
 
     private var timers: [Timer] = []
 
