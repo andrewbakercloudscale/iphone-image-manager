@@ -27,7 +27,14 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .cloud import CloudError, CloudProvider, RcloneProvider, destination_for
+from .cloud import (
+    CloudError,
+    CloudProvider,
+    RcloneProvider,
+    destination_for,
+    hash_name_of,
+    recorded_digest,
+)
 from .config import Config
 from .db.database import Database, utcnow
 from .logs import get_logger
@@ -45,6 +52,7 @@ class RemoteMove:
     old: str
     new: str
     claim: str
+    md5: str | None = None
 
     @property
     def folders(self) -> tuple[str, str]:
@@ -119,6 +127,7 @@ def plan(config: Config, db: Database, channels: list[str]) -> RefilePlan:
                 old=old,
                 new=new,
                 claim=str(PurePosixPath(channel) / PurePosixPath(*relative.parts) / name),
+                md5=asset.get("md5"),
             )
         )
     return result
@@ -158,7 +167,8 @@ def run(
         with db.transaction():
             for move in batch:
                 name = PurePosixPath(move.new).name
-                if found.get(name) != move.sha256:
+                expected = recorded_digest(move, hash_name_of(rclone))
+                if expected is None or found.get(name) != expected:
                     result.failures.append({"file": move.old, "error": "not found at the new path"})
                     continue
                 db.conn.execute(

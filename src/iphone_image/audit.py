@@ -43,8 +43,10 @@ from .cloud import (
     CloudProvider,
     RcloneProvider,
     destinations,
+    hash_name_of,
     list_hashes,
     nested_destinations,
+    recorded_digest,
     split_cloud_path,
 )
 from .config import Config
@@ -231,10 +233,11 @@ def remote(
 
     seen: set[tuple[str, str]] = set()
     rows = db.conn.execute(
-        "SELECT id, filename, cloud_path, sha256, size_bytes FROM assets "
+        "SELECT id, filename, cloud_path, sha256, md5, size_bytes FROM assets "
         "WHERE cloud_status = 'CLOUD_VERIFIED'"
     ).fetchall()
     report.claimed = len(rows)
+    hash_name = hash_name_of(provider)
 
     for row in rows:
         asset = dict(row)
@@ -249,15 +252,17 @@ def remote(
             report.missing.append({**entry, "why": "not at the remote"})
             continue
         seen.add((destination, relative))
-        if not digest:
-            # The provider listed it but would not say what it holds. Neither a
-            # match nor a mismatch, and reported as neither.
+        # Drive's rows are compared exactly as before: a missing SHA-256 is a mismatch.
+        expected = recorded_digest(asset, hash_name) or ("" if hash_name == "sha256" else None)
+        if not digest or expected is None:
+            # The provider listed it but would not say what it holds, or the
+            # ledger has nothing in the hash it reports (no MD5 for an asset
+            # fetched before it was kept). Neither a match nor a mismatch, and
+            # reported as neither.
             report.unhashed += 1
             continue
-        if digest != str(asset.get("sha256") or ""):
-            report.hash_mismatch.append(
-                {**entry, "ledger": str(asset.get("sha256") or "")[:16], "remote": digest[:16]}
-            )
+        if digest != expected:
+            report.hash_mismatch.append({**entry, "ledger": expected[:16], "remote": digest[:16]})
             continue
         report.matched += 1
 

@@ -35,9 +35,11 @@ from typing import IO, Any, Protocol
 
 from .config import Config
 from .db.database import Database, utcnow
+from .digests import file_digests
 from .journal import Journal, Op
 from .logs import get_logger
 from .selector import Selector, channel_of
+from .storage import hash_for, parse_remotes
 
 log = get_logger("cloud")
 
@@ -182,6 +184,8 @@ class Upload:
     sha256: str
     size_bytes: int
     channel: str
+    #: Set only for a remote that reports MD5 (S3); Drive is checked by `sha256`.
+    md5: str | None = None
     #: Resolved once, in plan, and carried through upload and verification so
     #: the two can never be computed from different rules.
     destination: str = ""
@@ -224,6 +228,24 @@ class CloudResult:
         return self.bytes_transferred / self.seconds_transferring / 1_048_576
 
 
+def hash_name_of(provider: object) -> str:
+    """The hash `provider.hashes` reports: "sha256" (Drive, a local folder) or "md5" (S3).
+
+    Providers written before S3 existed say nothing, and they all report SHA-256.
+    """
+    return str(getattr(provider, "hash_name", "sha256"))
+
+
+def recorded_digest(record: object, hash_name: str) -> str | None:
+    """The digest the ledger holds in that hash, from an asset row or a candidate.
+
+    None when there is none, and a caller treats None as unverifiable: an asset
+    fetched before the MD5 column existed never matches an MD5-only remote.
+    """
+    value = record.get(hash_name) if isinstance(record, dict) else getattr(record, hash_name, None)
+    return str(value) if value else None
+
+
 class CloudProvider(Protocol):
     """What the engine needs from any cloud backend."""
 
@@ -240,7 +262,8 @@ class CloudProvider(Protocol):
         """Copy `relatives`, resolved under `root`, to `destination`."""
 
     def hashes(self, destination: str, subdir: str | None = None) -> dict[str, str]:
-        """SHA256 per path already at `destination`, keyed relative to it.
+        """The digest per path already at `destination`, keyed relative to it, in
+        the provider's `hash_name` (SHA-256 unless it says otherwise).
 
         `subdir` narrows the listing to one folder. Keys stay relative to
         `destination` either way, so a caller never has to know which was
@@ -303,11 +326,21 @@ class RcloneProvider:
         self.no_progress_timeout = no_progress_timeout
         self.tps_limit = tps_limit
         self.last_transfer_bytes: int | None = None
+        self._hash_name: str | None = None
+
+    @property
+    def hash_name(self) -> str:
+        """The ledger column this remote's listings are checked against, from its type.
+
+        SHA-256 until `check` has read the type. That fails closed for an S3
+        remote nobody checked: its listings carry no SHA-256, so nothing matches.
+        """
+        return self._hash_name or "sha256"
 
     def check(self) -> None:
         try:
             result = subprocess.run(
-                [self.binary, "listremotes"], capture_output=True, text=True, timeout=60
+                [self.binary, "listremotes", "--long"], capture_output=True, text=True, timeout=60
             )
         except FileNotFoundError as exc:
             raise CloudError(
@@ -315,13 +348,22 @@ class RcloneProvider:
             ) from exc
         if result.returncode != 0:
             raise CloudError(f"rclone failed: {result.stderr.strip() or 'no diagnostic'}")
-        remotes = {line.strip().rstrip(":") for line in result.stdout.splitlines()}
-        if self.remote not in remotes:
+        kinds = {a.name: a.kind for a in parse_remotes(result.stdout)}
+        if self.remote not in kinds:
             raise CloudError(
                 f"rclone has no remote called {self.remote!r}. "
-                f"Configured: {', '.join(sorted(remotes)) or 'none'}. "
+                f"Configured: {', '.join(sorted(kinds)) or 'none'}. "
                 f"Create one with: rclone config"
             )
+        # Fail closed: a type whose listings carry no hash the ledger records
+        # could never prove a copy, and nothing may be released against it.
+        name = hash_for(kinds[self.remote])
+        if name is None:
+            raise CloudError(
+                f"{self.remote!r} is a {kinds[self.remote]!r} remote, whose listings carry no "
+                f"hash Photo Sentinel can check. Use Google Drive, S3 or a local folder."
+            )
+        self._hash_name = name
 
     def _run(
         self,
@@ -600,7 +642,7 @@ class RcloneProvider:
             raise
         found: dict[str, str] = {}
         for row in json.loads(out or "[]"):
-            digest = (row.get("Hashes") or {}).get("sha256")
+            digest = (row.get("Hashes") or {}).get(self.hash_name)
             if not digest:
                 continue
             path = f"{subdir}/{row['Path']}" if subdir else row["Path"]
@@ -634,8 +676,15 @@ def _remote_path_owner(db: Database, cloud_path: str, asset_id: int) -> int | No
     return int(row["id"]) if row else None
 
 
-def plan(config: Config, selector: Selector, db: Database) -> list[Upload]:
-    """Every archived file the selector matches that is not yet verified above."""
+def plan(
+    config: Config, selector: Selector, db: Database, *, hash_name: str = "sha256"
+) -> list[Upload]:
+    """Every archived file the selector matches that is not yet verified above.
+
+    For a remote checked by MD5, an asset fetched before the ledger recorded MD5
+    has it computed here from the Mac copy, which is still there: plan only
+    takes assets whose local copy is verified and present.
+    """
     where, params = selector.where()
     # --limit is applied in SQL, not by truncating afterwards, so "the first 20"
     # means the first 20 the selector would have acted on. The CLI offers the
@@ -666,6 +715,17 @@ def plan(config: Config, selector: Selector, db: Database) -> list[Upload]:
         if not asset.get("sha256"):
             log.warning("%s has no recorded hash, skipping", local)
             continue
+        md5 = asset.get("md5")
+        if hash_name == "md5" and not md5:
+            try:
+                sha, md5 = file_digests(local)
+            except OSError as exc:
+                log.warning("%s could not be read for its MD5 (%s), skipping", local, exc)
+                continue
+            if sha != asset["sha256"]:
+                log.warning("%s no longer matches its recorded hash, skipping", local)
+                continue
+            db.conn.execute("UPDATE assets SET md5 = ? WHERE id = ?", (md5, asset["id"]))
         destination = destination_for(config, asset.get("media_type"), channel)
         owner = _remote_path_owner(db, f"{destination}/{relative}", int(asset["id"]))
         if owner is not None:
@@ -687,6 +747,7 @@ def plan(config: Config, selector: Selector, db: Database) -> list[Upload]:
                 sha256=str(asset["sha256"]),
                 size_bytes=int(asset.get("size_bytes") or 0),
                 channel=channel,
+                md5=str(md5) if md5 else None,
                 destination=destination,
             )
         )
@@ -737,7 +798,7 @@ def run(
     result = CloudResult()
 
     try:
-        uploads = plan(config, selector, db)
+        uploads = plan(config, selector, db, hash_name=hash_name_of(provider))
         result.planned = len(uploads)
         if not uploads:
             return result
@@ -892,12 +953,13 @@ def _verify_batch(
                 {"file": upload.relative, "error": "not found at the destination after upload"}
             )
             continue
-        if digest != upload.sha256:
+        expected = recorded_digest(upload, hash_name_of(provider)) or ""
+        if digest != expected:
             result.failed += 1
             result.failures.append(
                 {
                     "file": upload.relative,
-                    "error": f"hash mismatch: remote {digest[:12]}, local {upload.sha256[:12]}",
+                    "error": f"hash mismatch: remote {digest[:12]}, local {expected[:12]}",
                 }
             )
             continue

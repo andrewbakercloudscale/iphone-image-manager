@@ -37,7 +37,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .cloud import CloudProvider, RcloneProvider, list_hashes, split_cloud_path
+from .cloud import (
+    CloudProvider,
+    RcloneProvider,
+    hash_name_of,
+    list_hashes,
+    recorded_digest,
+    split_cloud_path,
+)
 from .config import Config, RemovalPolicy
 from .db.database import Database, utcnow
 from .journal import Journal, Op
@@ -81,6 +88,7 @@ class Candidate:
     size_bytes: int
     cloud_path: str
     evidence: dict[str, Any]
+    md5: str | None = None
 
 
 @dataclass
@@ -354,6 +362,7 @@ def plan(
                 sha256=str(asset.get("sha256") or ""),
                 size_bytes=int(asset.get("size_bytes") or 0),
                 cloud_path=str(asset.get("cloud_path") or ""),
+                md5=asset.get("md5"),
                 evidence={
                     "scan_id": scan_id,
                     "local_status": asset.get("local_status"),
@@ -394,6 +403,7 @@ def plan(
     for destination in wanted_destinations:
         log.info("the remote reports %d file(s) at %s", len(remote[destination]), destination)
 
+    hash_name = hash_name_of(provider)
     eligible: list[Candidate] = []
     for candidate in wanted:
         destination, relative = split_cloud_path(config, candidate.cloud_path)
@@ -407,7 +417,15 @@ def plan(
             # there is, and "" == "" would otherwise read as agreement.
             result.block(asset_row, "the remote reported no hash to compare")
             continue
-        if digest != candidate.sha256:
+        expected = recorded_digest(candidate, hash_name)
+        if expected is None:
+            # An asset fetched before the ledger kept MD5 has none, and an
+            # MD5-only remote (S3) can then prove nothing about it.
+            result.block(
+                asset_row, f"no {hash_name.upper()} recorded to compare the remote against"
+            )
+            continue
+        if digest != expected:
             result.block(asset_row, "the remote copy does not match the recorded hash")
             continue
         candidate.evidence["remote_hash_confirmed"] = True

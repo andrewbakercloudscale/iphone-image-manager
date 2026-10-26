@@ -37,7 +37,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .cloud import CloudProvider, RcloneProvider, list_hashes, split_cloud_path
+from .cloud import (
+    CloudProvider,
+    RcloneProvider,
+    hash_name_of,
+    list_hashes,
+    recorded_digest,
+    split_cloud_path,
+)
 from .config import Config
 from .db.database import Database, utcnow
 from .journal import Journal, Op
@@ -67,6 +74,7 @@ class Candidate:
     cloud_path: str
     sha256: str
     size_bytes: int
+    md5: str | None = None
 
 
 @dataclass
@@ -134,6 +142,7 @@ def plan(
                 cloud_path=str(asset["cloud_path"]),
                 sha256=str(asset["sha256"]),
                 size_bytes=int(asset.get("size_bytes") or 0),
+                md5=asset.get("md5"),
             )
         )
 
@@ -152,13 +161,18 @@ def plan(
     for destination in sorted(remote):
         log.info("the remote reports %d file(s) at %s", len(remote[destination]), destination)
 
+    hash_name = hash_name_of(provider)
     eligible: list[Candidate] = []
     for candidate in wanted:
         digest = remote.get(candidate.destination, {}).get(candidate.relative)
         if digest is None:
             result.block("not at the remote right now")
             continue
-        if digest != candidate.sha256:
+        expected = recorded_digest(candidate, hash_name)
+        if expected is None:
+            result.block(f"no {hash_name.upper()} recorded to compare the remote against")
+            continue
+        if digest != expected:
             result.block("the remote copy does not match the recorded hash")
             continue
         eligible.append(candidate)

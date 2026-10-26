@@ -10,11 +10,11 @@ from iphone_image.layout import edit_section
 from iphone_image.storage import archive_problem, parse_remotes
 
 
-def test_only_accounts_that_report_sha256_can_hold_backups() -> None:
+def test_only_accounts_whose_listings_carry_a_recorded_hash_can_hold_backups() -> None:
     found = parse_remotes("gdrive: drive\nwasabi: s3\n\nod: onedrive\n")
     assert [(a.name, a.title, a.can_verify) for a in found] == [
         ("gdrive", "Google Drive", True),
-        ("wasabi", "S3 compatible", False),
+        ("wasabi", "S3 compatible", True),
         ("od", "OneDrive", False),
     ]
 
