@@ -537,3 +537,15 @@ public enum Fmt {
         return names[bundle] ?? bundle.split(separator: ".").last.map(String.init) ?? bundle
     }
 }
+
+extension Ledger {
+    /// Everything from one source still on the phone with no verified Drive copy, for
+    /// sources the backup jobs cannot select by name (Other apps spans many apps).
+    public static func notBackedUpIds(_ db: SQLiteReader, channel: Channel) throws -> [Int] {
+        try db.rows("""
+            SELECT a.id FROM assets a
+            WHERE a.present_on_phone = 1 AND a.cloud_status <> 'CLOUD_VERIFIED' AND \(Channel.sql) = ?
+            ORDER BY a.created_at_device
+            """, [channel.rawValue]).map { $0.int(0) }
+    }
+}

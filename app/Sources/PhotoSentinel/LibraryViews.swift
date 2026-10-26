@@ -116,19 +116,10 @@ struct BackupView: View {
                     Kpi(label: "ONLY ON THE PHONE", value: Fmt.count(s.onPhone.count - s.verified.count), note: Fmt.bytes(s.onPhone.bytes - s.verified.bytes), color: Theme.warn)
                 }
                 Card(title: "Coverage by source", symbol: "icloud.and.arrow.up.fill", tint: Tab.backup.color) {
-                    VStack(spacing: 10) {
-                        ForEach(s.channels) { c in
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Text(c.channel.title).fontWeight(.semibold)
-                                    Spacer()
-                                    Text("\(Fmt.count(c.verified.count)) of \(Fmt.count(c.total.count)) · \(Fmt.bytes(c.total.bytes - c.verified.bytes)) to go")
-                                        .foregroundStyle(.secondary).monospacedDigit()
-                                }
-                                Meter(value: c.coverage, color: c.coverage >= 0.999 ? Theme.good : Tab.backup.color)
-                            }
-                            .font(.callout)
-                        }
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(s.channels) { c in CoverageRow(model: model, stats: c) }
+                        Text("A backup copies to Google Drive and checks each file's hash. Nothing is removed from the phone by a backup. One runs at a time; the rest wait their turn.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 DriveCheckCard(model: model)
@@ -266,5 +257,61 @@ struct AgesCard: View {
             .labelsHidden().frame(width: 140)
             effect(kind)
         }
+    }
+}
+
+/// One source on the Backup tab: how much is in Drive, why the rest is not, and the button
+/// that backs it up.
+struct CoverageRow: View {
+    @ObservedObject var model: Model
+    let stats: ChannelStats
+
+    var body: some View {
+        let c = stats
+        let left = Tally(count: c.total.count - c.verified.count, bytes: c.total.bytes - c.verified.bytes)
+        let state = model.backupState(c.channel)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(c.channel.title).fontWeight(.semibold)
+                Spacer()
+                Text("\(Fmt.count(c.verified.count)) of \(Fmt.count(c.total.count)) · \(Fmt.bytes(left.bytes)) to go")
+                    .foregroundStyle(.secondary).monospacedDigit()
+            }
+            Meter(value: c.coverage, color: c.coverage >= 0.999 ? Theme.good : Tab.backup.color)
+            if left.count > 0 {
+                HStack(spacing: 8) {
+                    if state.running {
+                        Label("Backing up now. Activity shows its progress.", systemImage: "arrow.triangle.2.circlepath")
+                            .foregroundStyle(Tab.backup.color)
+                    } else if !state.queued.isEmpty {
+                        Label("Queued: starts when the running backup ends.", systemImage: "clock")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(why(c, left)).foregroundStyle(c.verified.count == 0 ? Theme.warn : .secondary)
+                    }
+                    Spacer(minLength: 6)
+                    if state.running {
+                        RowButton(title: "Show", symbol: "list.bullet", color: Tab.backup.color) { model.tab = .activity }
+                    } else if !state.queued.isEmpty {
+                        RowButton(title: "Cancel", symbol: "xmark", color: .secondary, style: .ghost) {
+                            state.queued.forEach(model.cancelQueued)
+                        }
+                    } else {
+                        RowButton(title: "Back up \(Fmt.count(left.count))", symbol: "icloud.and.arrow.up", color: Tab.backup.color, style: .fill) {
+                            model.backUpSource(c.channel)
+                        }
+                        .help("Copies all \(Fmt.count(left.count)) (\(Fmt.bytes(left.bytes))) to Google Drive and checks each hash. Nothing is removed from the phone.")
+                    }
+                }
+                .font(.caption)
+            }
+        }
+        .font(.callout)
+    }
+
+    private func why(_ c: ChannelStats, _ left: Tally) -> String {
+        let age = c.notBackedUpAge.map { ", \($0)" } ?? ""
+        if c.verified.count == 0 { return "Never backed up: no backup has been run for this source yet\(age)." }
+        return "\(Fmt.count(left.count)) not in Drive yet\(age)."
     }
 }

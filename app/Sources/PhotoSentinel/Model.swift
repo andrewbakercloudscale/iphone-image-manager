@@ -313,6 +313,32 @@ final class Model: ObservableObject {
         if queue.contains(q) { notice = "\(label): backup queued. It starts when the running job ends." }
     }
 
+    /// Everything from one source with no Drive copy yet, at any age: photos, then videos.
+    /// "0d" rather than no age, so Resume repeats the same selection instead of a default.
+    func backUpSource(_ c: Channel) {
+        guard let source = c.cliSource else {
+            let ids = (try? Ledger.notBackedUpIds(SQLiteReader(path: ledgerPath), channel: c)) ?? []
+            let bytes = library?.channels.first { $0.channel == c }.map { $0.total.bytes - $0.verified.bytes } ?? 0
+            if !ids.isEmpty { backUpItems(ids, bytes: bytes, label: "\(c.title): everything not in Drive") }
+            return
+        }
+        let wanted = ["photo", "video"].map {
+            QueuedBackup(type: $0, source: source, older: "0d", label: "\(c.title) \($0 == "video" ? "videos" : "photos"): everything not in Drive")
+        }
+        queue += wanted.filter { !queue.contains($0) }
+        pumpQueue()
+        if queue.contains(where: { wanted.contains($0) }) { notice = "\(c.title): backup queued. It starts when the running job ends." }
+    }
+
+    /// Where a source's backup stands: running now, waiting in the queue, or neither.
+    func backupState(_ c: Channel) -> (running: Bool, queued: [QueuedBackup]) {
+        let source = c.cliSource
+        let running = source.map { s in jobs.contains { $0.source == s && $0.state == .running } } ?? false
+            || tasks.contains { $0.running && $0.task.kind == .backup && $0.task.title.contains(c.title) }
+        let queued = queue.filter { source != nil ? $0.source == source : ($0.label ?? "").hasPrefix(c.title + ":") }
+        return (running, queued)
+    }
+
     func cancelQueued(_ q: QueuedBackup) { queue.removeAll { $0 == q } }
 
     /// Starts the next queued backup once nothing else is exporting.
