@@ -134,6 +134,11 @@ struct RemovalSheet: View {
                     if !r.clean { Text("Removal stays locked until this is clean.").font(.callout.weight(.semibold)).foregroundStyle(Theme.bad) }
                 } else if let msg = audit?.errorMessage, auditFresh {
                     Text("The check could not finish: \(msg)").font(.callout).foregroundStyle(Theme.bad)
+                } else if let a = audit {
+                    // Without this the step shows only a button, and nothing says why 3 and 4 are locked.
+                    Label("Last checked \(a.task.startedAt.formatted(date: .abbreviated, time: .shortened))\(auditReport?.clean == true ? ", and everything matched" : ""). A check counts for 6 hours, so run it again to unlock the next steps.",
+                          systemImage: "clock.badge.exclamationmark.fill")
+                        .font(.callout.weight(.semibold)).foregroundStyle(Theme.warn).fixedSize(horizontal: false, vertical: true)
                 }
                 if !(audit?.running ?? false) && !driveConfirmed || (auditReport != nil && !auditFresh) {
                     CapsuleButton(title: audit == nil ? "Check Google Drive" : "Check again", symbol: "checkmark.shield.fill", color: Theme.good) { model.runAudit() }
@@ -158,6 +163,9 @@ struct RemovalSheet: View {
                     }
                 } else if let msg = plan?.errorMessage, planFresh {
                     Text(msg).font(.callout).foregroundStyle(Theme.bad).textSelection(.enabled)
+                }
+                if !driveConfirmed && !(plan?.running ?? false) {
+                    Text("Unlocks when step 2 finishes clean.").font(.callout).foregroundStyle(.secondary)
                 }
                 if driveConfirmed && !(plan?.running ?? false) && !(planFresh && planResult != nil && removal == nil) {
                     CapsuleButton(title: planResult == nil ? "Make the plan" : "Plan again", symbol: "list.bullet.clipboard.fill", color: Tab.cleanUp.color) { model.plan(recipe) }
