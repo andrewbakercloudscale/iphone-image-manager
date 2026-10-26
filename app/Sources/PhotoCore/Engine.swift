@@ -179,6 +179,8 @@ public struct StorageReport: Codable, Sendable {
     public let proposed: Proposed
     public let changed: Bool
     public let applied: Bool
+    /// Google Drive signing in through rclone's shared project, whose quota slows uploads.
+    public let sharedClientId: Bool?
 
     /// "Google Drive (gdrive)".
     public var accountTitle: String { account.map { "\($0.title) (\($0.name))" } ?? remote }

@@ -602,6 +602,11 @@ def config_storage(
         "changed": bool(cloud_changes or archive_changes),
         "applied": False,
         "configPath": str(c.source_path) if c.source_path else None,
+        "sharedClientId": (
+            storage.shared_client_id(c.cloud.remote)
+            if current and current.kind == "drive"
+            else False
+        ),
     }
     if apply_ and data["changed"]:
         if not c.source_path:

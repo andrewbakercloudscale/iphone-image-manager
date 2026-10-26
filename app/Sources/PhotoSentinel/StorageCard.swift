@@ -59,6 +59,7 @@ struct StorageCard: View {
                         }
                     }
                     .font(.callout)
+                    if s.sharedClientId == true { clientIdHint(s) }
                     if changed(s) { pending(s) }
                     if let m = message {
                         Text(m.text).font(.callout).foregroundStyle(m.ok ? Theme.good : Theme.bad).fixedSize(horizontal: false, vertical: true)
@@ -73,6 +74,33 @@ struct StorageCard: View {
                 Text("Reading the backup settings…").font(.callout).foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// rclone's built-in Google project is shared by every rclone user, so Drive throttles it.
+    @ViewBuilder private func clientIdHint(_ s: StorageReport) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Uploads to \(s.accountTitle) are slowed down: it signs in through rclone's shared Google project, and Drive limits how fast everyone using it can upload. Your own client ID, free, lifts that.",
+                  systemImage: "tortoise.fill")
+                .foregroundStyle(Theme.warn)
+            Text("""
+                1. In the guide, make a Google Cloud project, turn on the Drive API and create an OAuth client ID of type Desktop app (about 5 minutes).
+                2. In Terminal, type e to edit \(s.remote), paste the client ID and secret, keep every other answer as it is, and say yes to signing in again.
+                3. Back up as before. Nothing already backed up changes.
+                """)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                CapsuleButton(title: "Open the guide", symbol: "book.fill", color: Tab.backup.color, style: .soft) {
+                    NSWorkspace.shared.open(URL(string: "https://rclone.org/drive/#making-your-own-client-id")!)
+                }
+                CapsuleButton(title: "Open rclone in Terminal", symbol: "terminal.fill", color: Tab.backup.color, style: .soft) {
+                    Self.openRcloneConfig()
+                }
+                .disabled(model.backupBusy)
+                .help(model.backupBusy ? "Wait for the running backup to finish: signing in again cuts off its uploads." : "")
+            }
+            if model.backupBusy { Text("Do step 2 once the running backup finishes: signing in again cuts off its uploads.").foregroundStyle(.secondary) }
+        }
+        .font(.callout).fixedSize(horizontal: false, vertical: true)
     }
 
     private func changed(_ s: StorageReport) -> Bool {

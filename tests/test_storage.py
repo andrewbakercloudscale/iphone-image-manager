@@ -37,3 +37,12 @@ def test_an_archive_folder_must_be_a_writable_folder(tmp_path: Path) -> None:
     assert archive_problem(tmp_path / "new" / "archive") is None
     (tmp_path / "file").write_text("x")
     assert "is a file" in (archive_problem(tmp_path / "file") or "")
+
+
+def test_a_drive_remote_without_its_own_client_id_is_on_the_shared_quota() -> None:
+    from iphone_image.storage import parse_shared_client_id
+
+    assert parse_shared_client_id("[gdrive]\ntype = drive\nscope = drive\ntoken = {}\n")
+    assert parse_shared_client_id("[gdrive]\ntype = drive\nclient_id = \n")
+    own = "[gdrive]\ntype = drive\nclient_id = 123.apps.googleusercontent.com\n"
+    assert not parse_shared_client_id(own)

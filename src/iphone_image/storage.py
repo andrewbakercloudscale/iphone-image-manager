@@ -85,6 +85,32 @@ def accounts(binary: str = "rclone") -> list[Account]:
     return parse_remotes(out)
 
 
+def shared_client_id(remote: str, binary: str = "rclone") -> bool | None:
+    """True when a Google Drive remote has no client_id of its own. It then signs
+    in through rclone's one shared Google project, whose quota every rclone user
+    draws on, and Drive answers with rateLimitExceeded. None when unknown."""
+    try:
+        out = subprocess.run(
+            [binary, "config", "show", remote],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_shared_client_id(out)
+
+
+def parse_shared_client_id(text: str) -> bool:
+    """`rclone config show <remote>`: `key = value` lines."""
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key.strip() == "client_id" and value.strip():
+            return False
+    return True
+
+
 def archive_problem(path: Path) -> str | None:
     """Why `path` cannot be the archive folder, or None."""
     if path.exists() and not path.is_dir():
