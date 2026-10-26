@@ -446,9 +446,8 @@ final class Model: ObservableObject {
     func perform(_ action: Finding.Action) {
         switch action {
         case .resume(let id): resume(id)
-        case .recipe(let id):
-            tab = .library
-            removing = recipes.first { $0.id == id }
+        // The sheet opens over whichever tab is showing, so Close returns to it.
+        case .recipe(let id): removing = recipes.first { $0.id == id }
         case .openTab(let name): tab = Tab.named(name) ?? .checkup
         case .none: break
         }
