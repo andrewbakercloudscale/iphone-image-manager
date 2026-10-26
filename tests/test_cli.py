@@ -328,3 +328,15 @@ def test_config_network_turns_the_hotspot_pause_off_and_on(run, config_file: Pat
     on = json.loads(run("--json", "config", "network", "--pause-on-hotspot", "on").output)
     assert on == {"pauseOnHotspot": True, "applied": True}
     assert "pause_on_hotspot: true" in config_file.read_text()
+
+
+def test_the_app_sends_the_phrase_the_cli_accepts() -> None:
+    """Photo Sentinel's one-step Remove passes CURRENT_PLAN_PHRASE. The two copies of the
+    string must agree, or every removal from the app is refused."""
+    from iphone_image.cli.main import CURRENT_PLAN_PHRASE, _removal_phrase
+
+    swift = Path(__file__).parents[1] / "app/Sources/PhotoCore/Tasks.swift"
+    assert f'currentPhrase = "{CURRENT_PLAN_PHRASE}"' in swift.read_text()
+    # It must never be mistaken for a count-bound phrase.
+    assert not any(c.isdigit() for c in CURRENT_PLAN_PHRASE)
+    assert _removal_phrase(0) != CURRENT_PLAN_PHRASE

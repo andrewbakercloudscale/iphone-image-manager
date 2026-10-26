@@ -1660,6 +1660,12 @@ def _removal_phrase(count: int) -> str:
     return f"remove {count} photos from my iphone"
 
 
+#: Authorises whatever this run's own fresh plan finds safe, at whatever count. The
+#: person has typed Confirm in Photo Sentinel, and macOS's own Delete box then shows
+#: them the exact count before anything goes. Owner's call, 2026-10-26: SAFETY section 3.
+CURRENT_PLAN_PHRASE = "remove what is safe from my iphone"
+
+
 @cli.command(name="remove-from-iphone")
 @selector_options
 @click.option("--apply", "apply_", is_flag=True, help="Actually remove. Without it, plan only.")
@@ -1827,7 +1833,11 @@ def remove_from_iphone(
         return
 
     expected = _removal_phrase(preview.eligible)
-    if config.safety.confirm_phrase_when_icloud_sync and confirm.strip().lower() != expected:
+    typed = confirm.strip().lower()
+    if config.safety.confirm_phrase_when_icloud_sync and typed not in (
+        expected,
+        CURRENT_PLAN_PHRASE,
+    ):
         render_blocks()
         _fail(
             ctx.out,

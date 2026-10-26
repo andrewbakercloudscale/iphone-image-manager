@@ -192,6 +192,13 @@ larger action than "freeing space on one phone".
 - Requires an explicit typed confirmation phrase for `--apply` while sync is on.
   A `--yes` style flag is not sufficient.
 
+**Owner decision, 2026-10-26: one step in the app.** A separate plan only previewed what
+the removal plans again for itself, at four minutes a time. Photo Sentinel now asks the
+person to type Confirm and passes `--confirm "remove what is safe from my iphone"`, which
+authorises whatever that run's own fresh plan finds safe. The count is still shown before
+anything goes: macOS's Delete box names it, and nothing is deleted until the person
+clicks Delete there. The count-bound phrase still works and is what the CLI suggests.
+
 ---
 
 ## 4. Recently Deleted

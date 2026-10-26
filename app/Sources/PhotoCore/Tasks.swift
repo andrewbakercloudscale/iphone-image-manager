@@ -205,6 +205,9 @@ public struct RemovalPlan: Decodable, Hashable, Sendable {
     /// Tied to the count, so an older plan cannot authorise a larger removal.
     public var phrase: String { RemovalPlan.phrase(eligible) }
     public static func phrase(_ count: Int) -> String { "remove \(count) photos from my iphone" }
+    /// Authorises whatever the removal's own fresh plan finds safe: `CURRENT_PLAN_PHRASE`.
+    /// macOS's Delete box then shows the exact count before anything goes.
+    public static let currentPhrase = "remove what is safe from my iphone"
 
     /// The count the CLI asks for when the plan changed between plan and apply.
     public static func expectedCount(inError message: String) -> Int? {
