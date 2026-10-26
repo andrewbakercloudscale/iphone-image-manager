@@ -273,6 +273,16 @@ final class JobsTests: XCTestCase {
         XCTAssertEqual(j.step, "uploading to Drive, \(Fmt.count(1585)) of \(Fmt.count(11602)) files")
     }
 
+    func testUploadPaceAndTimeLeft() {
+        let more = log + "\n[10-26 06:28:00] [whatsapp/photo] uploading what landed"
+            + "\n  2026/10/26 10:00:00 NOTICE:   1 MiB / 2 GiB, 1%, 40 KiB/s, ETA 9h (xfr#1000/2200)"
+            + "\n  2026/10/26 10:04:00 NOTICE:   2 MiB / 2 GiB, 1%, 40 KiB/s, ETA 9h (xfr#1080/2200)"
+        let j = Jobs.read(log: more, processes: ["/bin/bash /x/cycle.sh photo 40 whatsapp 18m"])[0]
+        XCTAssertEqual(j.uploadRate!, 20, accuracy: 0.001)
+        // 1,120 left at 20 a minute is 56 minutes.
+        XCTAssertTrue(j.step!.hasSuffix(", about 20 a minute, under an hour to go"), j.step!)
+    }
+
     func testIsCycleIgnoresOtherJobs() {
         XCTAssertFalse(Jobs.isCycle("/bin/bash cycle.sh video 40 whatsapp 18m", type: "photo", source: "whatsapp"))
         XCTAssertFalse(Jobs.isCycle("/bin/bash watch-job.sh whatsapp 18m", type: "photo", source: "whatsapp"))

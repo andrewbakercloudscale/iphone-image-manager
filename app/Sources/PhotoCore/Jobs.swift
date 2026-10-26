@@ -33,6 +33,17 @@ public struct Job: Identifiable, Hashable, Sendable {
     /// rclone's `(xfr#1585/11602)` while uploading: files sent, and files it has found to send.
     public var uploaded: Int?
     public var toUpload: Int?
+    /// The first and latest rclone stats line of this upload, as (time, files sent), for its pace.
+    public struct Sample: Hashable, Sendable { public let at: Date; public let sent: Int }
+    public var uploadFirst: Sample?
+    public var uploadLast: Sample?
+
+    /// Files a minute over this upload so far, once it has run long enough to say.
+    public var uploadRate: Double? {
+        guard let a = uploadFirst, let b = uploadLast, b.sent > a.sent else { return nil }
+        let minutes = b.at.timeIntervalSince(a.at) / 60
+        return minutes >= 2 ? Double(b.sent - a.sent) / minutes : nil
+    }
     public var id: String { "\(source)/\(type)" }
 
     public var title: String {
@@ -85,7 +96,13 @@ public struct Job: Identifiable, Hashable, Sendable {
         switch phase {
         case .uploading:
             guard let uploaded, let toUpload else { return "uploading to Drive" }
-            return "uploading to Drive, \(n(uploaded)) of \(n(toUpload)) files"
+            var text = "uploading to Drive, \(n(uploaded)) of \(n(toUpload)) files"
+            if let rate = uploadRate {
+                text += ", about \(n(Int(rate.rounded()))) a minute"
+                let hours = Double(max(0, toUpload - uploaded)) / rate / 60
+                text += hours < 1 ? ", under an hour to go" : ", about \(Int(hours.rounded())) h to go"
+            }
+            return text
         case .fetching:
             guard let left else { return "copying from Photos" }
             return left == 0 ? "copying the last items from Photos" : "copying from Photos, \(n(left)) left"
@@ -113,6 +130,10 @@ public enum Jobs {
             if let key = current, let (sent, total) = transfers(raw) {
                 jobs[key]?.uploaded = sent
                 jobs[key]?.toUpload = total
+                if let at = statsTime(raw) {
+                    if jobs[key]?.uploadFirst == nil { jobs[key]?.uploadFirst = Job.Sample(at: at, sent: sent) }
+                    jobs[key]?.uploadLast = Job.Sample(at: at, sent: sent)
+                }
                 continue
             }
             guard let parsed = parse(String(raw)) else { continue }
@@ -132,7 +153,7 @@ public enum Jobs {
             if m.hasPrefix("=== cycle") || m.hasPrefix("starting:") || m.hasPrefix("fetching the next chunk") { job.fetchedThisChunk = 0 }
             if m.contains("nothing left to fetch") { job.leftToFetch = 0 }
             if m.hasPrefix("fetching the next chunk") { job.phase = .fetching }
-            if m.hasPrefix("uploading what landed") { job.phase = .uploading; job.uploaded = nil; job.toUpload = nil }
+            if m.hasPrefix("uploading what landed") { job.phase = .uploading; job.uploaded = nil; job.toUpload = nil; job.uploadFirst = nil; job.uploadLast = nil }
             if m.hasPrefix("releasing") { job.phase = .releasing }
             if m.hasPrefix("=== cycle") || m.hasPrefix("starting:") { job.phase = .other }
             job.state = state(after: m, previous: job.state)
@@ -201,6 +222,15 @@ public enum Jobs {
         let parts = line[r.upperBound...].prefix { $0 != ")" }.split(separator: "/")
         guard parts.count == 2, let a = Int(parts[0]), let b = Int(parts[1]) else { return nil }
         return (a, b)
+    }
+
+    /// `  2026/10/26 09:57:22 NOTICE: ...` to its time, in this Mac's zone as rclone writes it.
+    static func statsTime(_ line: Substring) -> Date? {
+        let t = line.drop { $0 == " " }.prefix(19)
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy/MM/dd HH:mm:ss"
+        return f.date(from: String(t))
     }
 
     static func number(after marker: String, in s: String) -> Int? {

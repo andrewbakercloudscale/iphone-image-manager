@@ -315,9 +315,17 @@ struct CoverageRow: View {
     @ViewBuilder private func running(_ c: ChannelStats) -> some View {
         let job = model.jobs.first { $0.source == c.channel.cliSource && $0.state == .running }
         VStack(alignment: .leading, spacing: 3) {
-            Label("Backing up now" + (job?.step.map { ": \($0)" } ?? "") + ".", systemImage: "arrow.triangle.2.circlepath")
-                .foregroundStyle(Tab.backup.color).monospacedDigit()
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.triangle.2.circlepath").spinning()
+                Text("Backing up now" + (job?.step.map { ": \($0)" } ?? "") + ".").monospacedDigit()
+            }
+            .foregroundStyle(Tab.backup.color)
             if let p = job?.progress { Meter(value: p, color: Tab.backup.color, height: 5).frame(maxWidth: 320) }
+            if let at = job?.uploadLast?.at {
+                // rclone reports every 30 seconds; say so, or a still number looks stuck.
+                Text("Counts refresh every 30 seconds. Last: \(at.formatted(date: .omitted, time: .standard)).")
+                    .foregroundStyle(.tertiary)
+            }
             if let job, let scope = scope(job) { Text(scope).foregroundStyle(.secondary) }
         }
     }
@@ -333,4 +341,19 @@ struct CoverageRow: View {
         if c.verified.count == 0 { return "Never backed up: no backup has been run for this source yet\(age)." }
         return "\(Fmt.count(left.count)) not in Drive yet\(age)."
     }
+}
+
+/// Turns a symbol round and round while it is on screen: a job under way, not a still picture.
+private struct Spinning: ViewModifier {
+    @State private var on = false
+    func body(content: Content) -> some View {
+        content
+            .rotationEffect(.degrees(on ? 360 : 0))
+            .animation(.linear(duration: 1.6).repeatForever(autoreverses: false), value: on)
+            .onAppear { on = true }
+    }
+}
+
+extension View {
+    func spinning() -> some View { modifier(Spinning()) }
 }
