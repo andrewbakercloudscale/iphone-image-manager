@@ -17,7 +17,6 @@ Three rules this module exists to enforce:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 from collections.abc import Callable
@@ -28,6 +27,7 @@ from typing import Any
 
 from .config import Config
 from .db.database import Database, utcnow
+from .digests import file_digests
 from .journal import Journal, Op
 from .logs import get_logger
 from .organize.events import assign
@@ -38,7 +38,6 @@ from .selector import ChunkPlan, Selector, channel_of, plan_chunk
 
 log = get_logger("sync")
 
-HASH_BLOCK = 1024 * 1024
 
 #: Above this, a 'transfer' was a local disk read rather than an iCloud
 #: download. Real downloads measured 0.45 to 1.24 MB/s; local reads
@@ -175,14 +174,6 @@ def observed_rate(db: Database, *, minimum_bytes: int = 20 * 1024 * 1024) -> flo
 def estimate_hours(byte_count: int, rate_mb_s: float | None) -> float:
     rate = rate_mb_s or FALLBACK_MB_S
     return byte_count / 1_048_576 / rate / 3600
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while block := handle.read(HASH_BLOCK):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def event_folders(config: Config, db: Database, *, also: list[str] | None = None) -> dict[str, str]:
@@ -616,7 +607,7 @@ def _fetch_one(
         )
         return
 
-    digest = sha256_file(partial)
+    digest, md5 = file_digests(partial)
     partial.replace(final)
 
     # Preserve the capture date on the file, per spec section 37.
@@ -632,13 +623,14 @@ def _fetch_one(
 
     db.conn.execute(
         "UPDATE assets SET local_path = ?, archive_claim = ?, local_status = 'LOCAL_VERIFIED', "
-        "sha256 = ?, local_verified_at = ?, updated_at = ? WHERE id = ?",
+        "sha256 = ?, md5 = ?, local_verified_at = ?, updated_at = ? WHERE id = ?",
         (
             str(final),
             # Recorded with the path and never cleared, so releasing the file
             # does not hand its name to the next asset that wants it.
             archive_claim_for(config.archive.local_path, final),
             digest,
+            md5,
             utcnow(),
             utcnow(),
             asset["id"],

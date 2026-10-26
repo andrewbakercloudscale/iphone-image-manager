@@ -15,8 +15,18 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-#: rclone backend types whose listings carry a SHA-256.
-SHA256_TYPES = {"drive", "local"}
+#: rclone backend types whose listings carry a hash the ledger also records, and
+#: which one. Drive and a local folder report SHA-256; S3 reports only MD5 (its
+#: ETag, which rclone also stores as metadata on multipart uploads so large files
+#: keep one). A type missing here cannot verify, so nothing is ever released or
+#: removed against it.
+HASH_TYPES = {"drive": "sha256", "local": "sha256", "s3": "md5"}
+
+
+def hash_for(kind: str) -> str | None:
+    """The ledger column whose value this backend's listing can be checked against."""
+    return HASH_TYPES.get(kind)
+
 
 KIND_TITLES = {
     "drive": "Google Drive",
@@ -40,7 +50,7 @@ class Account:
 
     @property
     def can_verify(self) -> bool:
-        return self.kind in SHA256_TYPES
+        return self.kind in HASH_TYPES
 
     def as_dict(self) -> dict[str, object]:
         return {

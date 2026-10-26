@@ -131,6 +131,31 @@ def test_a_remote_copy_with_a_different_hash_blocks_the_release(env) -> None:
     assert path.exists()
 
 
+class FakeS3(FakeCloud):
+    hash_name = "md5"
+
+
+def test_an_s3_copy_is_not_released_on_a_sha256_match_and_without_an_md5(env) -> None:
+    """Fetched before the ledger kept MD5: S3 can prove nothing about it, so it stays."""
+    config, db = env
+    path, digest = archived(config, db, "a", "2019/11/IMG_1.JPG")
+    fake = FakeS3(holds={"2019/11/IMG_1.JPG": digest})
+    eligible, result = release_engine.plan(config, db, Selector(), provider=fake)
+    assert eligible == []
+    assert result.blocks == {"no MD5 recorded to compare the remote against": 1}
+    assert path.exists()
+
+
+def test_an_s3_copy_matching_its_md5_is_released(env) -> None:
+    config, db = env
+    archived(config, db, "a", "2019/11/IMG_1.JPG")
+    md5 = hashlib.md5(b"photo").hexdigest()
+    db.conn.execute("UPDATE assets SET md5 = ?", (md5,))
+    fake = FakeS3(holds={"2019/11/IMG_1.JPG": md5})
+    eligible, _ = release_engine.plan(config, db, Selector(), provider=fake)
+    assert len(eligible) == 1
+
+
 def test_release_refuses_when_cloud_verification_is_switched_off(env) -> None:
     config, db = env
     archived(config, db, "a", "2019/11/IMG_1.JPG")

@@ -1,0 +1,12 @@
+-- The MD5 of the file fetched from Photos, beside its SHA-256.
+--
+-- S3's listings carry only an MD5, so a cloud copy there can only be checked
+-- against one. Google Drive and a local folder go on being checked by SHA-256
+-- exactly as before; this column is read only for a remote whose type reports
+-- MD5 (`storage.HASH_TYPES`).
+--
+-- Written by the fetch, which reads the file once for both digests. Assets
+-- fetched before this migration have NULL here: an upload computes it from
+-- the Mac copy while that still exists, and a NULL never verifies, so an asset
+-- with no MD5 is never released or removed against an MD5-only remote.
+ALTER TABLE assets ADD COLUMN md5 TEXT;

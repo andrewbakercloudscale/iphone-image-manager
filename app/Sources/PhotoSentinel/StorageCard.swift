@@ -63,7 +63,7 @@ struct StorageCard: View {
                     if let m = message {
                         Text(m.text).font(.callout).foregroundStyle(m.ok ? Theme.good : Theme.bad).fixedSize(horizontal: false, vertical: true)
                     }
-                    Text("Every backup is checked by its SHA-256 before anything leaves the phone. Google Drive reports SHA-256. S3 reports only MD5, and OneDrive and Dropbox their own hashes, so they are listed but cannot be picked until the check learns their hash.")
+                    Text("Every backup is checked by hash before anything leaves the phone. Google Drive and a folder on this Mac are checked by SHA-256, S3 by MD5. OneDrive and Dropbox report hashes of their own, so they are listed but cannot be picked yet. Items backed up before Photo Sentinel kept MD5 have none, so an S3 account never removes those from the phone.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 .onAppear { reset(s) }
