@@ -377,6 +377,13 @@ class LoggingConfig(Strict):
     path: ExpandedPath = Path("~/.iphone-image/logs").expanduser()
 
 
+class NetworkConfig(Strict):
+    #: cycle.sh copies and uploads nothing on the iPhone's Personal Hotspot or a
+    #: link macOS marks expensive. Read before every step, so turning it off
+    #: reaches a running job within a minute.
+    pause_on_hotspot: bool = True
+
+
 class PerformanceConfig(Strict):
     local_transfer_workers: int = Field(default=2, ge=1, le=16)
     hash_workers: int = Field(default=4, ge=1, le=32)
@@ -401,6 +408,7 @@ class Config(Strict):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     performance: PerformanceConfig = Field(default_factory=PerformanceConfig)
+    network: NetworkConfig = Field(default_factory=NetworkConfig)
 
     #: Where this config was loaded from. None means built-in defaults.
     source_path: Path | None = Field(default=None, exclude=True)

@@ -486,6 +486,54 @@ def config_layout(
     ctx.out.result(data, render)
 
 
+@config.command("network")
+@click.option(
+    "--pause-on-hotspot",
+    type=click.Choice(["on", "off"]),
+    default=None,
+    help="Pause copies and uploads on a phone hotspot or metered link.",
+)
+@pass_context
+def config_network(ctx: Context, pause_on_hotspot: str | None) -> None:
+    """Show or change when backups pause. Saved at once; a running job reads it
+    before every step."""
+    from .. import layout as layout_engine
+
+    c = ctx.config
+    data: dict[str, Any] = {"pauseOnHotspot": c.network.pause_on_hotspot, "applied": False}
+    wanted = None if pause_on_hotspot is None else pause_on_hotspot == "on"
+    if wanted is not None and wanted != c.network.pause_on_hotspot:
+        if not c.source_path:
+            _fail(ctx.out, "no configuration file to save to. Run `config init` first.")
+            return
+        path = Path(c.source_path)
+        text = layout_engine.edit_section(
+            path.read_text(), "network", {"pause_on_hotspot": wanted}
+        )
+        tmp = path.with_suffix(".yaml.tmp")
+        tmp.write_text(text)
+        try:
+            saved = load_config(tmp)
+        except ConfigError as e:
+            tmp.unlink()
+            _fail(ctx.out, f"not saved, the edited file did not load: {e}")
+            return
+        if saved.network.pause_on_hotspot != wanted:
+            tmp.unlink()
+            _fail(ctx.out, "not saved, the edited file did not say what was asked.")
+            return
+        tmp.replace(path)
+        data.update(pauseOnHotspot=wanted, applied=True)
+
+    def render() -> None:
+        state = "on" if data["pauseOnHotspot"] else "off"
+        ctx.out.pairs([("pause on a phone hotspot", state)])
+        if data["applied"]:
+            ctx.out.ok("saved. A running job picks it up before its next step.")
+
+    ctx.out.result(data, render)
+
+
 @config.command("storage")
 @click.option("--remote", default=None, help="The rclone account new backups go to.")
 @click.option("--archive", default=None, help="The folder on this Mac files are copied into.")

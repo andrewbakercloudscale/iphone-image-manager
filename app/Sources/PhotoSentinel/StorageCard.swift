@@ -141,28 +141,53 @@ struct StorageCard: View {
 }
 
 /// Settings: when backups pause. The job checks before every step and stops a transfer
-/// the moment the Mac joins a metered connection.
+/// the moment the Mac joins a metered connection, unless the switch here is off.
 struct WhenBackupsRunCard: View {
+    @ObservedObject var model: Model
     @State private var metered: Bool?
+    @State private var pause: Bool?
+    @State private var error: String?
 
     var body: some View {
         Card(title: "When backups run", symbol: "wifi", tint: Tab.backup.color) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    Image(systemName: "personalhotspot").foregroundStyle(Theme.good)
-                    Text("Pause on a phone hotspot").font(.body.weight(.medium))
-                    Pill(text: "Always on", symbol: "checkmark.circle.fill", color: Theme.good)
+                    Image(systemName: "personalhotspot").foregroundStyle(pause == false ? Theme.warn : Theme.good)
+                    Toggle("Pause on a phone hotspot", isOn: Binding(get: { pause ?? true }, set: { save($0) }))
+                        .toggleStyle(.switch).font(.body.weight(.medium))
+                        .disabled(pause == nil)
                     Spacer()
                     if let metered {
-                        Text(metered ? "Now: on a hotspot, backups are paused" : "Now: on normal Wi-Fi")
+                        Text(metered ? (pause == false ? "Now: on a hotspot, backups carry on" : "Now: on a hotspot, backups are paused") : "Now: on normal Wi-Fi")
                             .font(.callout).foregroundStyle(metered ? Theme.warn : .secondary)
                     }
                 }
-                Text("Nothing copies or uploads on your iPhone's Personal Hotspot or any connection macOS marks as metered. Switching to one mid-upload stops the upload at once; it carries on by itself back on normal Wi-Fi. Checks and plans are small and still run.")
+                Text(pause == false
+                     ? "Off: backups copy and upload on your iPhone's Personal Hotspot too, which uses its data. A running backup follows the switch within a minute."
+                     : "Nothing copies or uploads on your iPhone's Personal Hotspot or any connection macOS marks as metered. Switching to one mid-upload stops the upload at once; it carries on by itself back on normal Wi-Fi. Checks and plans are small and still run.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if let error { Text(error).font(.callout).foregroundStyle(Theme.bad) }
             }
         }
-        .task { metered = await Self.isMetered() }
+        .task {
+            metered = await Self.isMetered()
+            let engine = model.engine
+            switch await Task.detached(operation: { Result { try engine.pauseOnHotspot() } }).value {
+            case .success(let on): pause = on
+            case .failure(let e): error = "Could not read the setting: \((e as? JobError)?.text ?? "\(e)")"
+            }
+        }
+    }
+
+    private func save(_ on: Bool) {
+        let engine = model.engine
+        pause = on
+        Task {
+            switch await Task.detached(operation: { Result { try engine.pauseOnHotspot(on) } }).value {
+            case .success(let saved): pause = saved; error = nil
+            case .failure(let e): pause = !on; error = "Not saved: \((e as? JobError)?.text ?? "\(e)")"
+            }
+        }
     }
 
     /// cycle.sh's rule: an iPhone hotspot hands out 172.20.10.0/28, or macOS flags the link IsExpensive.

@@ -80,13 +80,19 @@ metered() {
 }
 # Pause, without a time limit, until the Mac is off the hotspot. Not capped like
 # an outage: being on the hotspot is the user's choice, not a fault.
+# The user can turn the pause off (Settings -> When backups run). Read every time,
+# not once, so a running job follows the switch.
+pause_on_hotspot() {
+  [ "$($PY -c 'from iphone_image.config import load_config
+print(load_config().network.pause_on_hotspot)' 2>/dev/null)" != False ]
+}
 wait_off_metered() {
-  metered || return 0
+  metered && pause_on_hotspot || return 0
   NET_WAITED=1
   say "on a metered connection (phone hotspot). PAUSED until back on normal wifi."
   local t=0
-  while metered; do sleep 60; t=$((t + 60)); done
-  say "off the hotspot after $((t / 60)) min. Resuming."
+  while metered && pause_on_hotspot; do sleep 60; t=$((t + 60)); done
+  say "off the hotspot, or its pause turned off, after $((t / 60)) min. Resuming."
 }
 # Runs beside the job: a switch to the hotspot mid-transfer stops the transfer
 # at once instead of at the next step. Both are safe to kill: an upload keeps
@@ -94,7 +100,7 @@ wait_off_metered() {
 # The job then notices on its next wait_off_metered and pauses.
 metered_guard() {
   while kill -0 "$$" 2>/dev/null; do
-    if metered && pgrep -f "iphone_image (sync|cloud)" >/dev/null; then
+    if metered && pgrep -f "iphone_image (sync|cloud)" >/dev/null && pause_on_hotspot; then
       say "switched to the phone hotspot mid-transfer: stopping the transfer"
       pkill -f "iphone_image (sync|cloud)"; pkill -x rclone
     fi

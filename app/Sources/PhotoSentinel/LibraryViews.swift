@@ -196,7 +196,7 @@ struct SettingsView: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             StorageCard(model: model)
-            WhenBackupsRunCard()
+            WhenBackupsRunCard(model: model)
             Card(title: "Where things are", symbol: "folder.fill", tint: Tab.backup.color) {
                 Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
                     GridRow { Text("Ledger"); TextField("", text: $model.ledgerPath).textFieldStyle(.roundedBorder) }

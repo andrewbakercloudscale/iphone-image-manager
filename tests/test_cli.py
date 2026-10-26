@@ -315,3 +315,16 @@ def test_the_cloud_plan_names_the_archive_it_will_actually_write_to(tmp_path: Pa
     assert "Family Photos" not in result.output, (
         "the plan named the photo archive for a video upload"
     )
+
+
+def test_config_network_turns_the_hotspot_pause_off_and_on(run, config_file: Path) -> None:
+    shown = json.loads(run("--json", "config", "network").output)
+    assert shown == {"pauseOnHotspot": True, "applied": False}
+
+    off = json.loads(run("--json", "config", "network", "--pause-on-hotspot", "off").output)
+    assert off == {"pauseOnHotspot": False, "applied": True}
+    assert "pause_on_hotspot: false" in config_file.read_text()
+
+    on = json.loads(run("--json", "config", "network", "--pause-on-hotspot", "on").output)
+    assert on == {"pauseOnHotspot": True, "applied": True}
+    assert "pause_on_hotspot: true" in config_file.read_text()

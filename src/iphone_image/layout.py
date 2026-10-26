@@ -40,10 +40,13 @@ KEYS = {
         "whatsapp_destination",
     ),
     "archive": ("local_path",),
+    "network": ("pause_on_hotspot",),
 }
 
 
 def render_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
     if isinstance(value, str):
         return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
     if isinstance(value, list):
