@@ -169,13 +169,12 @@ struct Header: View {
                 switch j.state {
                 case .paused: Pill(text: "Backing up \(j.title): paused", symbol: "pause.circle.fill", color: Theme.warn)
                 default:
-                    Pill(text: "Backing up \(j.title)" + (j.progress.map { " · \(Fmt.pct($0)) done" } ?? "")
-                         + (j.left.map { " · \(Fmt.count($0)) left" } ?? ""),
+                    Pill(text: "Backing up \(j.title)" + (j.step.map { " · \($0)" } ?? ""),
                          symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color)
                 }
             }
             .buttonStyle(.plain)
-            .help("Copying from Photos to Google Drive. Percent of this job's items done since it started. Click for details.")
+            .help("Each round copies a chunk out of Photos, uploads it to Google Drive and checks it. This is the step under way. Click for details.")
         } else {
             Pill(text: "No job running", symbol: "moon.zzz.fill", color: .secondary)
         }

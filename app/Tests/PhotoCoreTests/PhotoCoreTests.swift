@@ -260,6 +260,19 @@ final class JobsTests: XCTestCase {
         XCTAssertEqual(j.left, 18800 - 3931)
     }
 
+    func testUploadStepIsNotCountedAsDone() {
+        // The last chunk copied leaves 0 to fetch; the upload of it is still hours of work.
+        let more = log + "\n[10-25 18:25:53] [whatsapp/photo] fetching the next chunk\n  [18,800] 7cf5a498  137.3 KB  0.15 MB/s"
+            + "\n[10-26 06:28:00] [whatsapp/photo] uploading what landed"
+            + "\n  2026/10/26 09:57:22 NOTICE:   450.249 MiB / 1.993 GiB, 22%, 47.892 KiB/s, ETA 9h26m50s (xfr#1585/11602)"
+        let j = Jobs.read(log: more, processes: ["/bin/bash /x/cycle.sh photo 40 whatsapp 18m"])[0]
+        XCTAssertEqual(j.phase, .uploading)
+        XCTAssertEqual(j.uploaded, 1585)
+        XCTAssertEqual(j.toUpload, 11602)
+        XCTAssertEqual(j.progress!, 1585.0 / 11602.0, accuracy: 0.0001)
+        XCTAssertEqual(j.step, "uploading to Drive, \(Fmt.count(1585)) of \(Fmt.count(11602)) files")
+    }
+
     func testIsCycleIgnoresOtherJobs() {
         XCTAssertFalse(Jobs.isCycle("/bin/bash cycle.sh video 40 whatsapp 18m", type: "photo", source: "whatsapp"))
         XCTAssertFalse(Jobs.isCycle("/bin/bash watch-job.sh whatsapp 18m", type: "photo", source: "whatsapp"))

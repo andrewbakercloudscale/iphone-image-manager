@@ -277,12 +277,13 @@ struct CoverageRow: View {
                 Text("\(Fmt.count(c.verified.count)) of \(Fmt.count(c.total.count)) · \(Fmt.bytes(left.bytes)) to go")
                     .foregroundStyle(.secondary).monospacedDigit()
             }
-            Meter(value: c.coverage, color: c.coverage >= 0.999 ? Theme.good : Tab.backup.color)
+            // By count, like the figures beside it: by bytes WhatsApp read 6% next to "13,693 of 48,016".
+            let share = c.total.count == 0 ? 1 : Double(c.verified.count) / Double(c.total.count)
+            Meter(value: share, color: share >= 0.999 ? Theme.good : Tab.backup.color)
             if left.count > 0 {
                 HStack(spacing: 8) {
                     if state.running {
-                        Label("Backing up now. Activity shows its progress.", systemImage: "arrow.triangle.2.circlepath")
-                            .foregroundStyle(Tab.backup.color)
+                        running(c)
                     } else if !state.queued.isEmpty {
                         Label("Queued: starts when the running backup ends.", systemImage: "clock")
                             .foregroundStyle(.secondary)
@@ -307,6 +308,24 @@ struct CoverageRow: View {
             }
         }
         .font(.callout)
+    }
+
+    /// The job's step and its own bar, and what this run covers, which can be less than
+    /// everything not in Drive (WhatsApp's runs only take items older than 18 months).
+    @ViewBuilder private func running(_ c: ChannelStats) -> some View {
+        let job = model.jobs.first { $0.source == c.channel.cliSource && $0.state == .running }
+        VStack(alignment: .leading, spacing: 3) {
+            Label("Backing up now" + (job?.step.map { ": \($0)" } ?? "") + ".", systemImage: "arrow.triangle.2.circlepath")
+                .foregroundStyle(Tab.backup.color).monospacedDigit()
+            if let p = job?.progress { Meter(value: p, color: Tab.backup.color, height: 5).frame(maxWidth: 320) }
+            if let job, let scope = scope(job) { Text(scope).foregroundStyle(.secondary) }
+        }
+    }
+
+    private func scope(_ j: Job) -> String? {
+        let age = Job.ages[j.source].flatMap(Age.init).flatMap { $0.amount > 0 ? " older than \($0.words)" : nil } ?? ""
+        guard let start = j.startedLeft else { return nil }
+        return "This run: \(j.title)\(age), \(Fmt.count(start)) to copy when it started. The rest waits for a Back up of its own."
     }
 
     private func why(_ c: ChannelStats, _ left: Tally) -> String {

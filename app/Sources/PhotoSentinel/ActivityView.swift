@@ -90,9 +90,9 @@ struct ActivityView: View {
                 }
                 Spacer()
             }
-            if let p = j.progress, let left = j.left {
+            if let p = j.progress, let step = j.step {
                 HStack {
-                    Text("\(Fmt.count(left)) left to copy from Photos")
+                    Text(step.prefix(1).uppercased() + step.dropFirst())
                     Spacer()
                     Text(Fmt.pct(p))
                 }
@@ -128,8 +128,8 @@ struct JobRow: View {
                 HStack {
                     Text(job.title).font(.body.weight(.semibold))
                     Text(l.label).font(.callout.weight(.semibold)).foregroundStyle(l.color)
-                    if let left = job.left, left > 0 {
-                        Text("· \(Fmt.count(left)) left").font(.callout).foregroundStyle(.secondary).monospacedDigit()
+                    if job.state != .finished, let step = job.step {
+                        Text("· \(step)").font(.callout).foregroundStyle(.secondary).monospacedDigit()
                     }
                 }
                 if let why = l.why { Text(why).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }

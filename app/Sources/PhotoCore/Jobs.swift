@@ -24,6 +24,15 @@ public struct Job: Identifiable, Hashable, Sendable {
     /// `left_to_fetch` only moves once per cycle; this moves every few seconds.
     public var fetchedThisChunk = 0
     public var left: Int? { leftToFetch.map { max(0, $0 - fetchedThisChunk) } }
+
+    /// What a cycle is doing now. Each cycle copies a chunk out of Photos, uploads it to
+    /// Drive and checks it, then tidies the Mac copies; one bar for the whole job read 100%
+    /// as soon as the last chunk was copied, while hours of uploading were still to come.
+    public enum Phase: Hashable, Sendable { case fetching, uploading, releasing, other }
+    public var phase = Phase.other
+    /// rclone's `(xfr#1585/11602)` while uploading: files sent, and files it has found to send.
+    public var uploaded: Int?
+    public var toUpload: Int?
     public var id: String { "\(source)/\(type)" }
 
     public var title: String {
@@ -56,9 +65,33 @@ public struct Job: Identifiable, Hashable, Sendable {
         return a
     }
 
+    /// How far the current step is, for its bar: the copy out of Photos across the whole
+    /// job, or the upload of the chunk under way. Nil when the step has no count.
     public var progress: Double? {
-        guard let left, let start = startedLeft, start > 0 else { return nil }
-        return 1 - Double(left) / Double(start)
+        switch phase {
+        case .uploading:
+            guard let uploaded, let toUpload, toUpload > 0 else { return nil }
+            return min(1, Double(uploaded) / Double(toUpload))
+        case .fetching:
+            guard let left, let start = startedLeft, start > 0 else { return nil }
+            return 1 - Double(left) / Double(start)
+        case .releasing, .other: return nil
+        }
+    }
+
+    /// The step in words: "uploading to Drive, 1,585 of 11,602 files".
+    public var step: String? {
+        let n = Fmt.count
+        switch phase {
+        case .uploading:
+            guard let uploaded, let toUpload else { return "uploading to Drive" }
+            return "uploading to Drive, \(n(uploaded)) of \(n(toUpload)) files"
+        case .fetching:
+            guard let left else { return "copying from Photos" }
+            return left == 0 ? "copying the last items from Photos" : "copying from Photos, \(n(left)) left"
+        case .releasing: return "tidying the Mac copies already in Drive"
+        case .other: return nil
+        }
     }
 }
 
@@ -77,6 +110,11 @@ public enum Jobs {
                 jobs[key]?.fetchedThisChunk = n
                 continue
             }
+            if let key = current, let (sent, total) = transfers(raw) {
+                jobs[key]?.uploaded = sent
+                jobs[key]?.toUpload = total
+                continue
+            }
             guard let parsed = parse(String(raw)) else { continue }
             current = parsed.key
             let key = parsed.key
@@ -93,6 +131,10 @@ public enum Jobs {
             if m.hasPrefix("=== cycle"), let n = number(after: "GB free, ", in: m) { job.leftToFetch = n }
             if m.hasPrefix("=== cycle") || m.hasPrefix("starting:") || m.hasPrefix("fetching the next chunk") { job.fetchedThisChunk = 0 }
             if m.contains("nothing left to fetch") { job.leftToFetch = 0 }
+            if m.hasPrefix("fetching the next chunk") { job.phase = .fetching }
+            if m.hasPrefix("uploading what landed") { job.phase = .uploading; job.uploaded = nil; job.toUpload = nil }
+            if m.hasPrefix("releasing") { job.phase = .releasing }
+            if m.hasPrefix("=== cycle") || m.hasPrefix("starting:") { job.phase = .other }
             job.state = state(after: m, previous: job.state)
             if jobs[key] == nil { order.append(key) }
             jobs[key] = job
@@ -151,6 +193,14 @@ public enum Jobs {
         let t = line.drop { $0 == " " }
         guard t.count < line.count, t.hasPrefix("["), let close = t.firstIndex(of: "]") else { return nil }
         return Int(t[t.index(after: t.startIndex)..<close].filter { $0 != "," && $0 != " " })
+    }
+
+    /// rclone's `NOTICE:   450 MiB / 1.993 GiB, 22%, 47 KiB/s, ETA 9h (xfr#1585/11602)` to (1585, 11602).
+    static func transfers(_ line: Substring) -> (Int, Int)? {
+        guard let r = line.range(of: "(xfr#") else { return nil }
+        let parts = line[r.upperBound...].prefix { $0 != ")" }.split(separator: "/")
+        guard parts.count == 2, let a = Int(parts[0]), let b = Int(parts[1]) else { return nil }
+        return (a, b)
     }
 
     static func number(after marker: String, in s: String) -> Int? {
