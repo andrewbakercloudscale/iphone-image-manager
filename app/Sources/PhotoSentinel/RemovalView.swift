@@ -34,8 +34,10 @@ struct RemovalSheet: View {
     /// A removal that had already finished when the sheet opened. Its plan is used up, so
     /// the sheet starts again from a new plan rather than showing the old one.
     @State private var spent: String?
-    private var plan: TaskStatus? { spent == nil ? latestPlan : nil }
-    private var removal: TaskStatus? { spent == nil ? lastRemoval : nil }
+    /// True until a new plan starts: then lastRemoval no longer follows the latest plan.
+    private var usedUp: Bool { spent != nil && lastRemoval?.task.id == spent }
+    private var plan: TaskStatus? { usedUp ? nil : latestPlan }
+    private var removal: TaskStatus? { usedUp ? nil : lastRemoval }
 
     private var auditReport: AuditReport? { audit?.decode(AuditReport.self) }
     private var auditFresh: Bool {
@@ -255,7 +257,7 @@ struct RemovalSheet: View {
                     Text("After a few minutes macOS asks to allow deleting them. Click Delete in that box.")
                         .font(.callout).foregroundStyle(.secondary)
                 } else {
-                    if spent != nil, let last = lastRemoval?.decode(RemovalPlan.self) {
+                    if usedUp, let last = lastRemoval?.decode(RemovalPlan.self) {
                         Text("Last time: removed \(Fmt.count(last.removed ?? 0)) items, \(Fmt.bytes(last.bytesRemoved ?? 0)), on \(lastRemoval!.task.startedAt.formatted(date: .abbreviated, time: .shortened)).")
                             .font(.callout).foregroundStyle(Theme.good)
                     }
