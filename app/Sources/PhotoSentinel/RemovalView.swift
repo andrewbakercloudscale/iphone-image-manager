@@ -155,10 +155,10 @@ struct RemovalSheet: View {
     @ViewBuilder private var planStep: some View {
         Step(number: 3, title: "Plan the removal", done: planFresh && planResult != nil, locked: driveBlocks) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Scans the phone now and re-reads each item's hash from Google Drive. Only items whose Drive copy matches are eligible. Takes about 4 minutes.")
+                Text("Scans the phone and re-reads each item's hash from Google Drive. Only items whose Drive copy matches are eligible. Takes about 4 minutes, or about 1 when re-planned within 15 minutes.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let p = plan, p.running {
-                    Running(text: "Scanning the phone and checking each item in Drive…", since: p.task.startedAt)
+                    Running(text: (p.progressText ?? "Scanning the phone and checking each item in Drive") + "…", since: p.task.startedAt)
                 } else if let r = planResult, planFresh {
                     PlanSummary(plan: r)
                     if let n = r.blockedReasons["flagged as a suspected proxy"], n > 0, recipe.filter.proxyTolerance < 1 {
@@ -207,8 +207,8 @@ struct RemovalSheet: View {
         Step(number: 4, title: "Remove from iPhone", done: done, locked: !ready && removal == nil) {
             VStack(alignment: .leading, spacing: 10) {
                 if let r = removal, r.running {
-                    Running(text: "Removing. Click Delete when the dialog appears.", since: r.task.startedAt)
-                    Text("It re-scans and re-checks Google Drive first, so the dialog comes after a few minutes.")
+                    Running(text: r.progressText.map { "Removing. \($0)…" } ?? "Removing. Click Delete when the dialog appears.", since: r.task.startedAt)
+                    Text("It re-scans and re-checks Google Drive first, so the dialog comes after a few minutes. Click Delete when it appears.")
                         .font(.callout).foregroundStyle(.secondary)
                 } else if done {
                     if let r = removal?.decode(RemovalPlan.self) {

@@ -93,9 +93,14 @@ def _device_id(db: Database, library: Path) -> int:
 
 
 def scan(
-    config: Config, *, limit: int = 0, helper: Helper | None = None, progress: Any = None
+    config: Config,
+    *,
+    limit: int = 0,
+    helper: Helper | None = None,
+    progress: Any = None,
+    every: int = 2000,
 ) -> ScanResult:
-    """Scan the library into the ledger."""
+    """Scan the library into the ledger. `progress` is called every `every` assets."""
     library = config.photos.library_path
     helper = helper or Helper()
     helper.check()
@@ -131,7 +136,7 @@ def scan(
                 event = record.get("event")
                 if event == "asset":
                     _upsert(db, device_id, scan_id, record, sources, result, library)
-                    if progress and result.seen % 2000 == 0:
+                    if progress and result.seen % every == 0:
                         progress(result)
                 elif event == "error":
                     raise RuntimeError(record.get("message", "helper reported an error"))

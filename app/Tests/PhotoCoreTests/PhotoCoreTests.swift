@@ -391,3 +391,26 @@ final class UpdatesTests: XCTestCase {
         XCTAssertEqual(Updates.highlights(rel?.notes ?? ""), ["Folders per source", "Updates"])
     }
 }
+
+final class TaskProgressTests: XCTestCase {
+    private func status(_ stderr: String) -> TaskStatus {
+        let task = CLITask(id: "t", kind: .plan, recipe: nil, title: "t", args: [], startedAt: Date(), pid: 0)
+        return TaskStatus(task: task, state: .running, output: nil, stderr: stderr)
+    }
+
+    func testTheLatestProgressLineWins() {
+        let s = status("""
+            {"phase": "scan", "done": 0, "total": 75854}
+            some log line
+            {"phase": "scan", "done": 12500, "total": 75854}
+            """)
+        XCTAssertEqual(s.progressText, "Scanning the phone: \(Fmt.count(12500)) of about \(Fmt.count(75854))")
+    }
+
+    func testDriveAndReusedScan() {
+        XCTAssertEqual(status(#"{"phase": "drive", "items": 8451}"#).progressText,
+                       "Checking \(Fmt.count(8451)) items against Google Drive (about a minute)")
+        XCTAssertEqual(status(#"{"phase": "scan", "reused": 27}"#).progressText, "Using the phone scan from a few minutes ago")
+        XCTAssertNil(status("plain text").progressText)
+    }
+}

@@ -11,6 +11,7 @@ import json
 import sys
 import textwrap
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -1624,6 +1625,30 @@ def cloud(ctx: Context, apply_: bool, **kwargs: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
+#: How old a finished scan a removal *plan* may use. See remove_from_iphone.
+PLAN_SCAN_REUSE_SECONDS = 15 * 60
+
+
+def _recent_scan(db: Database) -> int | None:
+    """The latest scan, if it completed in the last few minutes and none is running."""
+    row = db.conn.execute(
+        "SELECT id, status, finished_at FROM scans ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if row is None or row["status"] != "COMPLETED" or not row["finished_at"]:
+        return None
+    finished = datetime.fromisoformat(row["finished_at"])
+    age = (datetime.now(UTC) - finished).total_seconds()
+    return int(row["id"]) if 0 <= age <= PLAN_SCAN_REUSE_SECONDS else None
+
+
+def _last_scan_size(db: Database) -> int:
+    """Assets the last finished scan saw: the total a new scan's progress counts toward."""
+    row = db.conn.execute(
+        "SELECT assets_seen FROM scans WHERE status = 'COMPLETED' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    return int(row["assets_seen"]) if row else 0
+
+
 def _removal_phrase(count: int) -> str:
     """The phrase the user must type, tied to this plan's size.
 
@@ -1647,9 +1672,14 @@ def _removal_phrase(count: int) -> str:
     help="Proxy suspicion removal tolerates, 0 to 1. 0 blocks anything flagged at all; "
     "1 blocks nothing. See docs/SAFETY.md section 2.",
 )
+@click.option(
+    "--progress",
+    is_flag=True,
+    help="Write JSON lines to stderr as the scan and the Drive check go, for the Mac app.",
+)
 @click.pass_obj
 def remove_from_iphone(
-    ctx: Context, apply_: bool, confirm: str, proxy_threshold: float, **kwargs: Any
+    ctx: Context, apply_: bool, confirm: str, proxy_threshold: float, progress: bool, **kwargs: Any
 ) -> None:
     """Delete assets from the iPhone, once every safety condition is proved.
 
@@ -1695,10 +1725,35 @@ def remove_from_iphone(
         "  Scanning the library first. Nothing is planned against stale state.", style="muted"
     )
 
+    def report(line: dict[str, Any]) -> None:
+        if progress:
+            sys.stderr.write(json.dumps(line) + "\n")
+            sys.stderr.flush()
+
     db = ctx.database()
     try:
-        scan_result = run_scan(config)
-        eligible, preview = remove_engine.plan(config, db, selector, scan_id=scan_result.scan_id)
+        # A plan only proposes: the removal scans again in its own run and refuses
+        # if the count moved. So a plan may use a scan finished minutes ago, which
+        # makes re-planning (relaxing the low-res check, say) a minute, not four.
+        # The removal itself never does.
+        scan_id = None if apply_ else _recent_scan(db)
+        if scan_id is not None:
+            report({"phase": "scan", "reused": scan_id})
+        else:
+            expected = _last_scan_size(db)
+            report({"phase": "scan", "done": 0, "total": expected})
+            scan_id = run_scan(
+                config,
+                progress=lambda r: report({"phase": "scan", "done": r.seen, "total": expected}),
+                every=500,
+            ).scan_id
+        eligible, preview = remove_engine.plan(
+            config,
+            db,
+            selector,
+            scan_id=scan_id,
+            on_drive=lambda n: report({"phase": "drive", "items": n}),
+        )
     except (remove_engine.RemoveError, cloud_engine.CloudError, HelperError) as exc:
         _fail(ctx.out, str(exc))
         return

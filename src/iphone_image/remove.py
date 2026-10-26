@@ -214,8 +214,12 @@ def plan(
     *,
     scan_id: int,
     provider: CloudProvider | None = None,
+    on_drive: Callable[[int], None] | None = None,
 ) -> tuple[list[Candidate], RemoveResult]:
-    """Everything with positive evidence for every condition the policy needs."""
+    """Everything with positive evidence for every condition the policy needs.
+
+    `on_drive` is told how many items are about to be checked against the remote,
+    before the listing, which is silent and takes a minute."""
     policy = config.remove_from_iphone.policy
     if policy == RemovalPolicy.NEVER:
         raise RemoveError(
@@ -395,6 +399,8 @@ def plan(
     #    the copy on the device.
     provider = provider or RcloneProvider(config.cloud.remote)
     provider.check()
+    if on_drive:
+        on_drive(len(wanted))
     # One listing per destination in play, for the reason release gives: a
     # video checked against the photo archive is reported missing, and this is
     # the code path where "missing" decides whether a photograph is deleted.

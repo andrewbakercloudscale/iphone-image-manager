@@ -41,6 +41,26 @@ public struct TaskStatus: Hashable, Sendable {
         return obj["error"] as? String
     }
 
+    /// Where a running removal plan has got to: the last `--progress` line it wrote to stderr.
+    public var progressText: String? {
+        for line in stderr.split(separator: "\n").reversed() {
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let phase = obj["phase"] as? String else { continue }
+            switch phase {
+            case "scan" where obj["reused"] != nil:
+                return "Using the phone scan from a few minutes ago"
+            case "scan":
+                let done = obj["done"] as? Int ?? 0, total = obj["total"] as? Int ?? 0
+                return total > 0 ? "Scanning the phone: \(Fmt.count(min(done, total))) of about \(Fmt.count(total))"
+                                 : "Scanning the phone: \(Fmt.count(done))"
+            case "drive":
+                return "Checking \(Fmt.count(obj["items"] as? Int ?? 0)) items against Google Drive (about a minute)"
+            default: continue
+            }
+        }
+        return nil
+    }
+
     public func decode<T: Decodable>(_ type: T.Type) -> T? {
         guard let output, errorMessage == nil else { return nil }
         return try? JSONDecoder().decode(T.self, from: output)

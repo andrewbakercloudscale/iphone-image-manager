@@ -225,12 +225,12 @@ final class Model: ObservableObject {
     }
 
     func plan(_ r: Recipe) {
-        launch(.plan, recipe: r, title: "Plan: \(r.title)", args: ["remove-from-iphone"] + r.removalArgs)
+        launch(.plan, recipe: r, title: "Plan: \(r.title)", args: ["remove-from-iphone", "--progress"] + r.removalArgs)
     }
 
     func remove(_ r: Recipe, phrase: String) {
         launch(.remove, recipe: r, title: "Remove: \(r.title)",
-               args: ["remove-from-iphone"] + r.removalArgs + ["--apply", "--confirm", phrase])
+               args: ["remove-from-iphone", "--progress"] + r.removalArgs + ["--apply", "--confirm", phrase])
     }
 
     private func launch(_ kind: CLITask.Kind, recipe: Recipe?, title: String, args: [String], quiet: Bool = false) {
