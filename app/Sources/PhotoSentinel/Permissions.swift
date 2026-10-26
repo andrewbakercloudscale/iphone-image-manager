@@ -67,9 +67,11 @@ final class Permissions: ObservableObject {
         }
     }
 
-    /// Asks for notifications and Photos in place, then opens Full Disk Access.
+    /// Asks for notifications and Photos in place, then opens Full Disk Access. Anything macOS
+    /// will not ask about again opens its page in System Settings, so the button always does
+    /// something visible.
     func requestAll() {
-        if let n = items.first(where: { $0.id == "notifications" }), n.state == .notAsked { request(n) }
+        if let n = items.first(where: { $0.id == "notifications" }), n.state != .granted { request(n) }
         if let photos = items.first(where: { $0.id == "photos" }), photos.state != .granted {
             request(photos)
         } else if !Self.hasFullDiskAccess() {
@@ -89,12 +91,21 @@ final class Permissions: ObservableObject {
         // Once turned down, macOS never asks again: only System Settings can turn it back on.
         case "photos": Self.showSettings("Privacy_Photos")
         case "notifications" where item.state == .notAsked && Notify.available:
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in
-                Task { @MainActor in self.refresh() }
+            // macOS can answer without showing anything (asked before, or the prompt went to
+            // Notification Centre). Not granted at the end means the settings page is the only way.
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                Task { @MainActor in
+                    self.refresh()
+                    if !granted { Self.showNotificationSettings() }
+                }
             }
-        case "notifications": Self.showURL("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(Bundle.main.bundleIdentifier ?? "consulting.cloudscale.photosentinel")")
+        case "notifications": Self.showNotificationSettings()
         default: Self.showSettings("Privacy_AllFiles")
         }
+    }
+
+    static func showNotificationSettings() {
+        showURL("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(Bundle.main.bundleIdentifier ?? "consulting.cloudscale.photosentinel")")
     }
 
     static func showSettings(_ pane: String) {
@@ -135,7 +146,8 @@ struct PermissionsBanner: View {
             HStack(spacing: 12) {
                 Image(systemName: "checkmark.shield.fill").font(.system(size: 24, weight: .semibold)).foregroundStyle(.white)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Finish setting up: \(missing.count) permission\(missing.count == 1 ? "" : "s") to go").font(.headline).foregroundStyle(.white)
+                    Text(missing.count == 1 ? "Finish setting up: allow \(missing[0].title)"
+                         : "Finish setting up: \(missing.count) permissions to go").font(.headline).foregroundStyle(.white)
                     Text("Grant them once now so macOS does not stop a backup to ask: \(missing.map(\.title).joined(separator: ", ")).")
                         .font(.caption).foregroundStyle(.white.opacity(0.92)).lineLimit(2)
                 }
