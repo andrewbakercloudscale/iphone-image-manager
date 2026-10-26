@@ -75,7 +75,10 @@ What this gives up, stated plainly: for these assets the *only* copies are
 Google Drive and, for 30 days, the phone's Recently Deleted. The Mac copy was
 already gone before removal ran in most cases; the rule does not remove it, it
 stops pretending it is there. `iphone-image audit` is the check that proves
-Drive still holds what the ledger says, and is run before every removal pass.
+Drive still holds everything the ledger says. It is optional before a removal
+(owner's call, 2026-10-26): the plan and the removal re-read each item's own
+hash from Drive anyway, which is the evidence above. The app blocks a removal
+only while an audit runs or when the latest one found Drive missing something.
 
 ---
 

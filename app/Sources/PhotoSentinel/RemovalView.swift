@@ -38,6 +38,10 @@ struct RemovalSheet: View {
         return Date().timeIntervalSince(a.task.startedAt) < Self.auditLife
     }
     private var driveConfirmed: Bool { auditFresh && auditReport?.clean == true }
+    /// The plan and the removal each re-read every item's hash from Drive themselves, so the
+    /// whole-Drive check is extra assurance, not a gate. Only a check that found Drive
+    /// missing something, or one still running, holds the removal back.
+    private var driveBlocks: Bool { (audit?.running ?? false) || auditReport?.clean == false }
 
     private var planResult: RemovalPlan? { plan?.decode(RemovalPlan.self) }
     private var planFresh: Bool {
@@ -123,9 +127,9 @@ struct RemovalSheet: View {
     // MARK: 2. Confirm Google Drive holds everything it is said to hold
 
     @ViewBuilder private var driveStep: some View {
-        Step(number: 2, title: "Confirm Google Drive has them", done: driveConfirmed) {
+        Step(number: 2, title: "Check all of Google Drive (optional)", done: driveConfirmed) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Re-reads the SHA-256 of every file in Google Drive and compares it with the hash taken when it was copied off the phone. Takes about 7 minutes.")
+                Text("Re-reads the SHA-256 of every file in Google Drive and compares it with the hash taken when it was copied off the phone. Takes about 7 minutes. You can skip it: the plan and the removal re-check each item they remove in Drive anyway.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let a = audit, a.running {
                     Running(text: "Asking Google Drive for every file's hash (about 7 minutes)…", since: a.task.startedAt)
@@ -136,12 +140,11 @@ struct RemovalSheet: View {
                     Text("The check could not finish: \(msg)").font(.callout).foregroundStyle(Theme.bad)
                 } else if let a = audit {
                     // Without this the step shows only a button, and nothing says why 3 and 4 are locked.
-                    Label("Last checked \(a.task.startedAt.formatted(date: .abbreviated, time: .shortened))\(auditReport?.clean == true ? ", and everything matched" : ""). A check counts for 6 hours, so run it again to unlock the next steps.",
-                          systemImage: "clock.badge.exclamationmark.fill")
-                        .font(.callout.weight(.semibold)).foregroundStyle(Theme.warn).fixedSize(horizontal: false, vertical: true)
+                    Text("Last checked \(a.task.startedAt.formatted(date: .abbreviated, time: .shortened))\(auditReport?.clean == true ? ", and everything matched" : "").")
+                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 if !(audit?.running ?? false) && !driveConfirmed || (auditReport != nil && !auditFresh) {
-                    CapsuleButton(title: audit == nil ? "Check Google Drive" : "Check again", symbol: "checkmark.shield.fill", color: Theme.good) { model.runAudit() }
+                    CapsuleButton(title: audit == nil ? "Check Google Drive" : "Check again", symbol: "checkmark.shield.fill", color: Theme.good, style: .soft) { model.runAudit() }
                 }
             }
         }
@@ -150,7 +153,7 @@ struct RemovalSheet: View {
     // MARK: 3. The plan: what would go, and why anything stays
 
     @ViewBuilder private var planStep: some View {
-        Step(number: 3, title: "Plan the removal", done: planFresh && planResult != nil, locked: !driveConfirmed) {
+        Step(number: 3, title: "Plan the removal", done: planFresh && planResult != nil, locked: driveBlocks) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Scans the phone now and re-reads each item's hash from Google Drive. Only items whose Drive copy matches are eligible. Takes about 4 minutes.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -164,10 +167,11 @@ struct RemovalSheet: View {
                 } else if let msg = plan?.errorMessage, planFresh {
                     Text(msg).font(.callout).foregroundStyle(Theme.bad).textSelection(.enabled)
                 }
-                if !driveConfirmed && !(plan?.running ?? false) {
-                    Text("Unlocks when step 2 finishes clean.").font(.callout).foregroundStyle(.secondary)
+                if driveBlocks && !(plan?.running ?? false) {
+                    Text((audit?.running ?? false) ? "Unlocks when the Drive check in step 2 finishes." : "Locked: the Drive check in step 2 found problems. Fix them and check again.")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
-                if driveConfirmed && !(plan?.running ?? false) && !(planFresh && planResult != nil && removal == nil) {
+                if !driveBlocks && !(plan?.running ?? false) && !(planFresh && planResult != nil && removal == nil) {
                     CapsuleButton(title: planResult == nil ? "Make the plan" : "Plan again", symbol: "list.bullet.clipboard.fill", color: Tab.cleanUp.color) { model.plan(recipe) }
                 } else if planFresh && planResult != nil && removal == nil {
                     CapsuleButton(title: "Plan again", symbol: "arrow.clockwise", color: Tab.cleanUp.color, style: .ghost) { model.plan(recipe) }
@@ -198,7 +202,7 @@ struct RemovalSheet: View {
     // MARK: 4. Remove
 
     @ViewBuilder private var removeStep: some View {
-        let ready = driveConfirmed && planFresh && (planResult?.eligible ?? 0) > 0
+        let ready = !driveBlocks && planFresh && (planResult?.eligible ?? 0) > 0
         let done = removal.map { !$0.running && $0.errorMessage == nil } ?? false
         Step(number: 4, title: "Remove from iPhone", done: done, locked: !ready && removal == nil) {
             VStack(alignment: .leading, spacing: 10) {
@@ -234,7 +238,7 @@ struct RemovalSheet: View {
                     }
                     Text("Click Delete when the dialog appears.").font(.callout.weight(.semibold))
                 } else {
-                    Text("Unlocks when Google Drive is confirmed and a plan has items to remove.").font(.callout).foregroundStyle(.secondary)
+                    Text("Unlocks when the plan in step 3 has items to remove.").font(.callout).foregroundStyle(.secondary)
                 }
             }
         }
