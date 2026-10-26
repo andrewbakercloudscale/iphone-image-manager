@@ -76,7 +76,8 @@ struct RemovalSheet: View {
                     Text(recipe.detail).font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Close") { model.removing = nil }.keyboardShortcut(.cancelAction)
+                CapsuleButton(title: "Close", symbol: "xmark", color: Theme.bad) { model.removing = nil }
+                    .keyboardShortcut(.cancelAction)
             }
             .padding(18)
             Divider()
