@@ -51,10 +51,10 @@ public struct TaskStatus: Hashable, Sendable {
                 return "Using the phone scan from a few minutes ago"
             case "scan":
                 let done = obj["done"] as? Int ?? 0, total = obj["total"] as? Int ?? 0
-                return total > 0 ? "Reading the whole Photos library: \(Fmt.count(min(done, total))) of about \(Fmt.count(total)) items"
-                                 : "Reading the whole Photos library: \(Fmt.count(done)) items"
+                return total > 0 ? "Finding them in your library: looked at \(Fmt.count(min(done, total))) of \(Fmt.count(total)) photos and videos"
+                                 : "Finding them in your library: looked at \(Fmt.count(done)) photos and videos"
             case "drive":
-                return "Checking \(Fmt.count(obj["items"] as? Int ?? 0)) items against Google Drive (about a minute)"
+                return "Checking each of the \(Fmt.count(obj["items"] as? Int ?? 0)) against its copy in Google Drive (about a minute)"
             default: continue
             }
         }

@@ -165,6 +165,8 @@ struct RemovalSheet: View {
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let p = plan, p.running {
                     Running(text: (p.progressText ?? "Scanning the phone and checking each item in Drive") + "…", since: p.task.startedAt)
+                    Text("Planning only reads your library. Nothing is removed until you confirm in step 4.")
+                        .font(.callout).foregroundStyle(.secondary)
                 } else if let r = planResult, planFresh {
                     PlanSummary(plan: r)
                     if let n = r.blockedReasons["flagged as a suspected proxy"], n > 0, recipe.filter.proxyTolerance < 1 {
@@ -213,8 +215,10 @@ struct RemovalSheet: View {
         Step(number: 4, title: "Remove from iPhone", done: done, locked: !ready && removal == nil) {
             VStack(alignment: .leading, spacing: 10) {
                 if let r = removal, r.running {
-                    Running(text: r.progressText.map { "Removing. \($0)…" } ?? "Removing…", since: r.task.startedAt)
-                    Text("It re-scans and re-checks Google Drive first. Then macOS shows its own box asking to allow deleting the photos: click Delete in that box.")
+                    Text("Removing \(Fmt.count(phraseCount)) \(recipe.title.lowercased()), and nothing else.")
+                        .font(.body.weight(.semibold))
+                    Running(text: (r.progressText ?? "Getting ready") + "…", since: r.task.startedAt)
+                    Text("To make sure the right ones go, it first looks through your whole library and re-checks each one in Google Drive. Everything else is only read, never changed. Then macOS asks to allow deleting the \(Fmt.count(phraseCount)): click Delete in that box.")
                         .font(.callout).foregroundStyle(.secondary)
                 } else if done {
                     if let r = removal?.decode(RemovalPlan.self) {
