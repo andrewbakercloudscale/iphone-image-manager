@@ -207,27 +207,26 @@ struct RemovalSheet: View {
     /// The owner's choice (SAFETY.md section 2): loosen the low-res check for this removal
     /// only. It becomes its own clean-up, so it needs its own plan.
     private func lowResChoice(_ n: Int) -> some View {
-        let relaxed = recipe.filter.proxyTolerance > 0
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("Why \(Fmt.count(n)) were kept")
-                .font(.callout.weight(.semibold))
-            Text("They are small files for their size. Sometimes that means the phone only holds a low-res copy and the original is in iCloud, so the app keeps them to be safe. Screenshots are often just small, so this is usually a false alarm.\(relaxed ? " The check is already relaxed." : "")")
-                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 8) {
-                ForEach([(0.5, "Let most of them go"), (1.0, "Let all of them go")].filter { $0.0 > recipe.filter.proxyTolerance }, id: \.0) { level, label in
-                    CapsuleButton(title: label, symbol: "slider.horizontal.3", color: Theme.warn, style: .soft) {
-                        var f = recipe.filter
-                        f.proxyTolerance = level
-                        if f.name.isEmpty { f.name = recipe.title + (level >= 1 ? ", low-res check off" : ", low-res check relaxed") }
-                        model.removing = Recipe(custom: f)
-                    }
+        VStack(alignment: .leading, spacing: 12) {
+            Label("\(Fmt.count(n)) kept by the low-res rule", systemImage: "exclamationmark.triangle.fill")
+                .font(.callout.weight(.semibold)).foregroundStyle(Theme.warn)
+            Text("These files are small for their size. Now and then that means the phone holds only a low-res copy and the original is in iCloud, so the app keeps them to be safe. For screenshots it is almost always a false alarm.")
+                .font(.callout).fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 12) {
+                CapsuleButton(title: "Ignore the rule", symbol: "eye.slash", color: Theme.warn) {
+                    var f = recipe.filter
+                    f.proxyTolerance = 1
+                    if f.name.isEmpty { f.name = recipe.title + ", low-res rule ignored" }
+                    model.removing = Recipe(custom: f)
                 }
+                Text("Makes a new plan that includes them. Nothing is removed until step 4.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            Text("Each button makes a new plan, so you see the new count first. Nothing is removed until step 4.")
-                .font(.caption).foregroundStyle(.secondary)
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.warn.opacity(0.08)))
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.warn.opacity(0.08)))
+        .padding(.vertical, 6)
     }
 
     // MARK: 4. Remove
