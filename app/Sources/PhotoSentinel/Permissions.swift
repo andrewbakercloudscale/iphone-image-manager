@@ -158,6 +158,7 @@ struct PermissionsBanner: View {
                         .background(Capsule().strokeBorder(.white.opacity(0.8), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Not now")
                 .help("Hide this banner for a week. Settings, Permissions has the same buttons")
                 Button { permissions.requestAll() } label: {
                     Label("Grant all", systemImage: "hand.raised.fill")
@@ -166,6 +167,7 @@ struct PermissionsBanner: View {
                         .background(Capsule().fill(.white))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Grant all")
                 .help("Ask macOS for notifications and Photos access, then open Full Disk Access in System Settings")
             }
             .padding(.horizontal, 12).padding(.vertical, 10)
