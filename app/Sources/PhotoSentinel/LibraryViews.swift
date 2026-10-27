@@ -117,7 +117,8 @@ struct BackupView: View {
                 }
                 Card(title: "Coverage by source", symbol: "icloud.and.arrow.up.fill", tint: Tab.backup.color) {
                     VStack(alignment: .leading, spacing: 12) {
-                        ForEach(s.channels) { c in CoverageRow(model: model, stats: c) }
+                        // Most still to back up first.
+                        ForEach(s.channels.sorted { $0.total.bytes - $0.verified.bytes > $1.total.bytes - $1.verified.bytes }) { c in CoverageRow(model: model, stats: c) }
                         Text("A backup copies to Google Drive and checks each file's hash. Nothing is removed from the phone by a backup. One runs at a time; the rest wait their turn.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
@@ -288,7 +289,14 @@ struct CoverageRow: View {
                         Label("Queued: starts when the running backup ends.", systemImage: "clock")
                             .foregroundStyle(.secondary)
                     } else {
-                        Text(why(c, left)).foregroundStyle(c.verified.count == 0 ? Theme.warn : .secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(why(c, left)).foregroundStyle(c.verified.count == 0 ? Theme.warn : .secondary)
+                            if let kinds = c.notBackedUpKinds { Text(kinds).foregroundStyle(.secondary).monospacedDigit() }
+                            if let apps = c.notBackedUpApps {
+                                Text("From: \(apps)").foregroundStyle(.secondary).monospacedDigit()
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                     }
                     Spacer(minLength: 6)
                     if state.running {

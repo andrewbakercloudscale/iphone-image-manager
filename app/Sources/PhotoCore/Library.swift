@@ -216,6 +216,28 @@ public struct ChannelStats: Identifiable, Hashable, Sendable {
         guard let o = notBackedUpOldest, let n = notBackedUpNewest else { return nil }
         return Fmt.takenBetween(o, n)
     }
+    /// What has no Drive copy, split by kind and, for Other apps, by app, largest first.
+    public var notBackedUpPhotos = Tally()
+    public var notBackedUpVideos = Tally()
+    public struct AppTally: Hashable, Sendable { public let app: String; public var tally: Tally }
+    public var notBackedUpByApp: [AppTally] = []
+
+    /// "580 photos (1.2 GB) and 834 videos (37 GB)".
+    public var notBackedUpKinds: String? {
+        func part(_ t: Tally, _ one: String) -> String? {
+            t.count == 0 ? nil : "\(Fmt.count(t.count)) \(one)\(t.count == 1 ? "" : "s") (\(Fmt.bytes(t.bytes)))"
+        }
+        let parts = [part(notBackedUpPhotos, "photo"), part(notBackedUpVideos, "video")].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " and ")
+    }
+
+    /// "Chrome 653 (109 MB) · Snapchat 284 (2.4 GB) · …", the five biggest by size.
+    public var notBackedUpApps: String? {
+        guard notBackedUpByApp.count > 1 else { return nil }
+        let top = notBackedUpByApp.prefix(5).map { "\($0.app) \(Fmt.count($0.tally.count)) (\(Fmt.bytes($0.tally.bytes)))" }
+        let rest = notBackedUpByApp.dropFirst(5).reduce(0) { $0 + $1.tally.count }
+        return top.joined(separator: " · ") + (rest > 0 ? " · \(Fmt.count(rest)) from \(notBackedUpByApp.count - 5) more apps" : "")
+    }
     public var id: String { channel.rawValue }
     public var total: Tally { Tally(count: photos.count + videos.count, bytes: photos.bytes + videos.bytes) }
     /// Share of bytes on the phone already verified in Drive.
@@ -361,6 +383,23 @@ public enum Ledger {
                 s.channels[i].notBackedUpNewest = r.str(2)
             }
         }
+        for r in try db.rows("""
+            SELECT \(Channel.sql) ch, a.media_type, COALESCE(a.source_bundle_id, ''), COUNT(*), COALESCE(SUM(a.size_bytes), 0)
+            FROM assets a WHERE \(onPhone) AND NOT \(verified) GROUP BY ch, a.media_type, a.source_bundle_id
+            """) {
+            guard let i = s.channels.firstIndex(where: { $0.channel.rawValue == r.str(0) }) else { continue }
+            let t = Tally(count: r.int(3), bytes: Int64(r.int(4)))
+            if r.str(1) == "VIDEO" { s.channels[i].notBackedUpVideos = add(s.channels[i].notBackedUpVideos, t) }
+            else { s.channels[i].notBackedUpPhotos = add(s.channels[i].notBackedUpPhotos, t) }
+            guard s.channels[i].channel == .otherApps else { continue }
+            let app = Fmt.app(r.str(2))
+            if let j = s.channels[i].notBackedUpByApp.firstIndex(where: { $0.app == app }) {
+                s.channels[i].notBackedUpByApp[j].tally = add(s.channels[i].notBackedUpByApp[j].tally, t)
+            } else {
+                s.channels[i].notBackedUpByApp.append(.init(app: app, tally: t))
+            }
+        }
+        for i in s.channels.indices { s.channels[i].notBackedUpByApp.sort { $0.tally.bytes > $1.tally.bytes } }
 
         // The per-asset rules of remove.py's `plan`, so the estimate matches the plan. Not
         // mirrored: user albums and incomplete Live Photo or burst groups, which the plan
