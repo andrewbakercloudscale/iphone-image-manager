@@ -138,8 +138,13 @@ struct JobRow: View {
                     }
                 }
                 if let why = l.why { Text(why).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                Text(job.summary).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if !compact { Text("Last: \(job.lastAt) · \(job.lastLine)").font(.caption).foregroundStyle(.tertiary).lineLimit(1) }
-                if !compact, let p = job.progress, job.state != .finished { Meter(value: p, color: l.color, height: 6).padding(.top, 2) }
+                if !compact, job.state == .running {
+                    if let p = job.progress { Meter(value: p, color: l.color, height: 6).padding(.top, 2) }
+                    // A step with no count yet still shows it is moving.
+                    else { ProgressView().progressViewStyle(.linear).tint(l.color).padding(.top, 2) }
+                }
             }
             Spacer(minLength: 6)
             if case .stopped = job.state, !setAside {

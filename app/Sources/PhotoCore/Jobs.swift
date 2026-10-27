@@ -37,6 +37,33 @@ public struct Job: Identifiable, Hashable, Sendable {
     public struct Sample: Hashable, Sendable { public let at: Date; public let sent: Int }
     public var uploadFirst: Sample?
     public var uploadLast: Sample?
+    /// The CLI's `uploading 299 file(s)`: what this upload looks at before rclone has
+    /// found which of them are not in Drive yet (minutes of `0 B / 0 B` for big videos).
+    public var uploadCandidates: Int?
+    /// `[batch 2/3]`: rclone's counts start again with each batch.
+    public struct Batch: Hashable, Sendable { public let at: Int, of: Int }
+    public var batch: Batch?
+
+    /// What this run has done, totalled from the CLI's summaries under its lines.
+    public struct Done: Hashable, Sendable {
+        public var fetched = 0, fetchedBytes: Int64 = 0
+        /// Verified in Drive by uploads already over, and by the one under way.
+        public var verifiedBefore = 0, verifiedNow = 0
+        public var released = 0, freedBytes: Int64 = 0
+        public var verified: Int { verifiedBefore + verifiedNow }
+    }
+    public var done = Done()
+
+    /// "137 copied from Photos (115 MB), 137 checked in Google Drive, 137 Mac copies tidied (115 MB freed)".
+    public var summary: String {
+        let n = Fmt.count
+        var parts: [String] = []
+        if done.fetched > 0 { parts.append("\(n(done.fetched)) copied from Photos (\(Fmt.bytes(done.fetchedBytes)))") }
+        if done.verified > 0 { parts.append("\(n(done.verified)) checked in Google Drive") }
+        if done.released > 0 { parts.append("\(n(done.released)) Mac copies tidied (\(Fmt.bytes(done.freedBytes)) freed)") }
+        if parts.isEmpty { return state == .finished ? "Nothing new: everything was already backed up" : "Nothing finished yet" }
+        return (state == .finished ? "Did: " : "So far: ") + parts.joined(separator: ", ")
+    }
 
     /// Files a minute over this upload so far, once it has run long enough to say.
     public var uploadRate: Double? {
@@ -95,8 +122,12 @@ public struct Job: Identifiable, Hashable, Sendable {
         let n = Fmt.count
         switch phase {
         case .uploading:
-            guard let uploaded, let toUpload else { return "uploading to Google Drive" }
-            var text = "uploading to Google Drive, \(n(uploaded)) of \(n(toUpload)) files"
+            let of = batch.flatMap { $0.of > 1 ? " (batch \($0.at) of \($0.of))" : nil } ?? ""
+            guard let uploaded, let toUpload else {
+                guard let c = uploadCandidates else { return "uploading to Google Drive" }
+                return "uploading to Google Drive: checking which of the \(n(c)) are already there\(of)"
+            }
+            var text = "uploading to Google Drive, \(n(uploaded)) of \(n(toUpload)) files\(of)"
             if let rate = uploadRate {
                 text += ", about \(n(Int(rate.rounded()))) a minute"
                 let hours = Double(max(0, toUpload - uploaded)) / rate / 60
@@ -127,6 +158,18 @@ public enum Jobs {
                 jobs[key]?.fetchedThisChunk = n
                 continue
             }
+            if let key = current, let line = summaryLine(raw) {
+                switch line {
+                case .fetched(let count, let bytes): jobs[key]?.done.fetched += count; jobs[key]?.done.fetchedBytes += bytes
+                case .uploading(let count): jobs[key]?.uploadCandidates = count
+                case .batch(let i, let of):
+                    jobs[key]?.batch = Job.Batch(at: i, of: of)
+                    jobs[key]?.uploaded = nil; jobs[key]?.toUpload = nil; jobs[key]?.uploadFirst = nil; jobs[key]?.uploadLast = nil
+                case .banked(let count): jobs[key]?.done.verifiedNow = count
+                case .released(let count, let bytes): jobs[key]?.done.released += count; jobs[key]?.done.freedBytes += bytes
+                }
+                continue
+            }
             if let key = current, let (sent, total) = transfers(raw) {
                 jobs[key]?.uploaded = sent
                 jobs[key]?.toUpload = total
@@ -145,6 +188,7 @@ public enum Jobs {
             let m = parsed.message
             job.lastLine = m
             job.lastAt = parsed.time
+            if m.hasPrefix("starting:") { job.done = Job.Done() }
             if m.hasPrefix("starting:"), let n = number(after: "cycle(s), ", in: m) {
                 job.startedLeft = n
                 job.leftToFetch = n
@@ -153,7 +197,11 @@ public enum Jobs {
             if m.hasPrefix("=== cycle") || m.hasPrefix("starting:") || m.hasPrefix("fetching the next chunk") { job.fetchedThisChunk = 0 }
             if m.contains("nothing left to fetch") { job.leftToFetch = 0 }
             if m.hasPrefix("fetching the next chunk") { job.phase = .fetching }
-            if m.hasPrefix("uploading what landed") { job.phase = .uploading; job.uploaded = nil; job.toUpload = nil; job.uploadFirst = nil; job.uploadLast = nil }
+            if m.hasPrefix("uploading what landed") {
+                job.phase = .uploading; job.uploaded = nil; job.toUpload = nil; job.uploadFirst = nil; job.uploadLast = nil
+                job.uploadCandidates = nil; job.batch = nil
+                job.done.verifiedBefore += job.done.verifiedNow; job.done.verifiedNow = 0
+            }
             if m.hasPrefix("releasing") { job.phase = .releasing }
             if m.hasPrefix("=== cycle") || m.hasPrefix("starting:") { job.phase = .other }
             job.state = state(after: m, previous: job.state)
@@ -214,6 +262,44 @@ public enum Jobs {
         let t = line.drop { $0 == " " }
         guard t.count < line.count, t.hasPrefix("["), let close = t.firstIndex(of: "]") else { return nil }
         return Int(t[t.index(after: t.startIndex)..<close].filter { $0 != "," && $0 != " " })
+    }
+
+    enum SummaryLine { case fetched(Int, Int64), uploading(Int), batch(Int, Int), banked(Int), released(Int, Int64) }
+
+    /// The CLI's indented report lines a job's totals and upload step come from:
+    /// `  fetched   137 assets, 114.9 MB`, `  uploading 137 file(s) from screenshot ...`,
+    /// `  [batch 2/2] ...`, `    banked 137/137 verified, ...`, `  released 137 of 137, 114.9 MB freed`.
+    static func summaryLine(_ line: Substring) -> SummaryLine? {
+        let t = line.drop { $0 == " " }
+        guard t.count < line.count else { return nil }
+        let s = String(t)
+        func int(_ x: Substring?) -> Int? { x.flatMap { Int($0.filter { $0 != "," }) } }
+        let words = s.split(separator: " ")
+        if s.hasPrefix("fetched "), words.count >= 4, let n = int(words[1]), words[2] == "assets," {
+            return .fetched(n, bytes(words.dropFirst(3).joined(separator: " ")))
+        }
+        if s.hasPrefix("uploading "), s.contains(" file(s) from "), let n = int(words.dropFirst().first) { return .uploading(n) }
+        if s.hasPrefix("[batch "), let slash = words.dropFirst().first?.prefix(while: { $0 != "]" }).split(separator: "/"),
+           slash.count == 2, let i = int(slash[0]), let of = int(slash[1]) { return .batch(i, of) }
+        if s.hasPrefix("banked "), let n = int(words.dropFirst().first?.split(separator: "/").first), s.contains(" verified") { return .banked(n) }
+        if s.hasPrefix("released "), words.count >= 6, let n = int(words[1]), words[2] == "of", s.hasSuffix(" freed") {
+            return .released(n, bytes(words[4...5].joined(separator: " ")))
+        }
+        return nil
+    }
+
+    /// `114.9 MB` to bytes, in the 1000s the CLI counts in.
+    static func bytes(_ s: String) -> Int64 {
+        let w = s.split(separator: " ")
+        guard w.count >= 2, let v = Double(w[0]) else { return 0 }
+        let unit: Double = switch w[1].prefix(2) {
+        case "KB": 1e3
+        case "MB": 1e6
+        case "GB": 1e9
+        case "TB": 1e12
+        default: 1
+        }
+        return Int64(v * unit)
     }
 
     /// rclone's `NOTICE:   450 MiB / 1.993 GiB, 22%, 47 KiB/s, ETA 9h (xfr#1585/11602)` to (1585, 11602).

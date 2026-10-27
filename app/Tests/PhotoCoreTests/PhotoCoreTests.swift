@@ -273,6 +273,41 @@ final class JobsTests: XCTestCase {
         XCTAssertEqual(j.step, "uploading to Google Drive, \(Fmt.count(1585)) of \(Fmt.count(11602)) files")
     }
 
+    func testARunSaysWhatItDid() {
+        let run = """
+            [10-27 11:27:19] [screenshot/photo] starting: 40 cycle(s), 137 left to fetch, 61.8 GB free
+            [10-27 11:27:21] [screenshot/photo] fetching the next chunk
+              fetched                     137 assets, 114.9 MB
+            [10-27 11:32:06] [screenshot/photo] uploading what landed
+              uploading 137 file(s) from screenshot ...
+              [batch 1/2] screenshot/2025/09 -> gdrive: 9 file(s), 0.01 GB
+                banked 9/137 verified, 0.01 GB sent at 0.10 MB/s
+              [batch 2/2] screenshot/2025/10 -> gdrive: 128 file(s), 0.11 GB
+                banked 137/137 verified, 0.21 GB sent at 0.31 MB/s
+            [10-27 11:44:54] [screenshot/photo] releasing 137 file(s) already verified in Drive
+              released 137 of 137, 114.9 MB freed
+              released                    137 files
+            [10-27 11:45:51] [screenshot/photo] uploading what landed
+            [10-27 11:45:53] [screenshot/photo] cycle finished: 61.7 GB free, 0 still to fetch
+            """
+        let j = Jobs.read(log: run, processes: [])[0]
+        XCTAssertEqual(j.state, .finished)
+        XCTAssertEqual(j.summary, "Did: 137 copied from Photos (115 MB), 137 checked in Google Drive, 137 Mac copies tidied (115 MB freed)")
+        let idle = "[10-27 11:45:50] [screenshot/video] starting: 40 cycle(s), 0 left to fetch\n[10-27 11:45:59] [screenshot/video] cycle finished: 61.7 GB free, 0 still to fetch"
+        XCTAssertEqual(Jobs.read(log: idle, processes: [])[0].summary, "Nothing new: everything was already backed up")
+    }
+
+    func testUploadSaysWhatItIsDoingBeforeRcloneCounts() {
+        let more = log + "\n[10-27 11:46:02] [whatsapp/photo] uploading what landed"
+            + "\n  uploading 299 file(s) from whatsapp ..."
+            + "\n  [batch 1/1] whatsapp/. -> gdrive: 299 file(s), 2.15 GB"
+            + "\n  2026/10/27 11:48:13 NOTICE:           0 B / 0 B, -, 0 B/s, ETA -"
+        let ps = ["/bin/bash /x/cycle.sh photo 40 whatsapp 18m"]
+        XCTAssertEqual(Jobs.read(log: more, processes: ps)[0].step, "uploading to Google Drive: checking which of the 299 are already there")
+        let sending = more + "\n  2026/10/27 11:51:43 NOTICE:    86.897 MiB / 448.702 MiB, 19%, 3.879 MiB/s, ETA 1m33s (xfr#1/39)"
+        XCTAssertEqual(Jobs.read(log: sending, processes: ps)[0].step, "uploading to Google Drive, 1 of 39 files")
+    }
+
     func testUploadPaceAndTimeLeft() {
         let more = log + "\n[10-26 06:28:00] [whatsapp/photo] uploading what landed"
             + "\n  2026/10/26 10:00:00 NOTICE:   1 MiB / 2 GiB, 1%, 40 KiB/s, ETA 9h (xfr#1000/2200)"
