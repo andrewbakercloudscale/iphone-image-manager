@@ -95,7 +95,11 @@ struct RemovalSheet: View {
                         }
                         HStack {
                             if running {
-                                Pill(text: "Backing up now · see Activity", symbol: "icloud.and.arrow.up.fill", color: Theme.good)
+                                Pill(text: "Backing up now", symbol: "icloud.and.arrow.up.fill", color: Theme.good)
+                                CapsuleButton(title: "Open Activity", symbol: "waveform.path.ecg", color: Tab.activity.color, style: .ghost) {
+                                    model.removing = nil
+                                    model.tab = .activity
+                                }
                             } else if !queued.isEmpty {
                                 if let ahead = model.runningBackup {
                                     Pill(text: "Waiting for the \(ahead.title) backup to end", symbol: "clock.fill", color: Theme.warn)
@@ -107,6 +111,9 @@ struct RemovalSheet: View {
                             } else {
                                 CapsuleButton(title: "Back up to Google Drive", symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color) { model.backUp(recipe) }
                             }
+                        }
+                        if running, let step = model.jobs.first(where: { j in j.state == .running && recipe.backups.contains { $0.source == j.source } })?.step {
+                            Text(step.prefix(1).uppercased() + step.dropFirst() + ".").font(.callout).foregroundStyle(.secondary)
                         }
                     }
                 }

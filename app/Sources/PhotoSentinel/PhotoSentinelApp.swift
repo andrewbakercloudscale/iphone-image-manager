@@ -226,7 +226,7 @@ struct MenuView: View {
             }
             if model.jobs.isEmpty { Text("No backup jobs yet.").foregroundStyle(.secondary) }
             ForEach(model.jobs.prefix(4)) { j in
-                JobRow(job: j, compact: true) { model.resume(j.id) }
+                JobRow(job: j, compact: true, queued: model.queue.contains { $0.id == j.id }) { model.resume(j.id) }
             }
             Divider()
             HStack {

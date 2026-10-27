@@ -12,7 +12,7 @@ struct ActivityView: View {
                  trailing: AnyView(Text("each resumes where it stopped; nothing is redone").font(.callout).foregroundStyle(.secondary))) {
                 VStack(alignment: .leading, spacing: 8) {
                     if model.jobs.isEmpty { Text("No backup jobs in cycle.log yet.").foregroundStyle(.secondary) }
-                    ForEach(model.jobs) { j in JobRow(job: j) { model.resume(j.id) } }
+                    ForEach(model.jobs) { j in JobRow(job: j, queued: model.queue.contains { $0.id == j.id }) { model.resume(j.id) } }
                 }
             }
             if !model.queue.isEmpty {
@@ -109,10 +109,15 @@ struct ActivityView: View {
 struct JobRow: View {
     let job: Job
     var compact = false
+    /// Stopped on purpose so another backup could go first; the queue restarts it.
+    var queued = false
     let resume: () -> Void
 
+    private var setAside: Bool { if case .stopped = job.state { return queued }; return false }
+
     private var look: (color: Color, label: String, why: String?) {
-        switch job.state {
+        if setAside { return (Theme.warn, "Waiting", "Set aside so another backup could go first. It carries on from here by itself when that one ends.") }
+        return switch job.state {
         case .running: (Theme.good, "Running", nil)
         case .paused(let why): (Theme.warn, "Paused", why)
         case .stopped(let why): (Theme.bad, "Stopped", why)
@@ -137,7 +142,7 @@ struct JobRow: View {
                 if !compact, let p = job.progress, job.state != .finished { Meter(value: p, color: l.color, height: 6).padding(.top, 2) }
             }
             Spacer(minLength: 6)
-            if case .stopped = job.state {
+            if case .stopped = job.state, !setAside {
                 CapsuleButton(title: "Resume", symbol: "play.fill", color: Tab.cleanUp.color, action: resume)
                     .help("Runs cycle.sh \(job.resumeArguments.joined(separator: " ")) under caffeinate. Backup only: nothing is removed from the phone.")
             }
