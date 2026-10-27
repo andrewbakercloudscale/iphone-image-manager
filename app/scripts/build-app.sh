@@ -21,6 +21,12 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/PhotoSentinel"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+# The version comes from the latest release tag, so a release can't leave the app saying it's older.
+TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+if [ -n "$TAG" ]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${TAG#v}" "$APP/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(git rev-list --count HEAD)" "$APP/Contents/Info.plist"
+fi
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # macOS remembers Photos/folder access by the signature. An ad-hoc signature ("-") changes on
 # every build, so each rebuild asked again. Any stable identity (self-signed is fine) keeps it.
