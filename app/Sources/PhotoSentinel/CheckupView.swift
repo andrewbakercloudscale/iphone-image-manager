@@ -62,7 +62,6 @@ struct CheckupView: View {
     private func worthKnowing(_ s: LibrarySnapshot) -> some View {
         DisclosureGroup("Worth knowing") {
             VStack(alignment: .leading, spacing: 6) {
-                Text("\(Fmt.count(s.proxies)) items look like they might be low-res stand-ins. Each one is removed only if its copy in Google Drive is the full size of the original.")
                 Text("\(Fmt.count(s.favourites)) favourites are never cleaned up.")
                 // Backups copy only the still image; nothing yet copies the motion half, so these never go.
                 Text("\(Fmt.count(s.live)) Live Photos are never cleaned up: backups copy the still photo but not its motion half yet.")
