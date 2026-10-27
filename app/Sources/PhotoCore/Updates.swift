@@ -2,7 +2,7 @@ import Foundation
 
 /// New versions, from the GitHub releases. Copied in spirit from System Sentinel's.
 public enum Updates {
-    public static let repo = "andrewbakercloudscale/iphone-image-manager"
+    public static let repo = "andrewbakercloudscale/photo-sentinel"
     public static let releasesPage = URL(string: "https://github.com/\(repo)/releases")!
 
     public struct Release: Equatable, Sendable {

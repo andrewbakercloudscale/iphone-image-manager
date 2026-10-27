@@ -1,4 +1,4 @@
-# iPhone Image Manager
+# Photo Sentinel
 
 **by CloudScale**
 
@@ -8,7 +8,7 @@
 ![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange.svg)
 ![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)
 
-iPhone Image Manager is an open source macOS utility that inventories, backs up,
+Photo Sentinel is an open source macOS utility that inventories, backs up,
 organizes, deduplicates and verifies images and videos from an iPhone. It supports
 resumable USB sync, date and location based organization, Google Drive backup,
 screenshot and WhatsApp cleanup policies, exact duplicate detection, and explicit
@@ -124,7 +124,7 @@ iphone-image recycle-bin restore
 
 ## Safety promise
 
-> iPhone Image Manager will never remove an image or video merely because it has
+> Photo Sentinel will never remove an image or video merely because it has
 > been seen, copied, or uploaded. Removal is a separate, explicit operation and is
 > only offered when the configured verification requirements have been satisfied.
 
@@ -182,7 +182,7 @@ against:
 
 "Download Originals" would try to pull all 424 GB down before you could do
 anything. "Optimise Mac Storage" keeps metadata and thumbnails locally and leaves
-the full-resolution originals in iCloud, where iPhone Image Manager fetches them
+the full-resolution originals in iCloud, where Photo Sentinel fetches them
 **one asset at a time, on demand**, in budgeted chunks:
 
 ```bash
@@ -224,8 +224,8 @@ brew install libimobiledevice exiftool ffmpeg rclone
 ## Development
 
 ```bash
-git clone https://github.com/andrewbakercloudscale/iphone-image-manager
-cd iphone-image-manager
+git clone https://github.com/andrewbakercloudscale/photo-sentinel ~/Desktop/github/iphone-image-manager
+cd ~/Desktop/github/iphone-image-manager
 
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"

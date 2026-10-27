@@ -251,7 +251,7 @@ changing `cycle.sh` again, do not just re-diagnose from scratch)
 ## 1. What this is
 
 `iphone-image` is a macOS CLI that inventories, backs up, verifies and offloads
-iPhone media. Repo: **https://github.com/andrewbakercloudscale/iphone-image-manager**
+iPhone media. Repo: **https://github.com/andrewbakercloudscale/photo-sentinel**
 (public, MIT). Working copy: `~/Desktop/github/iphone-image-manager`.
 
 The core promise, unchanged: **nothing is ever removed from the phone that is

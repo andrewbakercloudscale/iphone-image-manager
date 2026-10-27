@@ -7,7 +7,7 @@ struct AboutView: View {
     @ObservedObject var model: Model
     @State private var copied = false
 
-    static let repo = "andrewbakercloudscale/iphone-image-manager"
+    static let repo = "andrewbakercloudscale/photo-sentinel"
     static let linkedIn = URL(string: "https://www.linkedin.com/in/andrew-baker-ninja/")!
     static let blog = URL(string: "https://andrewbaker.ninja/")!
     static let cloudScale = URL(string: "https://cloudscale.consulting/")!
