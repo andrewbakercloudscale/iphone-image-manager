@@ -64,7 +64,8 @@ struct CheckupView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("\(Fmt.count(s.proxies)) items look like they might be low-res stand-ins. Each one is removed only if its copy in Google Drive is the full size of the original.")
                 Text("\(Fmt.count(s.favourites)) favourites are never cleaned up.")
-                Text("\(Fmt.count(s.live)) Live Photos stay until their motion half is backed up too.")
+                // Backups copy only the still image; nothing yet copies the motion half, so these never go.
+                Text("\(Fmt.count(s.live)) Live Photos are never cleaned up: backups copy the still photo but not its motion half yet.")
             }
             .font(.callout).foregroundStyle(.secondary).padding(.top, 4)
         }

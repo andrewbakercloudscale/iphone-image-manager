@@ -97,7 +97,13 @@ struct RemovalSheet: View {
                             if running {
                                 Pill(text: "Backing up now · see Activity", symbol: "icloud.and.arrow.up.fill", color: Theme.good)
                             } else if !queued.isEmpty {
-                                Pill(text: "Queued · starts when the running job ends", symbol: "clock.fill", color: Theme.warn)
+                                if let ahead = model.runningBackup {
+                                    Pill(text: "Waiting for the \(ahead.title) backup to end", symbol: "clock.fill", color: Theme.warn)
+                                    CapsuleButton(title: "Back these up first", symbol: "arrow.up.to.line", color: Tab.backup.color) { model.backUpFirst(recipe) }
+                                        .help("Stops the \(ahead.title) backup, backs these up, then carries on with \(ahead.title) from where it was. Nothing is lost: what is already in Google Drive stays there.")
+                                } else {
+                                    Pill(text: "Queued · starting", symbol: "clock.fill", color: Theme.warn)
+                                }
                             } else {
                                 CapsuleButton(title: "Back up to Google Drive", symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color) { model.backUp(recipe) }
                             }
@@ -161,26 +167,35 @@ struct RemovalSheet: View {
                         Text("Last time: removed \(Fmt.count(last.removed ?? 0)) items, \(Fmt.bytes(last.bytesRemoved ?? 0)), on \(lastRemoval!.task.startedAt.formatted(date: .abbreviated, time: .shortened)).")
                             .font(.callout).foregroundStyle(Theme.good)
                     }
-                    if let msg = removal?.errorMessage, !usedUp {
-                        Text(msg.contains("nothing is safe to remove")
-                             ? "Nothing was removed: none of them are safely in Google Drive yet. Back them up in step 1, or check what stays in Checkup."
-                             : "The last try stopped: \(msg)")
-                            .font(.callout).foregroundStyle(Theme.warn).fixedSize(horizontal: false, vertical: true)
+                    let missing = stats?.notBackedUp.count ?? 0
+                    if estimate == 0 && missing > 0 {
+                        // Running it now would scan the whole library for 4 minutes to say this.
+                        Callout(text: "Nothing can come off yet: none of the \(Fmt.count(missing)) are in Google Drive. Back them up in step 1 above. Remove opens here when that finishes.")
+                    } else {
+                        if let msg = removal?.errorMessage, !usedUp {
+                            Callout(text: msg.contains("nothing is safe to remove")
+                                    ? "Nothing was removed: none of them are safely in Google Drive yet. Back them up in step 1 above."
+                                    : "The last try stopped: \(msg)")
+                        }
+                        removeForm(estimate: estimate)
                     }
-                    Text("Removes \(estimate > 0 ? "about \(Fmt.count(estimate)) " : "")\(recipe.title.lowercased()) whose copy in Google Drive is checked again first. Anything not safely there stays on the phone. Removed items go to Recently Deleted for 30 days, on this iPhone and every device on the same iCloud account.")
-                        .font(.callout).fixedSize(horizontal: false, vertical: true)
-                    Text("Type Confirm to start:").font(.callout)
-                    HStack {
-                        TextField("Confirm", text: $typed).textFieldStyle(.roundedBorder)
-                            .onSubmit { start() }
-                        CapsuleButton(title: "Remove", symbol: "trash.fill", color: confirmed ? Theme.bad : .secondary) { start() }
-                            .disabled(!confirmed)
-                    }
-                    Text("Takes about 4 minutes. Then macOS shows the exact count and asks to allow deleting them: click Delete in that box.")
-                        .font(.callout).foregroundStyle(.secondary)
                 }
             }
         }
+    }
+
+    @ViewBuilder private func removeForm(estimate: Int) -> some View {
+        Text("Removes \(estimate > 0 ? "about \(Fmt.count(estimate)) " : "")\(recipe.title.lowercased()) whose copy in Google Drive is checked again first. Anything not safely there stays on the phone. Removed items go to Recently Deleted for 30 days, on this iPhone and every device on the same iCloud account.")
+            .font(.callout).fixedSize(horizontal: false, vertical: true)
+        Text("Type Confirm to start:").font(.callout)
+        HStack {
+            TextField("Confirm", text: $typed).textFieldStyle(.roundedBorder)
+                .onSubmit { start() }
+            CapsuleButton(title: "Remove", symbol: "trash.fill", color: confirmed ? Theme.bad : .secondary) { start() }
+                .disabled(!confirmed)
+        }
+        Text("Takes about 4 minutes. Then macOS shows the exact count and asks to allow deleting them: click Delete in that box.")
+            .font(.callout).foregroundStyle(.secondary)
     }
 
     private var confirmed: Bool { typed.trimmingCharacters(in: .whitespaces).lowercased() == "confirm" }

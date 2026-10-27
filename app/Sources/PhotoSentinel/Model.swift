@@ -40,6 +40,8 @@ final class Model: ObservableObject {
     @Published var allProof: Proof?
     /// Backups waiting for the running one to end. One PhotoKit exporter at a time.
     @Published var queue: [QueuedBackup] = [] { didSet { saveQueue() } }
+    /// Jobs stopped to let another go first: their stop is not news.
+    private var setAside: Set<String> = []
     @Published var suggestions: [Suggestion] = []
     /// The filter being built on the Library tab.
     @Published var draft = Filter()
@@ -156,6 +158,7 @@ final class Model: ObservableObject {
     private func notifyChanges(from old: [Job], to new: [Job]) {
         for job in new {
             guard old.first(where: { $0.id == job.id })?.state == .running else { continue }
+            if job.state != .running, setAside.remove(job.id) != nil { continue }
             switch job.state {
             case .running: break
             case .finished: Notify.send("\(job.title) backed up", "The backup finished.")
@@ -260,6 +263,24 @@ final class Model: ObservableObject {
         queue += fresh
         pumpQueue()
         if !queue.isEmpty { notice = "\(r.title): backup queued. It starts when the running job ends." }
+    }
+
+    /// The backup a queued one is waiting behind, if any.
+    var runningBackup: Job? { jobs.first { $0.state == .running } }
+
+    /// Puts a clean-up's backup ahead of the running job: stops that job, starts this one,
+    /// and queues the stopped job to carry on from where it was the moment this one ends.
+    func backUpFirst(_ r: Recipe) {
+        let wanted = r.backups.map { QueuedBackup(type: $0.type, source: $0.source, older: $0.older) }
+        let stopped = jobs.filter { $0.state == .running }
+            .map { QueuedBackup(type: $0.type, source: $0.source, older: Job.ages[$0.source]) }
+        queue.removeAll { wanted.contains($0) || stopped.contains($0) }
+        queue.insert(contentsOf: wanted + stopped, at: 0)
+        setAside.formUnion(jobs.filter { $0.state == .running }.map(\.id))
+        Jobs.stop()
+        notice = "\(r.title) backs up first. \(stopped.map(\.title).joined(separator: ", ")) carries on right after."
+        // The stopped job's processes take a moment to exit; the queue starts once they have.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { self.refreshJobs() }
     }
 
     /// Opens the filter builder on one place.

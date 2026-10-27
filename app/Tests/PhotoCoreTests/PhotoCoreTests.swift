@@ -287,6 +287,20 @@ final class JobsTests: XCTestCase {
         XCTAssertFalse(Jobs.isCycle("/bin/bash cycle.sh video 40 whatsapp 18m", type: "photo", source: "whatsapp"))
         XCTAssertFalse(Jobs.isCycle("/bin/bash watch-job.sh whatsapp 18m", type: "photo", source: "whatsapp"))
     }
+
+    func testStoppingAJobTakesEverythingUnderItAndNothingElse() {
+        let table = """
+          100     1 /bin/bash /Users/x/.iphone-image/cycle.sh video 40 whatsapp 18m
+          101   100 caffeinate -dimsu /Users/x/.iphone-image/cycle.sh video 40 whatsapp 18m
+          102   100 ./.venv/bin/python -m iphone_image cloud --source whatsapp --apply
+          103   102 rclone copy /Users/x/Desktop/iphone/whatsapp gdrive:Archive
+          104     1 /bin/bash /Users/x/.iphone-image/watch-job.sh whatsapp 18m
+          200     1 /bin/bash /Users/x/.iphone-image/cycle.sh photo 40 camera
+          300     1 rclone lsjson gdrive:Archive
+        """
+        XCTAssertEqual(Jobs.jobProcesses(source: "whatsapp", table: table), [100, 101, 102, 103, 104])
+        XCTAssertEqual(Jobs.jobProcesses(source: nil, table: table), [100, 101, 102, 103, 104, 200])
+    }
 }
 
 final class DetectorTests: XCTestCase {

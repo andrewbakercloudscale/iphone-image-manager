@@ -284,6 +284,51 @@ public enum Jobs {
         processes.contains(where: { $0.contains("/cycle.sh ") && !$0.hasPrefix("caffeinate") })
     }
 
+    /// The cycle.sh jobs running now, for a source or for any, with every process under them:
+    /// caffeinate, the CLI step and its rclone. Also the watch-job.sh beside them, which would
+    /// otherwise raise a "job STOPPED" alarm for a stop that was asked for.
+    static func jobProcesses(source: String?, table: String) -> [Int32] {
+        let rows = table.split(separator: "\n").compactMap { line -> (Int32, Int32, String)? in
+            let f = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+            guard f.count == 3, let pid = Int32(f[0]), let ppid = Int32(f[1]) else { return nil }
+            return (pid, ppid, String(f[2]))
+        }
+        func matches(_ cmd: String) -> Bool {
+            let args = cmd.split(separator: " ").map(String.init)
+            guard let i = args.firstIndex(where: { $0.hasSuffix("/cycle.sh") || $0.hasSuffix("/watch-job.sh") }) else { return false }
+            let rest = Array(args.dropFirst(i + 1))
+            guard let source else { return true }
+            return args[i].hasSuffix("/watch-job.sh") ? rest.first == source : rest.count >= 3 && rest[2] == source
+        }
+        var picked = Set(rows.filter { matches($0.2) }.map(\.0))
+        var grew = true
+        while grew {
+            let more = rows.filter { picked.contains($0.1) && !picked.contains($0.0) }.map(\.0)
+            grew = !more.isEmpty
+            picked.formUnion(more)
+        }
+        return picked.sorted()
+    }
+
+    /// Stops the running backup job so another can go first. Safe at any step (cycle.sh's
+    /// own hotspot guard does the same): an upload keeps what Drive has hash-verified, and
+    /// sync sweeps its .partial files on the next run. Resume carries on from the ledger.
+    @discardableResult
+    public static func stop(source: String? = nil) -> Int {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/ps")
+        p.arguments = ["-axo", "pid=,ppid=,command="]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return 0 }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        let pids = jobProcesses(source: source, table: String(decoding: data, as: UTF8.self))
+        for pid in pids { kill(pid, SIGTERM) }
+        return pids.count
+    }
+
     /// Starts a new backup job: `cycle.sh <type> 40 <source> [older]`. Same rules as resume.
     public static func start(type: String, source: String, older: String?, processes: [String]) -> Result<Void, JobError> {
         if let older {

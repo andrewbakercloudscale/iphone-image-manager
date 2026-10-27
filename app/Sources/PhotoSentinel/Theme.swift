@@ -114,6 +114,24 @@ struct Pill: View {
     }
 }
 
+/// A message that needs reading before going on: tinted, with an icon, never plain coloured text.
+struct Callout: View {
+    let text: String
+    var symbol = "exclamationmark.triangle.fill"
+    var color = Theme.warn
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: symbol).foregroundStyle(color)
+            Text(text).font(.callout.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10).fill(color.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(color.opacity(0.35)))
+    }
+}
+
 struct SymbolTile: View {
     let symbol: String
     let color: Color
