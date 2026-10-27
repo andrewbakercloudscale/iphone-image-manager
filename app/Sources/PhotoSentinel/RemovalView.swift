@@ -53,7 +53,8 @@ struct RemovalSheet: View {
             Divider()
             if scrolls { ScrollView { steps } } else { steps }
         }
-        .frame(width: 720, height: 760)
+        // A range, not a size: the sheet then has a resize edge.
+        .frame(minWidth: 620, idealWidth: 720, maxWidth: .infinity, minHeight: 520, idealHeight: 760, maxHeight: .infinity)
         .background(Color(light: "#f5f5f7", dark: "#1c1c1f"))
         .onChange(of: removal?.running) { loadProof() }
         .onChange(of: model.storage?.destinations) { routes = loadRoutes() }
