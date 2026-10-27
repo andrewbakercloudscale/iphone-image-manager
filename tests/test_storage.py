@@ -46,3 +46,15 @@ def test_a_drive_remote_without_its_own_client_id_is_on_the_shared_quota() -> No
     assert parse_shared_client_id("[gdrive]\ntype = drive\nclient_id = \n")
     own = "[gdrive]\ntype = drive\nclient_id = 123.apps.googleusercontent.com\n"
     assert not parse_shared_client_id(own)
+
+
+def test_a_drive_folder_is_opened_by_the_id_its_parent_lists() -> None:
+    from iphone_image.storage import parse_folder_url
+
+    listing = (
+        '[{"Path":"2026","Name":"2026","IsDir":true,"ID":"a1"},\n'
+        '{"Path":"screenshots","Name":"screenshots","IsDir":true,"ID":"b2"}]'
+    )
+    assert parse_folder_url(listing, "screenshots") == "https://drive.google.com/drive/folders/b2"
+    assert parse_folder_url(listing, "missing") is None
+    assert parse_folder_url("not json", "screenshots") is None

@@ -243,6 +243,14 @@ extension CLIEngine {
         return try decode(StorageReport.self, run(args))
     }
 
+    /// The Google Drive web address of `folder` in the backup account.
+    public func folderLink(_ folder: String) throws -> URL {
+        let obj = try JSONSerialization.jsonObject(with: run(["--json", "config", "folder-link", folder])) as? [String: Any]
+        if let e = obj?["error"] as? String { throw JobError.message(e) }
+        guard let s = obj?["url"] as? String, let url = URL(string: s) else { throw JobError.message("no address for \(folder)") }
+        return url
+    }
+
     /// Whether backups pause on a phone hotspot; with `pauseOnHotspot`, saves that.
     public func pauseOnHotspot(_ set: Bool? = nil) throws -> Bool {
         var args = ["--json", "config", "network"]

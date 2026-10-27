@@ -535,6 +535,25 @@ def config_network(ctx: Context, pause_on_hotspot: str | None) -> None:
     ctx.out.result(data, render)
 
 
+@config.command("folder-link")
+@click.argument("folder")
+@pass_context
+def config_folder_link(ctx: Context, folder: str) -> None:
+    """The Google Drive web address of FOLDER in the backup account."""
+    from .. import storage
+
+    remote = ctx.config.cloud.remote
+    kind = next((a.kind for a in storage.accounts() if a.name == remote), None)
+    if kind != "drive":
+        _fail(ctx.out, f"{remote!r} is not a Google Drive account, so it has no web page to open.")
+        return
+    url = storage.drive_folder_url(remote, folder)
+    if url is None:
+        _fail(ctx.out, f"{folder} is not in Google Drive yet: nothing has been backed up there.")
+        return
+    ctx.out.result({"folder": folder, "url": url}, lambda: ctx.out.pairs([(folder, url)]))
+
+
 @config.command("storage")
 @click.option("--remote", default=None, help="The rclone account new backups go to.")
 @click.option("--archive", default=None, help="The folder on this Mac files are copied into.")

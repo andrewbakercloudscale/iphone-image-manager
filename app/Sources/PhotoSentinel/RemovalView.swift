@@ -219,6 +219,8 @@ struct RemovalSheet: View {
 struct WhereTheyGo: View {
     @ObservedObject var model: Model
     let routes: [Route]
+    @State private var opening: String?
+    @State private var linkError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -245,7 +247,17 @@ struct WhereTheyGo: View {
                     Text(r.folder).font(.callout.monospaced()).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
                     Spacer()
                     Text(Self.detail(r)).font(.callout).foregroundStyle(.secondary).monospacedDigit()
+                    // Only a folder something is already in exists in Google Drive to be opened.
+                    if r.inDrive.count > 0, !r.folder.hasPrefix("elsewhere in ") {
+                        CapsuleButton(title: opening == r.folder ? "Opening…" : "View in GDrive", symbol: "arrow.up.forward.square",
+                                      color: Tab.backup.color, style: .ghost) { open(r.folder) }
+                            .disabled(opening != nil)
+                            .help("Opens this folder in Google Drive in your browser.")
+                    }
                 }
+            }
+            if let linkError {
+                Text(linkError).font(.caption).foregroundStyle(Theme.bad)
             }
             Text("Removed items go to Recently Deleted on the phone for 30 days. Nothing is deleted from Google Drive.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -253,6 +265,19 @@ struct WhereTheyGo: View {
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 12).fill(Theme.cardFill))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Tab.backup.color.opacity(0.5), lineWidth: 1.5))
+    }
+
+    private func open(_ folder: String) {
+        let engine = model.engine
+        opening = folder
+        linkError = nil
+        Task {
+            switch await Task.detached(operation: { Result { try engine.folderLink(folder) } }).value {
+            case .success(let url): NSWorkspace.shared.open(url)
+            case .failure(let e): linkError = "Could not open it: \((e as? JobError)?.text ?? "\(e)")"
+            }
+            opening = nil
+        }
     }
 
     static func detail(_ r: Route) -> String {

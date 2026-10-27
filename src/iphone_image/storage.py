@@ -10,10 +10,11 @@ their hash.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 #: rclone backend types whose listings carry a hash the ledger also records, and
 #: which one. Drive and a local folder report SHA-256; S3 reports only MD5 (its
@@ -109,6 +110,40 @@ def parse_shared_client_id(text: str) -> bool:
         if sep and key.strip() == "client_id" and value.strip():
             return False
     return True
+
+
+def drive_folder_url(remote: str, folder: str, binary: str = "rclone") -> str | None:
+    """The Google Drive web page of `folder` in `remote`, or None when it cannot be found.
+
+    Drive addresses folders by id, not path, so the parent is listed for the folder's id.
+    """
+    path = PurePosixPath(folder.strip("/"))
+    if not path.name:
+        return "https://drive.google.com/drive/my-drive"
+    parent = "" if str(path.parent) == "." else str(path.parent)
+    try:
+        out = subprocess.run(
+            [binary, "lsjson", "--dirs-only", f"{remote.rstrip(':')}:{parent}"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_folder_url(out, path.name)
+
+
+def parse_folder_url(listing: str, name: str) -> str | None:
+    """`rclone lsjson --dirs-only` of a Drive folder: the page of its child `name`."""
+    try:
+        entries = json.loads(listing)
+    except ValueError:
+        return None
+    for e in entries if isinstance(entries, list) else []:
+        if e.get("IsDir") and e.get("Name") == name and e.get("ID"):
+            return f"https://drive.google.com/drive/folders/{e['ID']}"
+    return None
 
 
 def archive_problem(path: Path) -> str | None:
