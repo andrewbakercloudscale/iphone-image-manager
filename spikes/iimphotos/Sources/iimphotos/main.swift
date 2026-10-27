@@ -33,6 +33,9 @@ USAGE
 
 SCAN OPTIONS
     --limit N        Stop after N assets. Default: 0, meaning all.
+    --ids            Only the assets whose local identifiers are on stdin, one
+                     a line. Each one the library no longer holds is reported
+                     as a "missing" event.
 
 EXPORT OPTIONS
     --timeout S      Per-asset timeout in seconds. Default: 1800.
@@ -138,7 +141,7 @@ case "scan":
     guard let limit = Int(option("--limit", default: "0")), limit >= 0 else {
         Out.fail("--limit must be zero or more", code: 64)
     }
-    Scan.run(limit: limit, since: nil)
+    if args.contains("--ids") { Scan.runIdentifiers() } else { Scan.run(limit: limit, since: nil) }
     exit(0)
 
 case "export":

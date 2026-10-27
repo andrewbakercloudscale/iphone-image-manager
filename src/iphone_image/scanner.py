@@ -92,6 +92,22 @@ def _device_id(db: Database, library: Path) -> int:
     return int(cursor.lastrowid or 0)
 
 
+def _recorded_sources(db: Database, identifiers: list[str]) -> SourceApps:
+    """The source application the ledger already holds for these assets."""
+    by_uuid: dict[str, str | None] = {}
+    for start in range(0, len(identifiers), 500):
+        chunk = identifiers[start : start + 500]
+        marks = ",".join("?" * len(chunk))
+        for row in db.conn.execute(
+            f"SELECT device_asset_id, source_bundle_id FROM assets "
+            f"WHERE device_asset_id IN ({marks})",
+            chunk,
+        ):
+            by_uuid[str(row["device_asset_id"]).split("/", 1)[0]] = row["source_bundle_id"]
+    with_bundle = sum(1 for b in by_uuid.values() if b)
+    return SourceApps(by_uuid=by_uuid, total=len(by_uuid), with_bundle_id=with_bundle)
+
+
 def scan(
     config: Config,
     *,
@@ -99,22 +115,35 @@ def scan(
     helper: Helper | None = None,
     progress: Any = None,
     every: int = 2000,
+    identifiers: list[str] | None = None,
 ) -> ScanResult:
-    """Scan the library into the ledger. `progress` is called every `every` assets."""
+    """Scan the library into the ledger. `progress` is called every `every` assets.
+
+    With `identifiers`, only those assets are looked at: each one found is updated
+    and stamped with this scan, and each one the library no longer holds is marked
+    gone. Nothing else is touched, so the scan is recorded as PARTIAL and never
+    counts as a whole-library scan (`settle` asks for COMPLETED).
+    """
     library = config.photos.library_path
     helper = helper or Helper()
     helper.check()
 
-    # Source application is the field PhotoKit does not expose and the one that
-    # makes channel filters possible at all.
-    try:
-        sources: SourceApps = read_source_apps(library)
-    except LibraryDbError as exc:
-        log.warning("source application unavailable: %s", exc)
-        sources = SourceApps(by_uuid={}, total=0, with_bundle_id=0, degraded_reason=str(exc))
-
     db = Database(config.database.path).connect()
     db.migrate()
+
+    # Source application is the field PhotoKit does not expose and the one that
+    # makes channel filters possible at all. Reading it copies the whole Photos
+    # database (about 15 s), so a scan of a few known assets keeps what the ledger
+    # already recorded: an asset's importing app never changes.
+    sources: SourceApps
+    if identifiers is not None:
+        sources = _recorded_sources(db, identifiers)
+    else:
+        try:
+            sources = read_source_apps(library)
+        except LibraryDbError as exc:
+            log.warning("source application unavailable: %s", exc)
+            sources = SourceApps(by_uuid={}, total=0, with_bundle_id=0, degraded_reason=str(exc))
     journal = Journal(db)
     device_id = _device_id(db, library)
 
@@ -132,9 +161,15 @@ def scan(
         Op.SCAN_STARTED, command="scan", device_id=device_id, scan_id=scan_id
     ) as operation:
         try:
-            for record in helper.scan(limit=limit):
+            missing: list[str] = []
+            records = (
+                helper.scan(limit=limit) if identifiers is None else helper.scan_ids(identifiers)
+            )
+            for record in records:
                 event = record.get("event")
-                if event == "asset":
+                if event == "missing":
+                    missing.append(str(record.get("localIdentifier")))
+                elif event == "asset":
                     _upsert(db, device_id, scan_id, record, sources, result, library)
                     if progress and result.seen % every == 0:
                         progress(result)
@@ -147,20 +182,37 @@ def scan(
             )
             raise
 
-        # Anything the newest scan did not see is gone from the library. Record
-        # that rather than deleting the row: the disappearance is the evidence.
-        disappeared = db.conn.execute(
-            "UPDATE assets SET present_on_phone = 0, updated_at = ? "
-            "WHERE device_id = ? AND present_on_phone = 1 "
-            "AND (last_seen_scan_id IS NULL OR last_seen_scan_id != ?)",
-            (utcnow(), device_id, scan_id),
-        )
-        result.disappeared = disappeared.rowcount if limit == 0 else 0
+        if identifiers is None:
+            # Anything the newest scan did not see is gone from the library. Record
+            # that rather than deleting the row: the disappearance is the evidence.
+            disappeared = db.conn.execute(
+                "UPDATE assets SET present_on_phone = 0, updated_at = ? "
+                "WHERE device_id = ? AND present_on_phone = 1 "
+                "AND (last_seen_scan_id IS NULL OR last_seen_scan_id != ?)",
+                (utcnow(), device_id, scan_id),
+            )
+            result.disappeared = disappeared.rowcount if limit == 0 else 0
+        else:
+            # Only what was asked about and positively reported missing. An asset
+            # simply not mentioned is left as it was, never assumed gone.
+            for identifier in missing:
+                gone = db.conn.execute(
+                    "UPDATE assets SET present_on_phone = 0, updated_at = ? "
+                    "WHERE device_id = ? AND device_asset_id = ? AND present_on_phone = 1",
+                    (utcnow(), device_id, identifier),
+                )
+                result.disappeared += gone.rowcount
 
         db.conn.execute(
-            "UPDATE scans SET status = 'COMPLETED', finished_at = ?, assets_seen = ?, "
+            "UPDATE scans SET status = ?, finished_at = ?, assets_seen = ?, "
             "bytes_seen = ? WHERE id = ?",
-            (utcnow(), result.seen, result.total_bytes, scan_id),
+            (
+                "COMPLETED" if identifiers is None else "PARTIAL",
+                utcnow(),
+                result.seen,
+                result.total_bytes,
+                scan_id,
+            ),
         )
         operation.note(
             seen=result.seen,

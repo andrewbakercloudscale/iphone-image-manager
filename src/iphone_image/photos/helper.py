@@ -79,6 +79,12 @@ class Helper:
             args += ["--limit", str(limit)]
         yield from self._stream(args)
 
+    def scan_ids(self, identifiers: list[str]) -> Iterator[dict[str, Any]]:
+        """Describe only these assets. Each one the library no longer holds comes
+        back as a `missing` event rather than silently absent."""
+        payload = "".join(f"{identifier}\n" for identifier in identifiers)
+        yield from self._stream(["scan", "--ids"], stdin=payload)
+
     def export(
         self, work: list[tuple[str, Path]], *, timeout: float = 1800, allow_network: bool = True
     ) -> Iterator[dict[str, Any]]:

@@ -414,17 +414,16 @@ final class TaskProgressTests: XCTestCase {
 
     func testTheLatestProgressLineWins() {
         let s = status("""
-            {"phase": "scan", "done": 0, "total": 75854}
+            {"phase": "scan", "done": 0, "total": 8451}
             some log line
-            {"phase": "scan", "done": 12500, "total": 75854}
+            {"phase": "scan", "done": 1200, "total": 8451}
             """)
-        XCTAssertEqual(s.progressText, "Finding them in your library: looked at \(Fmt.count(12500)) of \(Fmt.count(75854)) photos and videos")
+        XCTAssertEqual(s.progressText, "Checking each one is still on the phone: \(Fmt.count(1200)) of \(Fmt.count(8451))")
     }
 
-    func testDriveAndReusedScan() {
+    func testDriveProgress() {
         XCTAssertEqual(status(#"{"phase": "drive", "items": 8451}"#).progressText,
                        "Checking each of the \(Fmt.count(8451)) against its copy in Google Drive (about a minute)")
-        XCTAssertEqual(status(#"{"phase": "scan", "reused": 27}"#).progressText, "Using the phone scan from a few minutes ago")
         XCTAssertNil(status("plain text").progressText)
     }
 

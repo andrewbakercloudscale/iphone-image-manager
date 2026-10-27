@@ -215,6 +215,48 @@ def _like_prefix(destination: str) -> str:
     return f"{escaped}/%"
 
 
+def _candidate_rows(
+    config: Config, db: Database, selector: Selector
+) -> tuple[list[Any], Selector, bool]:
+    """The ledger rows a removal starts from, with the selector it actually used."""
+    # The protections removal cannot waive, whatever the caller asked for:
+    # suspected proxies and favourites, neither overridable. SAFETY sections 2
+    # and 6.
+    selector = selector.for_removal()
+    # With the remote as evidence, a suspected stand-in is settled by fact rather
+    # than by the guess: it goes only if Drive's copy is exactly the size Photos
+    # gives for the original. So suspects reach that check instead of being
+    # dropped here. Owner's call, 2026-10-26; SAFETY section 2.
+    size_check = config.remove_from_iphone.policy == RemovalPolicy.CLOUD_VERIFIED
+    if size_check:
+        selector = replace(selector, include_proxy_suspects=True)
+    where, params = selector.where()
+    # --limit and --order applied in SQL, exactly as `cloud` and `sync` do. The
+    # first cut of this hardcoded the ordering and dropped the limit entirely,
+    # so `--limit 6831` planned the whole 24,481 and offered to delete 22.4 GB
+    # when 15 GB had been asked for. cloud.py's own comment had already named
+    # the hazard -- "a verb that quietly ignored it would be worse than one
+    # that did not offer it" -- and this is the verb where it is worst, since
+    # the flag is how a caller bounds how many photographs get deleted.
+    limit = f" LIMIT {int(selector.limit)}" if selector.limit else ""
+    rows = db.conn.execute(
+        f"SELECT a.* FROM assets a WHERE {where} ORDER BY {selector.order_by()}{limit}",
+        params,
+    ).fetchall()
+    return rows, selector, size_check
+
+
+def candidate_identifiers(config: Config, db: Database, selector: Selector) -> list[str]:
+    """The local identifiers a removal would examine, from the ledger as it stands.
+
+    A removal re-scans exactly these (SAFETY 7) instead of the whole library. The set
+    can only shrink on the way: anything the fresh scan no longer finds, or finds
+    changed so the selector drops it, is not removed.
+    """
+    rows, _, _ = _candidate_rows(config, db, selector)
+    return [str(r["device_asset_id"]) for r in rows if r["device_asset_id"]]
+
+
 def plan(
     config: Config,
     db: Database,
@@ -239,30 +281,7 @@ def plan(
             "'cloud_verified' (or 'local_verified') if that is what you intend."
         )
 
-    # The protections removal cannot waive, whatever the caller asked for:
-    # suspected proxies and favourites, neither overridable. SAFETY sections 2
-    # and 6.
-    selector = selector.for_removal()
-    # With the remote as evidence, a suspected stand-in is settled by fact rather
-    # than by the guess: it goes only if Drive's copy is exactly the size Photos
-    # gives for the original. So suspects reach that check instead of being
-    # dropped here. Owner's call, 2026-10-26; SAFETY section 2.
-    size_check = policy == RemovalPolicy.CLOUD_VERIFIED
-    if size_check:
-        selector = replace(selector, include_proxy_suspects=True)
-    where, params = selector.where()
-    # --limit and --order applied in SQL, exactly as `cloud` and `sync` do. The
-    # first cut of this hardcoded the ordering and dropped the limit entirely,
-    # so `--limit 6831` planned the whole 24,481 and offered to delete 22.4 GB
-    # when 15 GB had been asked for. cloud.py's own comment had already named
-    # the hazard -- "a verb that quietly ignored it would be worse than one
-    # that did not offer it" -- and this is the verb where it is worst, since
-    # the flag is how a caller bounds how many photographs get deleted.
-    limit = f" LIMIT {int(selector.limit)}" if selector.limit else ""
-    rows = db.conn.execute(
-        f"SELECT a.* FROM assets a WHERE {where} ORDER BY {selector.order_by()}{limit}",
-        params,
-    ).fetchall()
+    rows, selector, size_check = _candidate_rows(config, db, selector)
 
     result = RemoveResult(scan_id=scan_id)
     wanted: list[Candidate] = []

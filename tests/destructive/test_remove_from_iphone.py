@@ -751,3 +751,75 @@ def test_without_a_prepared_plan_it_still_scans_for_itself(env) -> None:
         scanner=counting_scanner,
     )
     assert scans == [1], "no plan handed in means it must take its own scan"
+
+
+# -- the fresh scan covers exactly the candidates ------------------------------
+
+
+class ScanOnly:
+    """The library, as an identifiers-only scan sees it: `held` are still there."""
+
+    def __init__(self, held: set[str]) -> None:
+        self.held = held
+        self.asked: list[str] = []
+
+    def check(self) -> None:
+        return None
+
+    def scan_ids(self, identifiers: list[str]) -> Any:
+        self.asked.extend(identifiers)
+        for identifier in identifiers:
+            if identifier in self.held:
+                yield {
+                    "event": "asset",
+                    "localIdentifier": identifier,
+                    "filename": "IMG_1.JPG",
+                    "mediaType": 1,
+                    "createdAt": "2019-11-04T10:00:00+00:00",
+                    "sizeBytes": 5,
+                }
+            else:
+                yield {"event": "missing", "localIdentifier": identifier}
+
+
+def test_the_fresh_scan_is_of_the_candidates_and_a_missing_one_is_never_removed(env) -> None:
+    from iphone_image.scanner import scan
+
+    config, db = env
+    on_phone(config, db, "a", "2019/11/IMG_1.JPG", scan_id=SCAN - 1)
+    on_phone(config, db, "b", "2019/11/IMG_2.JPG", scan_id=SCAN - 1)
+    on_phone(config, db, "c", "2019/11/IMG_3.JPG", scan_id=SCAN - 1)
+    db.conn.execute("UPDATE assets SET is_favourite = 1 WHERE identity_key = 'c'")
+    # The scanner finds its device by the library's path.
+    db.conn.execute("UPDATE devices SET udid = ?", (str(config.photos.library_path),))
+    # As in the real ledger, an asset's identity is its Photos identifier.
+    db.conn.execute("UPDATE assets SET identity_key = device_asset_id")
+
+    ids = remove_engine.candidate_identifiers(config, db, Selector())
+    assert sorted(ids) == ["a/L0/001", "b/L0/001"], "a favourite is never even a candidate"
+    a, b, c = "a/L0/001", "b/L0/001", "c/L0/001"
+
+    helper = ScanOnly(held={"a/L0/001"})
+    fresh = scan(config, helper=helper, identifiers=ids)
+    assert sorted(helper.asked) == sorted(ids)
+
+    rows = {
+        r["identity_key"]: r
+        for r in db.conn.execute(
+            "SELECT identity_key, present_on_phone, last_seen_scan_id, source_bundle_id "
+            "FROM assets"
+        )
+    }
+    assert rows[a]["last_seen_scan_id"] == fresh.scan_id
+    assert rows[a]["source_bundle_id"] == "com.apple.camera", "the importing app is kept"
+    assert rows[b]["present_on_phone"] == 0, "reported missing, so recorded as gone"
+    assert rows[c]["present_on_phone"] == 1, "not asked about, so left exactly as it was"
+    assert rows[c]["last_seen_scan_id"] == SCAN - 1
+    status = db.conn.execute("SELECT status FROM scans WHERE id = ?", (fresh.scan_id,)).fetchone()
+    assert status[0] == "PARTIAL", "never mistaken for a whole-library scan"
+
+    cloud = FakeCloud({"2019/11/IMG_1.JPG": hashlib.sha256(b"photo").hexdigest()})
+    eligible, _ = remove_engine.plan(config, db, Selector(), scan_id=fresh.scan_id, provider=cloud)
+    assert [c.asset_id for c in eligible] == [
+        db.conn.execute("SELECT id FROM assets WHERE identity_key = ?", (a,)).fetchone()[0]
+    ]

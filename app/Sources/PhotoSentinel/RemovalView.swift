@@ -158,7 +158,7 @@ struct RemovalSheet: View {
                     Text("Removing \(recipe.title.lowercased()) that are safe in Google Drive, and nothing else.")
                         .font(.body.weight(.semibold))
                     Running(text: (r.progressText ?? "Getting ready") + "…", since: r.task.startedAt)
-                    Text("It looks through your whole library to find them and re-checks each one in Google Drive. Everything else is only read, never changed. Then macOS asks to allow deleting them, with the exact count: click Delete in that box.")
+                    Text("It checks each one is still on the phone and re-checks its copy in Google Drive. Everything else is only read, never changed. Then macOS asks to allow deleting them, with the exact count: click Delete in that box.")
                         .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 } else if done, let r = removal?.decode(RemovalPlan.self) {
                     Text("Removed \(Fmt.count(r.removed ?? 0)) items, \(Fmt.bytes(r.bytesRemoved ?? 0)).")
@@ -176,7 +176,7 @@ struct RemovalSheet: View {
                     }
                     let missing = stats?.notBackedUp.count ?? 0
                     if estimate == 0 && missing > 0 {
-                        // Running it now would scan the whole library for 4 minutes to say this.
+                        // Running it now would only check them all to say this.
                         Callout(text: "Nothing can come off yet: none of the \(Fmt.count(missing)) are in Google Drive. Back them up in step 1 above. Remove opens here when that finishes.")
                     } else {
                         if let msg = removal?.errorMessage, !usedUp {
@@ -201,7 +201,7 @@ struct RemovalSheet: View {
             CapsuleButton(title: "Remove", symbol: "trash.fill", color: confirmed ? Theme.bad : .secondary) { start() }
                 .disabled(!confirmed)
         }
-        Text("Takes about 4 minutes. Then macOS shows the exact count and asks to allow deleting them: click Delete in that box.")
+        Text("Takes about 2 minutes. Then macOS shows the exact count and asks to allow deleting them: click Delete in that box.")
             .font(.callout).foregroundStyle(.secondary)
     }
 

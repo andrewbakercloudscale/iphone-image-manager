@@ -295,6 +295,11 @@ A removal plan is always computed against a scan taken in that same invocation.
 Stale database state is never used to authorize deletion. If the device disconnects
 during the final scan, no plan is produced.
 
+That scan covers exactly the candidates: each one is fetched from Photos by its
+identifier. One Photos does not return is recorded as gone and is never removed.
+Assets that were not candidates are not touched, and the scan is recorded as
+`PARTIAL` so nothing mistakes it for a whole-library scan.
+
 ---
 
 ## 8. Removal happens through Apple's API, not by unlinking files

@@ -49,6 +49,32 @@ enum Scan {
         ])
     }
 
+    /// Describes only the assets named on stdin, one local identifier a line, and says
+    /// which of them the library no longer holds. A removal re-checks just its own
+    /// candidates this way, in seconds, instead of describing all of a large library.
+    static func runIdentifiers() {
+        var wanted: [String] = []
+        while let line = readLine(strippingNewline: true) {
+            let id = line.trimmingCharacters(in: .whitespaces)
+            if !id.isEmpty { wanted.append(id) }
+        }
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: wanted, options: nil)
+        Out.emit(["event": "scanStart", "assets": assets.count, "requested": wanted.count])
+        let albums = albumMembership()
+        var seen = Set<String>()
+        var bytes: Int64 = 0
+        assets.enumerateObjects { asset, _, _ in
+            let record = describe(asset, albums: albums[asset.localIdentifier] ?? [])
+            bytes += (record["sizeBytes"] as? Int64) ?? 0
+            seen.insert(asset.localIdentifier)
+            Out.emit(record)
+        }
+        for id in wanted where !seen.contains(id) {
+            Out.emit(["event": "missing", "localIdentifier": id])
+        }
+        Out.emit(["event": "scanComplete", "emitted": seen.count, "totalBytes": bytes])
+    }
+
     private static func albumMembership() -> [String: [String]] {
         var result: [String: [String]] = [:]
         for kind in [PHAssetCollectionType.album, .smartAlbum] {

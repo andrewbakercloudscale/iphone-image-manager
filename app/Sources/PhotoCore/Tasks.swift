@@ -47,12 +47,10 @@ public struct TaskStatus: Hashable, Sendable {
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   let phase = obj["phase"] as? String else { continue }
             switch phase {
-            case "scan" where obj["reused"] != nil:
-                return "Using the phone scan from a few minutes ago"
             case "scan":
                 let done = obj["done"] as? Int ?? 0, total = obj["total"] as? Int ?? 0
-                return total > 0 ? "Finding them in your library: looked at \(Fmt.count(min(done, total))) of \(Fmt.count(total)) photos and videos"
-                                 : "Finding them in your library: looked at \(Fmt.count(done)) photos and videos"
+                return total > 0 ? "Checking each one is still on the phone: \(Fmt.count(min(done, total))) of \(Fmt.count(total))"
+                                 : "Checking each one is still on the phone"
             case "drive":
                 let items = Fmt.count(obj["items"] as? Int ?? 0)
                 guard let listed = obj["listed"] as? Int else {
