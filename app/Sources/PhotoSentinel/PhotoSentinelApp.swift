@@ -148,7 +148,10 @@ struct Header: View {
                 Text("Photo Sentinel").font(.title2.weight(.bold))
                 Text(subtitle).font(.callout).foregroundStyle(.secondary)
             }
-            Spacer()
+            // The title never wraps; a long job pill gives way instead.
+            .fixedSize()
+            .layoutPriority(1)
+            Spacer(minLength: 12)
             if let s = model.library {
                 Pill(text: "\(Fmt.pct(s.coverage)) backed up", symbol: "checkmark.shield.fill",
                      color: s.coverage > 0.9 ? Theme.good : Theme.warn)
@@ -169,8 +172,10 @@ struct Header: View {
                 switch j.state {
                 case .paused: Pill(text: "Backing up \(j.title): paused", symbol: "pause.circle.fill", color: Theme.warn)
                 default:
-                    Pill(text: "Backing up \(j.title)" + (j.step.map { " · \($0)" } ?? ""),
-                         symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color)
+                    // Short: the full step is on Activity. "Backing up WhatsApp videos · 140 of 319".
+                    let count = j.progress != nil && j.phase == .uploading ? j.uploaded.flatMap { u in j.toUpload.map { " · \(Fmt.count(u)) of \(Fmt.count($0))" } }
+                        : j.left.map { " · \(Fmt.count($0)) left" }
+                    Pill(text: "Backing up \(j.title)" + (count ?? ""), symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color)
                 }
             }
             .buttonStyle(.plain)
