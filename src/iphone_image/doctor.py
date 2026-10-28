@@ -30,8 +30,8 @@ PASS = "PASS"
 WARN = "WARN"
 FAIL = "FAIL"
 
-#: Below this, a chunked fetch has nowhere to work.
-MIN_FREE_BYTES = 20 * 1024**3
+#: The smallest batch a backup will shrink to when this Mac is short of space.
+MIN_BATCH_BYTES = 500 * 1024**2
 
 
 @dataclass
@@ -537,13 +537,25 @@ def check_disk(config: Config) -> Check:
     usage = shutil.disk_usage(probe)
     data = {"free": usage.free, "total": usage.total, "path": str(probe)}
 
-    if usage.free < MIN_FREE_BYTES:
+    floor = config.chunking.free_space_floor
+    batch = config.chunking.chunk_bytes
+    if usage.free < floor + MIN_BATCH_BYTES:
         return Check(
             "disk headroom",
             FAIL,
-            f"{_human(usage.free)} free on {probe}",
-            f"A chunked fetch needs at least {_human(MIN_FREE_BYTES)} to work in. "
-            "Free space, or point archive.local_path at a larger volume.",
+            f"{_human(usage.free)} free on this Mac ({probe})",
+            f"Backups copy each item to this Mac on its way to the cloud, in batches of up "
+            f"to {_human(batch)}, and always leave {_human(floor)} free. Empty the Bin "
+            "(tidied copies go there) or free disk on this Mac.",
+            data,
+        )
+    if usage.free < floor + batch:
+        return Check(
+            "disk headroom",
+            WARN,
+            f"{_human(usage.free)} free on this Mac ({probe})",
+            f"Backups will run in smaller batches than {_human(batch)} until the Bin is "
+            "emptied or more of this Mac is free.",
             data,
         )
     return Check("disk headroom", PASS, f"{_human(usage.free)} free on {probe}", "", data)

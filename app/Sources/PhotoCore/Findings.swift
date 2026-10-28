@@ -7,6 +7,8 @@ public struct Finding: Identifiable, Hashable, Sendable {
         case resume(String)      // a job id
         case recipe(String)      // a recipe id: opens Clean up
         case openTab(String)
+        case emptyBin
+        case macStorage          // macOS Settings > General > Storage
         case none
     }
 
@@ -23,10 +25,38 @@ public struct Finding: Identifiable, Hashable, Sendable {
 
 public enum Detector {
     /// Safety first, then stopped jobs, then space by size. Pure: tested without a ledger.
-    public static func findings(library s: LibrarySnapshot, jobs: [Job], doctor: DoctorReport?) -> [Finding] {
+    /// The Mac's own disk, not the phone's: backups pass through it on the way to Google Drive.
+    /// Tidied Mac copies go to the Bin, so emptying it is usually what gives the space back.
+    static func lowMacSpace(_ c: Check, jobs: [Job], binBytes: Int64?) -> Finding {
+        let free = c.detail.components(separatedBy: " free").first ?? c.detail
+        var detail = "Backups copy each item to this Mac on its way to Google Drive, in batches that shrink to fit, and always leave some space free. There is no room for even a small batch now."
+        let running = jobs.filter { $0.state == .running }.map(\.title)
+        if !running.isEmpty {
+            detail += " The running \(running.joined(separator: " and ")) backup tidies its Mac copies when it ends."
+        }
+        let binWorthIt = binBytes.map { $0 >= 100_000_000 } ?? true
+        if let b = binBytes, binWorthIt {
+            detail += " The Bin holds \(Fmt.bytes(b)): tidied copies go there, already safe in Google Drive, and the space only comes back when it is emptied."
+        } else if binBytes == nil {
+            detail += " Tidied copies go to the Bin, already safe in Google Drive; the space only comes back when it is emptied."
+        } else {
+            detail += " The Bin is already empty, so see what else is using this Mac's disk."
+        }
+        return Finding(id: "doctor.\(c.name)", kind: .safety, symbol: "internaldrive.fill",
+                       title: "This Mac is low on space: \(free) free",
+                       detail: detail,
+                       actionTitle: binWorthIt ? "Empty Bin" + (binBytes.map { " (\(Fmt.bytes($0)))" } ?? "") + "…" : "See what uses space",
+                       action: binWorthIt ? .emptyBin : .macStorage, bytes: .max)
+    }
+
+    public static func findings(library s: LibrarySnapshot, jobs: [Job], doctor: DoctorReport?, binBytes: Int64? = nil) -> [Finding] {
         var out: [Finding] = []
 
         for c in doctor?.results ?? [] where c.failed {
+            if c.name == "disk headroom" {
+                out.append(lowMacSpace(c, jobs: jobs, binBytes: binBytes))
+                continue
+            }
             out.append(Finding(id: "doctor.\(c.name)", kind: .safety, symbol: "exclamationmark.triangle.fill",
                                title: "\(c.name.prefix(1).uppercased())\(c.name.dropFirst()): \(c.detail)",
                                detail: c.remedy.isEmpty ? "Run doctor for details." : c.remedy,

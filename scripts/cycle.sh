@@ -53,6 +53,7 @@ c=load_config()
 print(c.chunking.chunk_bytes, c.chunking.free_space_floor)')"
 NEED_B=$((CHUNK_B + FLOOR_B))
 HEADROOM_B=$((NEED_B + 10 * 1024**3))
+MIN_CHUNK_B=$((500 * 1024**2))
 gb() { LC_NUMERIC=C awk -v b="$1" 'BEGIN{printf "%.1f", b/1e9}'; }
 
 # Selector flags shared by every verb, so the log can be read against the plan.
@@ -347,9 +348,17 @@ for cycle in $(seq 1 "$CYCLES"); do
     empty_bin_if_ours || true
     now=$(free_b)
   fi
+  # Short of a full chunk, fetch a smaller one that fits above the floor rather
+  # than stop: the next cycle releases it and tries the full size again.
+  BUDGET=()
   if [ "$now" -lt "$NEED_B" ]; then
-    say "only $(gb "$now") GB free and a chunk needs $(gb "$NEED_B") GB ($(gb "$CHUNK_B") GB chunk + $(gb "$FLOOR_B") GB floor). EMPTY THE BIN or free disk, then re-run."
-    exit 2
+    room=$((now - FLOOR_B))
+    if [ "$room" -lt "$MIN_CHUNK_B" ]; then
+      say "only $(gb "$now") GB free: not even a $(gb "$MIN_CHUNK_B") GB batch fits above the $(gb "$FLOOR_B") GB floor. EMPTY THE BIN or free disk, then re-run."
+      exit 2
+    fi
+    BUDGET=(--budget "$((room / 1024**2))MB")
+    say "only $(gb "$now") GB free: fetching a smaller batch of $(gb "$room") GB this cycle"
   fi
   if [ "$now" -lt "$HEADROOM_B" ]; then
     say "WARNING: $(gb "$now") GB free. The next cycle will need the Bin emptied."
@@ -359,7 +368,7 @@ for cycle in $(seq 1 "$CYCLES"); do
   wait_for_net
   say "fetching the next chunk"
   mark=$(log_bytes)
-  $PY -m iphone_image sync "${SEL[@]}" --apply >> "$LOG" 2>&1 \
+  $PY -m iphone_image sync "${SEL[@]}" ${BUDGET[@]+"${BUDGET[@]}"} --apply >> "$LOG" 2>&1 \
     || say "sync returned non-zero; continuing to upload what landed"
   if net_hit_since "$mark"; then
     NET_WAITED=1

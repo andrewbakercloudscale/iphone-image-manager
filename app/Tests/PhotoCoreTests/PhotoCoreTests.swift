@@ -352,6 +352,25 @@ final class DetectorTests: XCTestCase {
     }
 }
 
+final class LowMacSpaceTests: XCTestCase {
+    private func report(_ free: String) throws -> DoctorReport {
+        let json = #"{"checks":1,"passed":0,"warnings":0,"failures":1,"ready":false,"results":[{"name":"disk headroom","status":"FAIL","detail":"\#(free) free on this Mac (/x)","remedy":"r"}]}"#
+        return try JSONDecoder().decode(DoctorReport.self, from: Data(json.utf8))
+    }
+
+    func testItIsAboutThisMacAndOffersToEmptyTheBin() throws {
+        let f = Detector.findings(library: LibrarySnapshot(), jobs: [], doctor: try report("5.5 GB"), binBytes: 27_000_000_000)
+        XCTAssertEqual(f.first?.title, "This Mac is low on space: 5.5 GB free")
+        XCTAssertEqual(f.first?.action, .emptyBin)
+        XCTAssertTrue(f.first?.actionTitle.hasPrefix("Empty Bin (") ?? false)
+    }
+
+    func testAnEmptyBinPointsAtTheMacsStorageInstead() throws {
+        let f = Detector.findings(library: LibrarySnapshot(), jobs: [], doctor: try report("5.5 GB"), binBytes: 0)
+        XCTAssertEqual(f.first?.action, .macStorage)
+    }
+}
+
 final class FilterTests: XCTestCase {
     func testArgsAreTheCLIFlags() {
         let f = Filter(source: "whatsapp", type: "video", olderThan: "6m", minMB: 20, proxyTolerance: 0.5)

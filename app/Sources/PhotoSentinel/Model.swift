@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import PhotoCore
@@ -17,6 +18,8 @@ final class Model: ObservableObject {
     @Published var googlePhotos: GooglePhotosStatus?
     @Published var jobs: [Job] = []
     @Published var doctor: DoctorReport?
+    /// Size of the Bin, where tidied Mac copies go; nil when macOS will not let the app look.
+    @Published var binBytes: Int64?
     @Published var error: String?
     @Published var loading = false
     @Published var doctorRunning = false
@@ -90,7 +93,7 @@ final class Model: ObservableObject {
 
     var findings: [Finding] {
         guard let library else { return [] }
-        return Detector.findings(library: library, jobs: jobs, doctor: doctor)
+        return Detector.findings(library: library, jobs: jobs, doctor: doctor, binBytes: binBytes)
     }
 
     var activeJob: Job? { jobs.first { if case .running = $0.state { return true }; if case .paused = $0.state { return true }; return false } }
@@ -126,11 +129,13 @@ final class Model: ObservableObject {
             let everything = try? Ledger.breakdown(SQLiteReader(path: engine.ledgerPath))
             let storage = try? engine.storage()
             let googlePhotos = try? engine.googlePhotos()
+            let bin = Model.binSize()
             let suggestions = (try? result.get()).flatMap { s in
                 try? Ledger.suggestions(SQLiteReader(path: engine.ledgerPath), apps: s.apps)
             } ?? []
             await MainActor.run {
                 self.suggestions = suggestions
+                self.binBytes = bin
                 if let everything { self.everything = everything }
                 if let storage { self.storage = storage }
                 if let googlePhotos { self.googlePhotos = googlePhotos }
@@ -489,7 +494,45 @@ final class Model: ObservableObject {
         // The sheet opens over whichever tab is showing, so Close returns to it.
         case .recipe(let id): removing = recipes.first { $0.id == id }
         case .openTab(let name): tab = Tab.named(name) ?? .checkup
+        case .emptyBin: emptyBin()
+        case .macStorage:
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.settings.Storage")!)
         case .none: break
+        }
+    }
+
+    /// Bytes in ~/.Trash, or nil when macOS denies the app a look inside.
+    nonisolated static func binSize() -> Int64? {
+        let bin = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash")
+        guard (try? FileManager.default.contentsOfDirectory(atPath: bin.path)) != nil,
+              let walk = FileManager.default.enumerator(at: bin, includingPropertiesForKeys: [.totalFileAllocatedSizeKey])
+        else { return nil }
+        var total: Int64 = 0
+        for case let url as URL in walk {
+            total += Int64((try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize ?? 0)
+        }
+        return total
+    }
+
+    /// Empties the whole Bin through Finder, after the person says yes: it holds their own
+    /// deleted files too, not only Photo Sentinel's tidied copies.
+    func emptyBin() {
+        let alert = NSAlert()
+        alert.messageText = "Empty the Bin" + (binBytes.map { " (\(Fmt.bytes($0)))" } ?? "") + "?"
+        alert.informativeText = "This permanently deletes everything in the Bin, including anything else you deleted. Photo Sentinel's tidied copies there are already safe in Google Drive."
+        alert.addButton(withTitle: "Empty Bin")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        notice = "Emptying the Bin…"
+        Task.detached {
+            var error: NSDictionary?
+            NSAppleScript(source: "tell application \"Finder\" to empty trash")?.executeAndReturnError(&error)
+            let failed = error != nil
+            await MainActor.run {
+                self.notice = failed ? "Could not empty the Bin. Allow Photo Sentinel to control Finder in System Settings > Privacy & Security > Automation, or empty it from the Dock." : "Bin emptied."
+                self.refresh()
+                self.refreshDoctor()
+            }
         }
     }
 }
