@@ -37,7 +37,19 @@ KIND_TITLES = {
     "box": "Box",
     "b2": "Backblaze B2",
     "local": "A folder on this Mac",
+    "google photos": "Google Photos",
+    "googlephotos": "Google Photos",
+    "gphotos": "Google Photos",
 }
+
+#: rclone's Google Photos backend, by every name rclone accepts for it (its name,
+#: file name and prefix). Never in HASH_TYPES: Google Photos re-encodes what it is
+#: sent and reports no hash, so it can hold an extra copy but never a backup.
+GOOGLE_PHOTOS_KINDS = frozenset({"google photos", "googlephotos", "gphotos"})
+
+
+def is_google_photos(kind: str) -> bool:
+    return kind.strip().lower() in GOOGLE_PHOTOS_KINDS
 
 
 @dataclass(frozen=True)

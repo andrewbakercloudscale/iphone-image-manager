@@ -38,6 +38,7 @@ class Op:
     TRASH = "TRASH"
     RELOCATE = "RELOCATE"
     MIGRATE = "MIGRATE"
+    GPHOTOS_SEND = "GPHOTOS_SEND"
 
 
 class Status:

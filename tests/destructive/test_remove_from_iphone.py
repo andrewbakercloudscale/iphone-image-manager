@@ -823,3 +823,30 @@ def test_the_fresh_scan_is_of_the_candidates_and_a_missing_one_is_never_removed(
     assert [c.asset_id for c in eligible] == [
         db.conn.execute("SELECT id FROM assets WHERE identity_key = ?", (a,)).fetchone()[0]
     ]
+
+
+def test_a_copy_in_google_photos_is_never_evidence_for_removal(env) -> None:
+    """Google Photos re-encodes what it is sent and reports no hash: an extra copy,
+    never a backup. Only Google Drive decides (docs/SAFETY.md section 1b)."""
+    config, db = env
+    on_phone(config, db, "a", "2019/11/IMG_1.JPG", cloud=False)
+    on_phone(config, db, "b", "2019/11/IMG_2.JPG", body=b"other")
+    db.conn.execute(
+        "UPDATE assets SET gphotos_status = 'SENT', gphotos_album = 'Photo Sentinel', "
+        "gphotos_at = ?",
+        (utcnow(),),
+    )
+    # Drive no longer has b: sent to Google Photos or not, neither may go.
+    eligible, result = plan(config, db, FakeCloud({}))
+    assert eligible == []
+    assert result.blocked == 2
+
+
+def test_removal_and_release_code_never_read_google_photos_state() -> None:
+    """A structural check: nothing that deletes anything can consult Google Photos."""
+    import iphone_image
+
+    root = Path(iphone_image.__file__).parent
+    for name in ("remove.py", "release.py"):
+        text = (root / name).read_text().lower()
+        assert "gphotos" not in text and "google_photos" not in text, name

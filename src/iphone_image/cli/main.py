@@ -19,6 +19,7 @@ import click
 from .. import __version__
 from .. import audit as audit_engine
 from .. import cloud as cloud_engine
+from .. import google_photos as gphotos_engine
 from .. import locate as locate_engine
 from .. import recover as recover_engine
 from .. import release as release_engine
@@ -2017,6 +2018,392 @@ def release(ctx: Context, apply_: bool, **kwargs: Any) -> None:
 
     ctx.out.result(data, render_result)
     if result.failed:
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# google-photos
+# ---------------------------------------------------------------------------
+
+GOOGLE_PHOTOS_NOTE = (
+    "Google Photos is an extra copy for viewing. It never counts as a backup: "
+    "nothing leaves the Mac or the iPhone on the strength of it, only Google Drive."
+)
+
+
+def _save_google_photos(ctx: Context, changes: dict[str, Any]) -> Config | None:
+    """Write `google_photos.<key>` for each change, comments kept, and prove it loads."""
+    from .. import layout as layout_engine
+
+    if not ctx.config.source_path:
+        _fail(ctx.out, "no configuration file to save to. Run `config init` first.")
+        return None
+    path = Path(ctx.config.source_path)
+    tmp = path.with_suffix(".yaml.tmp")
+    tmp.write_text(layout_engine.edit_section(path.read_text(), "google_photos", changes))
+    try:
+        saved = load_config(tmp)
+    except ConfigError as e:
+        tmp.unlink()
+        _fail(ctx.out, f"not saved, the edited file did not load: {e}")
+        return None
+    if any(getattr(saved.google_photos, k) != v for k, v in changes.items()):
+        tmp.unlink()
+        _fail(ctx.out, "not saved, the edited file did not say what was asked.")
+        return None
+    tmp.replace(path)
+    return saved
+
+
+@config.command("google-photos")
+@click.option("--follow", multiple=True, help="A source whose new backups go there too.")
+@click.option("--unfollow", multiple=True, help="A source whose new backups stop going there.")
+@click.option("--remote", default=None, help="The rclone Google Photos remote. Empty to stop.")
+@click.option("--album", default=None, help="The album name every album starts with.")
+@pass_context
+def config_google_photos(
+    ctx: Context,
+    follow: tuple[str, ...],
+    unfollow: tuple[str, ...],
+    remote: str | None,
+    album: str | None,
+) -> None:
+    """Show or change what goes to Google Photos. Saved at once; a running job reads it
+    before every send."""
+    from .. import storage
+    from ..selector import resolve_channel
+
+    gp = ctx.config.google_photos
+    changes: dict[str, Any] = {}
+    sources = list(gp.sources)
+    for source in follow:
+        try:
+            resolve_channel(source)
+        except SelectorError as exc:
+            _fail(ctx.out, str(exc))
+            return
+        if source not in sources:
+            sources.append(source)
+    sources = [s for s in sources if s not in unfollow]
+    if sources != gp.sources:
+        changes["sources"] = sources
+    if remote is not None and remote != gp.remote:
+        if remote:
+            kind = next((a.kind for a in storage.accounts() if a.name == remote), None)
+            if kind is None or not storage.is_google_photos(kind):
+                _fail(ctx.out, f"{remote!r} is not a Google Photos account in rclone.")
+                return
+        changes["remote"] = remote
+    if album is not None and album != gp.album:
+        changes["album"] = album
+
+    saved = gp
+    if changes:
+        fresh = _save_google_photos(ctx, changes)
+        if fresh is None:
+            return
+        saved = fresh.google_photos
+    data = {
+        "remote": saved.remote,
+        "sources": saved.sources,
+        "album": saved.album,
+        "applied": bool(changes),
+    }
+
+    def render() -> None:
+        ctx.out.pairs(
+            [
+                ("Google Photos account", saved.remote or "(not set up)"),
+                ("new backups also sent for", ", ".join(saved.sources) or "(none)"),
+                ("album", saved.album),
+            ]
+        )
+        if data["applied"]:
+            ctx.out.ok("saved. A running job picks it up before its next send.")
+
+    ctx.out.result(data, render)
+
+
+@cli.group("google-photos")
+def google_photos() -> None:
+    """An extra copy in Google Photos, for viewing. Never counts as a backup."""
+
+
+@google_photos.command("setup")
+@click.option(
+    "--remote",
+    default=None,
+    help=f"The rclone remote to use or create. Default: an existing one, else "
+    f"{gphotos_engine.DEFAULT_REMOTE!r}.",
+)
+@pass_context
+def google_photos_setup(ctx: Context, remote: str | None) -> None:
+    """Sign in to Google Photos and save the account.
+
+    Uses an rclone Google Photos remote if there is one. Otherwise runs
+    `rclone config create`, which opens your browser to sign in; rclone keeps the
+    token, Photo Sentinel never sees it.
+    """
+    import subprocess
+
+    from .. import storage
+
+    found = storage.accounts()
+    photos = [a for a in found if storage.is_google_photos(a.kind)]
+    name = remote or next(
+        (a.name for a in photos if a.name == ctx.config.google_photos.remote),
+        photos[0].name if photos else gphotos_engine.DEFAULT_REMOTE,
+    )
+    existing = next((a for a in found if a.name == name), None)
+    if existing is not None and not storage.is_google_photos(existing.kind):
+        _fail(ctx.out, f"{name!r} is already a {existing.title} account. Pick another --remote.")
+        return
+
+    created = False
+    if existing is None:
+        ctx.out.line(f"  Signing in to Google Photos as rclone remote {name!r}.")
+        ctx.out.line("  Your browser opens: sign in and allow access, then come back here.")
+        code = subprocess.run(
+            ["rclone", "config", "create", name, gphotos_engine.RCLONE_TYPE]
+        ).returncode
+        kinds = {a.name: a.kind for a in storage.accounts()}
+        if code != 0 or not storage.is_google_photos(kinds.get(name, "")):
+            _fail(ctx.out, f"Google Photos was not set up: rclone exited {code}. Nothing saved.")
+            return
+        created = True
+
+    unsaved = ctx.config.google_photos.remote != name
+    if unsaved and _save_google_photos(ctx, {"remote": name}) is None:
+        return
+    data = {"remote": name, "created": created, "saved": True}
+
+    def render() -> None:
+        ctx.out.ok(f"Google Photos is set up as {name!r}.")
+        ctx.out.line(f"  {GOOGLE_PHOTOS_NOTE}", style="muted")
+        ctx.out.line(
+            "  Nothing is sent until you choose: Send in Photo Sentinel, or a source set to "
+            "follow its backups.",
+            style="muted",
+        )
+
+    ctx.out.result(data, render)
+
+
+@google_photos.command("status")
+@pass_context
+def google_photos_status(ctx: Context) -> None:
+    """Whether Google Photos is set up, and per source what is there and what is not."""
+    from .. import storage
+
+    gp = ctx.config.google_photos
+    found = storage.accounts()
+    account = next((a for a in found if a.name == gp.remote), None) if gp.remote else None
+    ready = account is not None and storage.is_google_photos(account.kind)
+    db = ctx.database()
+    try:
+        sources = gphotos_engine.source_counts(ctx.config, db)
+    finally:
+        db.close()
+    data = {
+        "remote": gp.remote,
+        "configured": ready,
+        "account": account.as_dict() if account else None,
+        "accounts": [a.as_dict() for a in found if storage.is_google_photos(a.kind)],
+        "album": gp.album,
+        "following": gp.sources,
+        "sources": sources,
+        "sent": sum(s["sent"] for s in sources),
+        "sentBytes": sum(s["sentBytes"] for s in sources),
+    }
+
+    def render() -> None:
+        ctx.out.title("Google Photos")
+        state = gp.remote if ready else (f"{gp.remote} (not found in rclone)" if gp.remote else "")
+        ctx.out.pairs([("account", state or "not set up: iphone-image google-photos setup")])
+        ctx.out.line()
+        for s in sources:
+            follows = "follows backups" if s["following"] else ""
+            ctx.out.line(
+                f"    {s['title']:<20}{s['sent']:>8,} sent  {s['notSent']:>8,} not yet "
+                f"({human_bytes(s['notSentBytes'])})  {follows}"
+            )
+        ctx.out.line()
+        ctx.out.line(f"  {GOOGLE_PHOTOS_NOTE}", style="muted")
+
+    ctx.out.result(data, render)
+
+
+@google_photos.command("folders")
+@click.option("--depth", type=click.IntRange(0, 4), default=2, show_default=True)
+@pass_context
+def google_photos_folders(ctx: Context, depth: int) -> None:
+    """Google Drive backup folders, with how much of each is in Google Photos."""
+    db = ctx.database()
+    try:
+        found = gphotos_engine.folders(ctx.config, db, depth=depth)
+    finally:
+        db.close()
+    data = {"folders": found}
+
+    def render() -> None:
+        ctx.out.table(
+            ["FOLDER", "COUNT", "SENT", "NOT YET", "SIZE"],
+            [
+                (f["path"], f"{f['count']:,}", f"{f['sent']:,}", f"{f['notSent']:,}",
+                 human_bytes(f["notSentBytes"]))
+                for f in found
+            ],
+        )
+
+    ctx.out.result(data, render)
+
+
+@google_photos.command("send")
+@selector_options
+@click.option("--folder", default=None, help="A Google Drive backup folder: everything under it.")
+@click.option("--album", default=None, help="Album to send into. Default: per source or folder.")
+@click.option(
+    "--only-on-mac",
+    is_flag=True,
+    help="Only items whose Mac copy is still there, so nothing is read back from Google Drive.",
+)
+@click.option(
+    "--following",
+    is_flag=True,
+    help="Only sources set to follow their backups. Never fails: an extra copy must not "
+    "stop a backup. Used by cycle.sh.",
+)
+@click.option("--apply", "apply_", is_flag=True, help="Actually send. Without it, plan only.")
+@click.option("--progress", is_flag=True, help="Write JSON lines to stderr as it goes.")
+@pass_context
+def google_photos_send(
+    ctx: Context,
+    folder: str | None,
+    album: str | None,
+    only_on_mac: bool,
+    following: bool,
+    apply_: bool,
+    progress: bool,
+    **kwargs: Any,
+) -> None:
+    """Send backups already verified in Google Drive to Google Photos.
+
+    Only items Google Drive holds by hash, and not already sent. The bytes come
+    from the Mac copy when it is there and matches its hash, otherwise from
+    Google Drive, which is only read. Uses your Google storage at original
+    quality.
+    """
+    config = ctx.config
+    gp = config.google_photos
+    if not gp.remote:
+        if following:
+            ctx.out.result({"applied": False, "planned": 0, "skipped": "not set up"}, lambda: None)
+            return
+        _fail(ctx.out, "Google Photos is not set up. Run: iphone-image google-photos setup")
+        return
+    try:
+        selector = build_selector(**kwargs)
+    except SelectorError as exc:
+        _fail(ctx.out, str(exc))
+        return
+
+    def report(line: dict[str, Any]) -> None:
+        if progress:
+            sys.stderr.write(json.dumps(line) + "\n")
+            sys.stderr.flush()
+
+    db = ctx.database()
+    try:
+        items = gphotos_engine.plan(
+            config,
+            db,
+            selector,
+            folder=folder,
+            album=album,
+            only_on_mac=only_on_mac,
+            following=following,
+        )
+        on_mac = sum(1 for i in items if i.on_mac)
+        data: dict[str, Any] = {
+            "applied": apply_,
+            "remote": gp.remote,
+            "folder": folder,
+            "planned": len(items),
+            "plannedBytes": sum(i.size_bytes for i in items),
+            "albums": gphotos_engine.albums(items),
+            "fromMac": on_mac,
+            "fromDrive": len(items) - on_mac,
+        }
+        if not apply_ or not items:
+
+            def render_plan() -> None:
+                ctx.out.title("Google Photos plan")
+                ctx.out.pairs(
+                    [
+                        ("to send", f"{len(items):,} items, {human_bytes(data['plannedBytes'])}"),
+                        ("from this Mac", f"{on_mac:,}"),
+                        ("read from Google Drive", f"{data['fromDrive']:,}"),
+                    ]
+                )
+                for a in data["albums"]:
+                    ctx.out.line(f"    {a['album']}: {a['count']:,} ({human_bytes(a['bytes'])})")
+                ctx.out.line()
+                if not items:
+                    ctx.out.ok("nothing to send: every match is already in Google Photos")
+                    return
+                ctx.out.line("  It uses your Google storage. NOTHING HAS BEEN SENT. Add --apply.")
+
+            ctx.out.result(data, render_plan)
+            return
+
+        sender = gphotos_engine.RcloneGooglePhotos(
+            gp.remote,
+            on_progress=lambda line: get_logger("google_photos").info("%s", line),
+            batch_timeout=config.cloud.batch_timeout_seconds,
+            stall_timeout=config.cloud.stall_timeout_seconds,
+            no_progress_timeout=config.cloud.no_progress_timeout_seconds,
+        )
+        try:
+            result = gphotos_engine.send(config, db, items, sender=sender, on_progress=report)
+        except gphotos_engine.GooglePhotosError as exc:
+            if following:
+                ctx.out.warn(f"Google Photos skipped: {exc}")
+                ctx.out.result({**data, "sent": 0, "skipped": str(exc)}, lambda: None)
+                return
+            _fail(ctx.out, str(exc))
+            return
+    finally:
+        db.close()
+
+    data.update(
+        {
+            "sent": result.sent,
+            "bytesSent": result.bytes_sent,
+            "sentFromMac": result.from_mac,
+            "sentFromDrive": result.from_drive,
+            "failed": result.failed,
+            "stopped": result.stopped or None,
+            "failures": result.failures[:20],
+        }
+    )
+
+    def render_result() -> None:
+        ctx.out.title("Google Photos")
+        ctx.out.pairs(
+            [
+                ("sent", f"{result.sent:,} of {result.planned:,}"),
+                ("size", human_bytes(result.bytes_sent)),
+                ("failed", f"{result.failed:,}"),
+            ]
+        )
+        if result.stopped:
+            ctx.out.line(f"  {result.stopped}", style="warn")
+        for failure in result.failures[:5]:
+            ctx.out.line(f"    {failure['file']}: {failure['error']}", style="warn")
+        ctx.out.line(f"  {GOOGLE_PHOTOS_NOTE}", style="muted")
+
+    ctx.out.result(data, render_result)
+    if result.failed and not following:
         sys.exit(1)
 
 

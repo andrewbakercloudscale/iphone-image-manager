@@ -41,6 +41,7 @@ KEYS = {
     ),
     "archive": ("local_path",),
     "network": ("pause_on_hotspot",),
+    "google_photos": ("remote", "sources", "album"),
 }
 
 

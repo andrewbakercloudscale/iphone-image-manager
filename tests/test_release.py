@@ -264,3 +264,17 @@ def test_a_released_asset_is_not_reported_as_a_missing_archive_file(env) -> None
         (release_engine.RELEASED, utcnow(), utcnow(), utcnow(), utcnow()),
     )
     assert sync_engine.reconcile_missing(db, Selector()) == 0
+
+
+def test_a_copy_in_google_photos_never_releases_the_mac_copy(env) -> None:
+    """Google Photos is an extra copy for viewing. Release asks Google Drive alone."""
+    config, db = env
+    path, _ = archived(config, db, "a", "2019/11/IMG_1.JPG", cloud=False)
+    db.conn.execute(
+        "UPDATE assets SET gphotos_status = 'SENT', gphotos_album = 'x', gphotos_at = ?",
+        (utcnow(),),
+    )
+    eligible, result = release_engine.plan(config, db, Selector(), provider=FakeCloud())
+    assert eligible == []
+    assert result.blocks == {"not verified in the cloud": 1}
+    assert path.exists()

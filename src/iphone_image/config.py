@@ -26,7 +26,7 @@ from pydantic import (
 
 from .organize.paths import validate_pattern
 from .retention import format_duration, parse_duration
-from .selector import MEDIA_TYPES, SelectorError, parse_size
+from .selector import MEDIA_TYPES, SelectorError, parse_size, resolve_channel
 
 DEFAULT_CONFIG_PATH = Path("~/.iphone-image/config.yaml").expanduser()
 
@@ -384,6 +384,48 @@ class NetworkConfig(Strict):
     pause_on_hotspot: bool = True
 
 
+class GooglePhotosConfig(Strict):
+    """An extra copy in Google Photos, for looking at. Never a backup.
+
+    Google Photos re-encodes and strips what it is sent, and its API reports no
+    hash, so nothing here can ever prove a copy: release and removal read
+    Google Drive alone and never look at this section or the `gphotos_*`
+    columns. The owner's choice (2026-10-28): Google Drive stays the only copy
+    anything is let go on the strength of.
+    """
+
+    #: The rclone remote of type `googlephotos`. Empty means not set up, and
+    #: nothing is ever sent.
+    remote: str = ""
+
+    #: Sources whose new backups follow to Google Photos once Google Drive has
+    #: verified them (cycle.sh, before the Mac copy is released). Empty, the
+    #: default, sends nothing unless the owner clicks Send.
+    sources: list[str] = Field(default_factory=list)
+
+    #: The album name, and the start of every album made from it: one per source
+    #: ("Photo Sentinel - Camera") or per Google Drive folder sent
+    #: ("Photo Sentinel - Camera - 2019").
+    album: str = "Photo Sentinel"
+
+    @field_validator("sources")
+    @classmethod
+    def _known_sources(cls, value: list[str]) -> list[str]:
+        for source in value:
+            try:
+                resolve_channel(source)
+            except SelectorError as exc:
+                raise ValueError(str(exc)) from exc
+        return value
+
+    @field_validator("album")
+    @classmethod
+    def _album_named(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("google_photos.album cannot be empty")
+        return value
+
+
 class PerformanceConfig(Strict):
     local_transfer_workers: int = Field(default=2, ge=1, le=16)
     hash_workers: int = Field(default=4, ge=1, le=32)
@@ -409,6 +451,7 @@ class Config(Strict):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     performance: PerformanceConfig = Field(default_factory=PerformanceConfig)
     network: NetworkConfig = Field(default_factory=NetworkConfig)
+    google_photos: GooglePhotosConfig = Field(default_factory=GooglePhotosConfig)
 
     #: Where this config was loaded from. None means built-in defaults.
     source_path: Path | None = Field(default=None, exclude=True)
@@ -459,6 +502,12 @@ class Config(Strict):
             problems.append(
                 "safety.require_cloud_verification is true but cloud.enabled is false, "
                 "so removal could never proceed"
+            )
+
+        if self.google_photos.remote and self.google_photos.remote == self.cloud.remote:
+            problems.append(
+                "google_photos.remote is the backup account (cloud.remote). Google Photos "
+                "needs its own rclone remote, of type googlephotos"
             )
 
         if problems:
