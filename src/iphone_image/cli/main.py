@@ -2365,13 +2365,18 @@ def google_photos_send(
         )
         try:
             result = gphotos_engine.send(config, db, items, sender=sender, on_progress=report)
-        except gphotos_engine.GooglePhotosError as exc:
+        except Exception as exc:
+            # An extra copy must never stop a backup: under --following anything
+            # that goes wrong is reported and the backup's next step still runs.
+            # What was sent before it went wrong is already recorded.
             if following:
                 ctx.out.warn(f"Google Photos skipped: {exc}")
                 ctx.out.result({**data, "sent": 0, "skipped": str(exc)}, lambda: None)
                 return
-            _fail(ctx.out, str(exc))
-            return
+            if isinstance(exc, gphotos_engine.GooglePhotosError):
+                _fail(ctx.out, str(exc))
+                return
+            raise
     finally:
         db.close()
 

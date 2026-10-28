@@ -516,3 +516,19 @@ def test_status_reports_per_source(run, env, monkeypatch) -> None:
     assert data["account"]["title"] == "Google Photos"
     assert data["sent"] == 1
     assert [s["source"] for s in data["sources"]][:2] == ["camera", "whatsapp"]
+
+
+def test_following_survives_an_unexpected_error(run, env) -> None:
+    config, db = env
+    backed_up(config, db, "a", "2019/IMG_1.HEIC")
+    run("config", "google-photos", "--follow", "camera")
+
+    def boom(*_a: Any, **_k: Any) -> gp.Sent:
+        raise RuntimeError("rclone vanished")
+
+    run.sender.send = boom
+    out = run("--json", "google-photos", "send", "--following", "--apply")
+    assert out.exit_code == 0
+    assert "rclone vanished" in json.loads(out.output)["skipped"]
+    with pytest.raises(RuntimeError):
+        run("--json", "google-photos", "send", "--apply")
