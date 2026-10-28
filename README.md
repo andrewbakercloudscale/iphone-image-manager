@@ -69,6 +69,32 @@ It catches the expensive mistake the Photos UI does not warn about: if
 **Download Originals** got selected instead of **Optimise Mac Storage**, it fails
 and tells you, before your disk fills.
 
+### Google Photos, an extra copy
+
+Backups can also be sent to Google Photos, so they show there. It is an extra
+copy for viewing, never a backup: nothing leaves the Mac or the iPhone on the
+strength of it, only Google Drive ([`docs/SAFETY.md`](docs/SAFETY.md) section 1b).
+
+```bash
+iphone-image google-photos setup            # sign in once; rclone keeps the token
+iphone-image google-photos status           # per source: sent, not yet, and size
+iphone-image google-photos folders          # Google Drive backup folders, with counts
+iphone-image google-photos send --source camera            # the plan: count, size, album
+iphone-image google-photos send --folder "Photos/2019" --apply
+iphone-image config google-photos --follow whatsapp        # new WhatsApp backups follow
+```
+
+- Only items Google Drive has verified, and not sent before. The bytes come from
+  the Mac copy when it still matches its hash, otherwise from Google Drive, which
+  is only read.
+- Uploads are at original quality and count against your Google storage, the
+  same storage as Google Drive.
+- Since March 2025 Google lets an app see only what it uploaded itself, so Photo
+  Sentinel cannot see or check the rest of your Google Photos library.
+- Nothing is sent unless you choose: Send, or a source set to follow its backups
+  (`cycle.sh` sends those after Google Drive verifies them, before the Mac copy
+  is released; a failure there never stops the backup).
+
 ---
 
 ## The idea

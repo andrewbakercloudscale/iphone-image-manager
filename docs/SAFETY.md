@@ -80,6 +80,26 @@ Drive still holds everything the ledger says. It is optional before a removal
 hash from Drive anyway, which is the evidence above. The app blocks a removal
 only while an audit runs or when the latest one found Drive missing something.
 
+### Google Photos is never evidence (owner's decision, 2026-10-28)
+
+Google Photos can hold an **extra copy** of what is backed up, for looking at.
+It is never a backup, and nothing anywhere treats it as one:
+
+- **Nothing is released from the Mac or removed from the phone on the strength
+  of a Google Photos copy.** Release and removal read Google Drive alone. Neither
+  `release.py` nor `remove.py` reads the `gphotos_*` columns or the
+  `google_photos` config, and a test fails if either ever does.
+- **It cannot be checked.** Google Photos re-encodes what it is sent, strips
+  data from it, and its API reports no hash. `gphotos_status = 'SENT'` means
+  only that rclone reported the upload.
+- **It is never the backup account.** Its rclone type is not in
+  `storage.HASH_TYPES`, so `config storage` and `cloud` refuse it.
+- **Only what Google Drive has verified is sent**, so it is always a copy of a
+  safe backup. Google Drive is only read for it (`rclone copy` from Drive, never
+  move, sync or delete).
+- **Nothing is sent unless the owner chose it**: a click on Send, or a source
+  set to follow its backups.
+
 ---
 
 ## 2. iCloud "Optimize iPhone Storage" and proxy files
