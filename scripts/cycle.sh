@@ -100,9 +100,9 @@ wait_off_metered() {
 # The job then notices on its next wait_off_metered and pauses.
 metered_guard() {
   while kill -0 "$$" 2>/dev/null; do
-    if metered && pgrep -f "iphone_image (sync|cloud)" >/dev/null && pause_on_hotspot; then
+    if metered && pgrep -f "iphone_image (sync|cloud|--json google-photos send)" >/dev/null && pause_on_hotspot; then
       say "switched to the phone hotspot mid-transfer: stopping the transfer"
-      pkill -f "iphone_image (sync|cloud)"; pkill -x rclone
+      pkill -f "iphone_image (sync|cloud|--json google-photos send)"; pkill -x rclone
     fi
     sleep 20
   done
@@ -146,6 +146,44 @@ upload_now() {
     say "cloud returned non-zero"
     if net_hit_since "$mark"; then NET_WAITED=1; wait_for_net; fi
   fi
+}
+
+# Google Photos: an extra copy for viewing, only for a source the owner set to
+# follow its backups (Settings -> Google Photos). Never evidence for anything:
+# release and remove-from-iphone check Google Drive alone. Runs after Drive has
+# verified the upload and before release, so the Mac copy is sent rather than
+# read back from Drive. It never stops the backup: a failure is logged and the
+# job carries on. Its own output goes to google-photos.log, not here, so its
+# rclone stats cannot be read as the Drive upload's progress.
+GPHOTOS_LOG=~/.iphone-image/google-photos.log
+gphotos_follows() {
+  [ "$($PY -c 'import sys
+from iphone_image.config import load_config
+g = load_config().google_photos
+print(bool(g.remote) and sys.argv[1] in g.sources)' "$SOURCE" 2>/dev/null)" = True ]
+}
+gphotos_follow() {
+  gphotos_follows || return 0
+  wait_off_metered
+  say "Google Photos: sending a copy of what Google Drive verified"
+  local out; out=$(mktemp "${TMPDIR:-/tmp}/gphotos.XXXXXX") || return 0
+  if $PY -m iphone_image --json google-photos send "${SEL[@]}" --following --only-on-mac --apply \
+      > "$out" 2>> "$GPHOTOS_LOG"; then
+    say "Google Photos: $($PY -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+if d.get("error") or d.get("skipped"):
+    print("skipped, " + str(d.get("error") or d.get("skipped")))
+elif not d.get("planned"):
+    print("nothing new to send")
+else:
+    line = "sent {:,} of {:,}".format(d.get("sent", 0), d["planned"])
+    print(line + (". " + d["stopped"] if d.get("stopped") else ""))' "$out" 2>/dev/null || echo "finished")"
+  else
+    say "Google Photos: did not finish, see google-photos.log. The backup carries on."
+  fi
+  { date '+%m-%d %H:%M:%S'; cat "$out"; } >> "$GPHOTOS_LOG" 2>/dev/null
+  rm -f "$out"
 }
 
 releasable() {
@@ -281,6 +319,7 @@ for cycle in $(seq 1 "$CYCLES"); do
   if [ "$(unuploaded)" -gt 0 ]; then
     say "$(unuploaded) file(s) on the Mac not yet in Drive: uploading them before fetching"
     upload_now
+    gphotos_follow
     do_release
   fi
 
@@ -327,6 +366,7 @@ for cycle in $(seq 1 "$CYCLES"); do
     say "the fetch hit network errors; waiting for the network before uploading"
   fi
   upload_now
+  gphotos_follow
 done
 
 say "cycle finished: $(gb "$(free_b)") GB free, $(to_fetch) still to fetch"

@@ -9,6 +9,7 @@ after a fresh clone.
 | script | what it does |
 |---|---|
 | `cycle.sh` | fetch -> upload -> release, repeating; empties the Bin itself when every item in it is a released asset |
+|  | for a source set to follow its backups, also sends a copy to Google Photos before release (output in `~/.iphone-image/google-photos.log`; a failure never stops the backup) |
 | `after-video.sh` | waits for the video job, starts screenshots only if it finished cleanly |
 | `watch-video.sh` | every 10 min records that the job is ALIVE; the last line says when it died |
 
