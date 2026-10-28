@@ -196,6 +196,51 @@ public struct StorageReport: Codable, Sendable {
     }
 }
 
+/// `google-photos status`: the extra copy in Google Photos, per source. Never a backup.
+public struct GooglePhotosStatus: Codable, Sendable {
+    public struct Source: Codable, Hashable, Sendable, Identifiable {
+        public let source: String
+        public let title: String
+        /// New backups of this source also go to Google Photos.
+        public let following: Bool
+        public let sent: Int
+        public let sentBytes: Int64
+        public let notSent: Int
+        public let notSentBytes: Int64
+        public var id: String { source }
+    }
+    public let remote: String
+    /// The remote is set and rclone has it as a Google Photos account.
+    public let configured: Bool
+    public let account: StorageReport.Account?
+    public let accounts: [StorageReport.Account]
+    public let album: String
+    public let following: [String]
+    public let sources: [Source]
+    public let sent: Int
+    public let sentBytes: Int64
+}
+
+/// `google-photos folders`: a Google Drive backup folder, counted as `send --folder` selects.
+public struct GooglePhotosFolder: Codable, Hashable, Sendable, Identifiable {
+    public let path: String
+    public let destination: String
+    /// Below the destination; empty for the destination itself.
+    public let relative: String
+    public let depth: Int
+    public let count: Int
+    public let bytes: Int64
+    public let sent: Int
+    public let notSent: Int
+    public let notSentBytes: Int64
+    public var id: String { path }
+    /// "Andrew iPhone Archive/2019": the destination's own name, then the folder in it.
+    public var label: String {
+        let root = destination.split(separator: "/").last.map(String.init) ?? destination
+        return relative.isEmpty ? root : "\(root)/\(relative)"
+    }
+}
+
 /// `refile`: files already in Drive that the layout now puts somewhere else.
 public struct RefileReport: Codable, Sendable {
     public struct Example: Codable, Hashable, Sendable {
@@ -264,6 +309,44 @@ extension CLIEngine {
     /// What `refile` would move. Reads the ledger only: seconds.
     public func refilePlan(_ sources: [String]) throws -> RefileReport {
         try decode(RefileReport.self, run(["--json", "refile"] + sources.flatMap { ["--source", $0] }))
+    }
+
+    /// Google Photos: set up or not, and per source what is there. Reads the ledger: a second.
+    public func googlePhotos() throws -> GooglePhotosStatus {
+        try decode(GooglePhotosStatus.self, run(["--json", "google-photos", "status"]))
+    }
+
+    /// Google Drive backup folders, with how much of each is in Google Photos.
+    public func googlePhotosFolders() throws -> [GooglePhotosFolder] {
+        struct Folders: Decodable { let folders: [GooglePhotosFolder] }
+        return try decode(Folders.self, run(["--json", "google-photos", "folders"])).folders
+    }
+
+    /// What a send would send (count, size, albums). Without --apply: nothing is sent.
+    public func googlePhotosPlan(source: String? = nil, folder: String? = nil) throws -> GooglePhotosSend {
+        try decode(GooglePhotosSend.self, run(["--json"] + Self.googlePhotosSend(source: source, folder: folder)))
+    }
+
+    /// Whether new backups of `source` also go to Google Photos; saves at once.
+    public func googlePhotosFollow(_ source: String, _ on: Bool) throws -> [String] {
+        let obj = try JSONSerialization.jsonObject(with: run(["--json", "config", "google-photos", on ? "--follow" : "--unfollow", source])) as? [String: Any]
+        if let e = obj?["error"] as? String { throw JobError.message(e) }
+        guard let sources = obj?["sources"] as? [String] else { throw JobError.message("no answer about Google Photos") }
+        return sources
+    }
+
+    /// `google-photos send` for a source or a Google Drive folder, `--apply` to send.
+    public static func googlePhotosSend(source: String? = nil, folder: String? = nil, apply: Bool = false) -> [String] {
+        var args = ["google-photos", "send"]
+        if let source { args += ["--source", source] }
+        if let folder { args += ["--folder", folder] }
+        if apply { args += ["--progress", "--apply"] }
+        return args
+    }
+
+    /// The setup command Terminal runs: rclone opens the browser to sign in and keeps the token.
+    public static func googlePhotosSetupCommand(repo: String) -> String {
+        "cd '\(repo.replacingOccurrences(of: "'", with: "'\\''"))' && PYTHONPATH=src ./.venv/bin/python -m iphone_image google-photos setup"
     }
 
     private func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T {

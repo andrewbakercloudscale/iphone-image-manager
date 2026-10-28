@@ -178,7 +178,7 @@ struct TaskRow: View {
     }
 
     private var summary: String {
-        if status.running { return status.task.kind == .remove ? "Click Delete when the dialog appears." : "Working…" }
+        if status.running { return status.task.kind == .remove ? "Click Delete when the dialog appears." : (status.progressText ?? "Working…") }
         if let e = status.errorMessage { return e }
         switch status.task.kind {
         case .audit:
@@ -204,6 +204,12 @@ struct TaskRow: View {
         case .remove:
             guard let p = status.decode(RemovalPlan.self) else { return "" }
             return "Removed \(Fmt.count(p.removed ?? 0)), \(Fmt.bytes(p.bytesRemoved ?? 0))."
+        case .googlePhotos:
+            guard let r = status.decode(GooglePhotosSend.self) else { return "" }
+            var text = "Sent \(Fmt.count(r.sent ?? 0)) of \(Fmt.count(r.planned)) to Google Photos (\(Fmt.bytes(r.bytesSent ?? 0)))."
+            if let failed = r.failed, failed > 0 { text += " \(Fmt.count(failed)) not sent; sending again retries them." }
+            if let stopped = r.stopped { text += " \(stopped)" }
+            return text
         }
     }
 }

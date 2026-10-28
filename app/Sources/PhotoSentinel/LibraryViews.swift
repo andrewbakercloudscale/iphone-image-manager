@@ -197,6 +197,7 @@ struct SettingsView: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             StorageCard(model: model)
+            GooglePhotosCard(model: model)
             WhenBackupsRunCard(model: model)
             Card(title: "Where things are", symbol: "folder.fill", tint: Tab.backup.color) {
                 Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {

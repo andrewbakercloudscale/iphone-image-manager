@@ -471,3 +471,92 @@ final class TaskProgressTests: XCTestCase {
                        "Removed \(Fmt.count(500)) of \(Fmt.count(2226))")
     }
 }
+
+/// Google Photos: the CLI's JSON, its progress lines, and cycle.sh's log lines. The JSON
+/// literals are `google-photos status / folders / send` output, captured from the real CLI.
+final class GooglePhotosTests: XCTestCase {
+    func testStatusDecodes() throws {
+        let json = #"{"remote": "gphotos", "configured": true, "account": {"name": "gphotos", "kind": "google photos", "title": "Google Photos", "canVerify": false}, "accounts": [{"name": "gphotos", "kind": "google photos", "title": "Google Photos", "canVerify": false}], "album": "Photo Sentinel", "following": ["camera"], "sources": [{"source": "camera", "title": "Camera", "following": true, "sent": 1, "sentBytes": 5, "notSent": 1, "notSentBytes": 6}, {"source": "whatsapp", "title": "WhatsApp", "following": false, "sent": 0, "sentBytes": 0, "notSent": 0, "notSentBytes": 0}], "sent": 1, "sentBytes": 5}"#
+        let s = try JSONDecoder().decode(GooglePhotosStatus.self, from: Data(json.utf8))
+        XCTAssertTrue(s.configured)
+        XCTAssertEqual(s.account?.title, "Google Photos")
+        XCTAssertEqual(s.account?.canVerify, false, "Google Photos can never be checked, so never the backup")
+        XCTAssertEqual(s.sources.map(\.id), ["camera", "whatsapp"])
+        XCTAssertEqual(s.sources[0].notSentBytes, 6)
+        XCTAssertTrue(s.sources[0].following)
+    }
+
+    func testNotSetUpDecodes() throws {
+        let json = #"{"remote": "", "configured": false, "account": null, "accounts": [], "album": "Photo Sentinel", "following": [], "sources": [], "sent": 0, "sentBytes": 0}"#
+        let s = try JSONDecoder().decode(GooglePhotosStatus.self, from: Data(json.utf8))
+        XCTAssertFalse(s.configured)
+        XCTAssertNil(s.account)
+    }
+
+    func testFoldersDecodeAndAreLabelledByTheirDestination() throws {
+        let json = #"[{"path": "Family Photos/Andrew iPhone Archive", "destination": "Family Photos/Andrew iPhone Archive", "relative": "", "depth": 0, "count": 2, "bytes": 11, "sent": 1, "notSent": 1, "notSentBytes": 6}, {"path": "Family Photos/Andrew iPhone Archive/2019", "destination": "Family Photos/Andrew iPhone Archive", "relative": "2019", "depth": 1, "count": 2, "bytes": 11, "sent": 1, "notSent": 1, "notSentBytes": 6}]"#
+        let f = try JSONDecoder().decode([GooglePhotosFolder].self, from: Data(json.utf8))
+        XCTAssertEqual(f.map(\.label), ["Andrew iPhone Archive", "Andrew iPhone Archive/2019"])
+        XCTAssertEqual(f[1].id, "Family Photos/Andrew iPhone Archive/2019")
+    }
+
+    func testPlanAndResultDecode() throws {
+        let plan = #"{"applied": false, "remote": "gphotos", "folder": null, "planned": 1, "plannedBytes": 6, "albums": [{"album": "Photo Sentinel – Camera", "count": 1, "bytes": 6}], "fromMac": 0, "fromDrive": 1}"#
+        let p = try JSONDecoder().decode(GooglePhotosSend.self, from: Data(plan.utf8))
+        XCTAssertEqual(p.albums.first?.album, "Photo Sentinel \u{2013} Camera")
+        XCTAssertNil(p.sent)
+        let done = #"{"applied": true, "planned": 3, "plannedBytes": 9, "albums": [], "fromMac": 3, "fromDrive": 0, "sent": 2, "bytesSent": 6, "failed": 1, "stopped": "Google Photos asked to slow down. Try again later; what was sent is kept."}"#
+        let d = try JSONDecoder().decode(GooglePhotosSend.self, from: Data(done.utf8))
+        XCTAssertEqual(d.sent, 2)
+        XCTAssertEqual(d.stopped?.hasPrefix("Google Photos asked to slow down"), true)
+    }
+
+    func testSendProgressCountsWhatRcloneHasCopied() {
+        let task = CLITask(id: "t", kind: .googlePhotos, recipe: nil, title: "t", args: [], startedAt: Date(), pid: 0)
+        func text(_ s: String) -> String? { TaskStatus(task: task, state: .running, output: nil, stderr: s).progressText }
+        XCTAssertEqual(text(#"{"phase": "send", "done": 100, "total": 1200, "bytes": 0, "totalBytes": 3000000000, "inFlight": 25}"#),
+                       "Sending to Google Photos: \(Fmt.count(125)) of \(Fmt.count(1200)) (\(Fmt.bytes(3_000_000_000)))")
+        XCTAssertEqual(text(#"{"phase": "send", "done": 1200, "total": 1200, "totalBytes": 10, "inFlight": 5}"#),
+                       "Sending to Google Photos: \(Fmt.count(1200)) of \(Fmt.count(1200)) (\(Fmt.bytes(10)))", "never more than the total")
+    }
+
+    func testArgsMatchTheCLI() {
+        XCTAssertEqual(CLIEngine.googlePhotosSend(source: "camera"), ["google-photos", "send", "--source", "camera"])
+        XCTAssertEqual(CLIEngine.googlePhotosSend(folder: "A/2019", apply: true),
+                       ["google-photos", "send", "--folder", "A/2019", "--progress", "--apply"])
+        XCTAssertEqual(CLIEngine.googlePhotosSetupCommand(repo: "/r/it's"),
+                       #"cd '/r/it'\''s' && PYTHONPATH=src ./.venv/bin/python -m iphone_image google-photos setup"#)
+    }
+
+    /// cycle.sh's Google Photos lines name a step and nothing else: they never pause, stop or
+    /// finish a job, and never count as the Google Drive upload's progress or totals.
+    func testCycleLogLinesAreReadSafely() {
+        let log = """
+        [10-28 09:00:00] [camera/photo] starting: 40 cycle(s), 500 left to fetch, 30.0 GB free, a chunk needs 12.0 GB, release=1, empty_bin=1
+        [10-28 09:00:01] [camera/photo] === cycle 1/40: 30.0 GB free, 500 left to fetch ===
+        [10-28 09:10:00] [camera/photo] uploading what landed
+          uploading 137 file(s) from camera ...
+          2026/10/28 09:10:30 NOTICE:   450 MiB / 900 MiB, 50%, 1 MiB/s, ETA 9m (xfr#60/137)
+            banked 137/137 verified, 0.90 GB sent at 1.00 MB/s
+        [10-28 09:20:00] [camera/photo] Google Photos: sending a copy of what Google Drive verified
+        """
+        let ps = ["/bin/bash /Users/x/.iphone-image/cycle.sh photo 40 camera"]
+        var j = Jobs.read(log: log, processes: ps)[0]
+        XCTAssertEqual(j.state, .running)
+        XCTAssertEqual(j.phase, .googlePhotos)
+        XCTAssertEqual(j.step, "sending a copy to Google Photos")
+        XCTAssertNil(j.progress)
+        XCTAssertEqual(j.done.verified, 137)
+
+        let after = log + "\n[10-28 09:25:00] [camera/photo] Google Photos: sent 120 of 137. Google Photos asked to slow down. Try again later; what was sent is kept."
+        j = Jobs.read(log: after, processes: ps)[0]
+        XCTAssertEqual(j.state, .running, "a Google Photos refusal is not a Google Drive quota pause")
+        XCTAssertEqual(j.phase, .other)
+        XCTAssertEqual(j.done.verified, 137)
+        XCTAssertEqual(j.uploaded, 60, "its sends are not the Drive upload's")
+
+        let failed = log + "\n[10-28 09:25:00] [camera/photo] Google Photos: did not finish, see google-photos.log. The backup carries on."
+        XCTAssertEqual(Jobs.read(log: failed, processes: ps)[0].state, .running)
+        guard case .stopped = Jobs.read(log: failed, processes: [])[0].state else { return XCTFail("a dead job is still stopped") }
+    }
+}

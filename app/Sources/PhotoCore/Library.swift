@@ -343,6 +343,7 @@ public struct Operation: Identifiable, Hashable, Sendable {
         case "DOWNLOAD": "Copy from Photos"
         case "CLOUD_UPLOAD": "Upload to Google Drive"
         case "REMOVE": "Remove from iPhone"
+        case "GPHOTOS_SEND": "Send to Google Photos"
         default: operation.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }

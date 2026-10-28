@@ -28,7 +28,8 @@ public struct Job: Identifiable, Hashable, Sendable {
     /// What a cycle is doing now. Each cycle copies a chunk out of Photos, uploads it to
     /// Drive and checks it, then tidies the Mac copies; one bar for the whole job read 100%
     /// as soon as the last chunk was copied, while hours of uploading were still to come.
-    public enum Phase: Hashable, Sendable { case fetching, uploading, releasing, other }
+    /// `googlePhotos` is the extra copy a followed source sends after Drive verified it.
+    public enum Phase: Hashable, Sendable { case fetching, uploading, releasing, googlePhotos, other }
     public var phase = Phase.other
     /// rclone's `(xfr#1585/11602)` while uploading: files sent, and files it has found to send.
     public var uploaded: Int?
@@ -113,7 +114,7 @@ public struct Job: Identifiable, Hashable, Sendable {
         case .fetching:
             guard let left, let start = startedLeft, start > 0 else { return nil }
             return 1 - Double(left) / Double(start)
-        case .releasing, .other: return nil
+        case .releasing, .googlePhotos, .other: return nil
         }
     }
 
@@ -138,6 +139,7 @@ public struct Job: Identifiable, Hashable, Sendable {
             guard let left else { return "copying from Photos" }
             return left == 0 ? "copying the last items from Photos" : "copying from Photos, \(n(left)) left"
         case .releasing: return "tidying the Mac copies already in Google Drive"
+        case .googlePhotos: return "sending a copy to Google Photos"
         case .other: return nil
         }
     }
@@ -203,6 +205,10 @@ public enum Jobs {
                 job.done.verifiedBefore += job.done.verifiedNow; job.done.verifiedNow = 0
             }
             if m.hasPrefix("releasing") { job.phase = .releasing }
+            // cycle.sh's Google Photos lines. Its rclone output goes to google-photos.log, so
+            // nothing here can be read as the Drive upload's progress or totals.
+            if m.hasPrefix("Google Photos: sending") { job.phase = .googlePhotos }
+            if m.hasPrefix("Google Photos: "), !m.hasPrefix("Google Photos: sending") { job.phase = .other }
             if m.hasPrefix("=== cycle") || m.hasPrefix("starting:") { job.phase = .other }
             job.state = state(after: m, previous: job.state)
             if jobs[key] == nil { order.append(key) }

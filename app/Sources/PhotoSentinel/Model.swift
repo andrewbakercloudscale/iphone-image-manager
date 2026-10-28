@@ -13,6 +13,8 @@ final class Model: ObservableObject {
     @Published var selection: Breakdown?
     /// The backup account, its folders and the archive folder, from `config storage`.
     @Published var storage: StorageReport?
+    /// Google Photos, the extra copy for viewing: `google-photos status`.
+    @Published var googlePhotos: GooglePhotosStatus?
     @Published var jobs: [Job] = []
     @Published var doctor: DoctorReport?
     @Published var error: String?
@@ -123,6 +125,7 @@ final class Model: ObservableObject {
             let proof = try? Ledger.proof(SQLiteReader(path: engine.ledgerPath), since: "", limit: 0)
             let everything = try? Ledger.breakdown(SQLiteReader(path: engine.ledgerPath))
             let storage = try? engine.storage()
+            let googlePhotos = try? engine.googlePhotos()
             let suggestions = (try? result.get()).flatMap { s in
                 try? Ledger.suggestions(SQLiteReader(path: engine.ledgerPath), apps: s.apps)
             } ?? []
@@ -130,6 +133,7 @@ final class Model: ObservableObject {
                 self.suggestions = suggestions
                 if let everything { self.everything = everything }
                 if let storage { self.storage = storage }
+                if let googlePhotos { self.googlePhotos = googlePhotos }
                 self.loading = false
                 self.allProof = proof
                 self.notifyChanges(from: self.jobs, to: jobs)
@@ -225,6 +229,21 @@ final class Model: ObservableObject {
     func refile(_ sources: [String]) {
         launch(.refile, recipe: nil, title: "Move existing files in Google Drive",
                args: ["refile", "--apply"] + sources.flatMap { ["--source", $0] })
+    }
+
+    /// Sends backups Google Drive has verified to Google Photos: a source's, or a Google Drive
+    /// folder's. An extra copy for viewing; nothing is ever removed on the strength of it.
+    func sendToGooglePhotos(source: String? = nil, folder: String? = nil, title: String) {
+        launch(.googlePhotos, recipe: nil, title: "Google Photos: \(title)",
+               args: CLIEngine.googlePhotosSend(source: source, folder: folder, apply: true))
+    }
+
+    func refreshGooglePhotos() {
+        let engine = engine
+        Task.detached {
+            let status = try? engine.googlePhotos()
+            await MainActor.run { if let status { self.googlePhotos = status } }
+        }
     }
 
     func plan(_ r: Recipe) {
@@ -491,10 +510,14 @@ struct QueuedBackup: Codable, Hashable, Identifiable {
 
     /// sync, cloud, release for exactly these items. The budget is their size rounded up,
     /// so a 4.7 GB video is not skipped as bigger than a chunk; sync still keeps the
-    /// Mac's free-space floor and refuses if they will not fit.
+    /// Mac's free-space floor and refuses if they will not fit. Before release, a source set
+    /// to follow its backups sends its Mac copies to Google Photos, as cycle.sh does;
+    /// `--following` never fails, so release always runs.
     var steps: [[String]] {
         let sel = (ids ?? []).flatMap { ["--id", String($0)] }
         let gb = max(1, Int(((bytes ?? 0) + 1_073_741_823) / 1_073_741_824) + 1)
-        return [["sync"] + sel + ["--budget", "\(gb)GB", "--apply"], ["cloud"] + sel + ["--apply"], ["release"] + sel + ["--apply"]]
+        return [["sync"] + sel + ["--budget", "\(gb)GB", "--apply"], ["cloud"] + sel + ["--apply"],
+                ["google-photos", "send"] + sel + ["--following", "--only-on-mac", "--apply"],
+                ["release"] + sel + ["--apply"]]
     }
 }

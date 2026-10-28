@@ -7,7 +7,7 @@ import Foundation
 /// what lets Activity show it as a job in flight and lets a removal's result be read back
 /// after the fact, rather than living only in a window that has gone.
 public struct CLITask: Identifiable, Codable, Hashable, Sendable {
-    public enum Kind: String, Codable, Sendable { case audit, plan, remove, places, backup, settle, recover, refile }
+    public enum Kind: String, Codable, Sendable { case audit, plan, remove, places, backup, settle, recover, refile, googlePhotos }
 
     public let id: String
     public let kind: Kind
@@ -64,6 +64,13 @@ public struct TaskStatus: Hashable, Sendable {
             case "remove":
                 let done = obj["done"] as? Int ?? 0, total = obj["total"] as? Int ?? 0
                 return "Removed \(Fmt.count(done)) of \(Fmt.count(total))"
+            case "send":
+                // `done` is what the ledger has recorded; `inFlight` what rclone has copied in
+                // the folder under way, so a long folder still visibly moves.
+                let total = obj["total"] as? Int ?? 0
+                let done = min(total, (obj["done"] as? Int ?? 0) + (obj["inFlight"] as? Int ?? 0))
+                let bytes = Int64(obj["totalBytes"] as? Int ?? 0)
+                return "Sending to Google Photos: \(Fmt.count(done)) of \(Fmt.count(total)) (\(Fmt.bytes(bytes)))"
             default: continue
             }
         }
@@ -212,6 +219,23 @@ public struct RemovalPlan: Decodable, Hashable, Sendable {
         guard let r = message.range(of: "--confirm \"remove ") else { return nil }
         return Int(message[r.upperBound...].prefix { $0.isNumber })
     }
+}
+
+/// `google-photos send`: the plan without `--apply`, and what was sent with it.
+public struct GooglePhotosSend: Decodable, Hashable, Sendable {
+    public struct Album: Decodable, Hashable, Sendable { public let album: String; public let count: Int; public let bytes: Int64 }
+    public let applied: Bool
+    public let planned: Int
+    public let plannedBytes: Int64
+    public let albums: [Album]
+    public let fromMac: Int
+    public let fromDrive: Int
+    // Present after --apply.
+    public let sent: Int?
+    public let bytesSent: Int64?
+    public let failed: Int?
+    /// Why it stopped early, in the owner's words: "Google Photos asked to slow down...".
+    public let stopped: String?
 }
 
 // MARK: Proof that what was removed is in Google Drive
