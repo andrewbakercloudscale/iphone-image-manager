@@ -859,10 +859,14 @@ def run(
         if not uploads:
             return result
 
-        batches = _batches(uploads)
-        result.batches = len(batches)
+        folders = _batches(uploads)
+        piece_size = config.cloud.upload_batch_files
+        pieces = {key: _pieces(group, piece_size) for key, group in folders.items()}
+        result.batches = sum(len(p) for p in pieces.values())
+        verify_every = config.cloud.verify_every_seconds
         announced: set[str] = set()
         consecutive_failures = 0
+        index = 0
 
         with journal.operation(
             Op.CLOUD_UPLOAD,
@@ -870,78 +874,109 @@ def run(
             detail={
                 "planned": len(uploads),
                 "bytes": sum(u.size_bytes for u in uploads),
-                "batches": len(batches),
+                "batches": result.batches,
                 "destinations": sorted({u.destination for u in uploads}),
             },
         ) as operation:
-            for index, ((channel, folder, destination), group) in enumerate(
-                batches.items(), start=1
-            ):
+            for (channel, folder, destination), folder_pieces in pieces.items():
                 if on_channel and channel not in announced:
                     announced.add(channel)
                     on_channel(
                         channel,
-                        sum(len(g) for (c, _f, _d), g in batches.items() if c == channel),
+                        sum(len(g) for (c, _f, _d), g in folders.items() if c == channel),
                     )
 
-                size = sum(u.size_bytes for u in group)
-                note(
-                    f"[batch {index}/{len(batches)}] {channel}/{folder or '.'} "
-                    f"-> {destination}: {len(group):,} file(s), {size / 1e9:.2f} GB"
-                )
-                began = time.monotonic()
-                try:
-                    provider.upload(
-                        config.archive.local_path / channel,
-                        [u.relative for u in group],
-                        destination,
+                # Uploaded since the folder was last listed. A folder of 33,000
+                # WhatsApp photos takes nearly five minutes to list, so it is
+                # listed once at the end and every `verify_every` seconds on the
+                # way, not after every piece -- and a piece that fails is still
+                # listed, so whatever of it did land is banked, never lost to a
+                # timeout the way 1,700 uploaded photos were on 2026-10-27.
+                pending: list[Upload] = []
+                last_verify = time.monotonic()
+                for number, group in enumerate(folder_pieces, start=1):
+                    index += 1
+                    size = sum(u.size_bytes for u in group)
+                    note(
+                        f"[batch {index}/{result.batches}] {channel}/{folder or '.'} "
+                        f"-> {destination}: {len(group):,} file(s), {size / 1e9:.2f} GB"
                     )
-                    result.seconds += time.monotonic() - began
-                    result.uploaded += len(group)
-                    result.bytes_uploaded += size
-                    sent = getattr(provider, "last_transfer_bytes", None)
-                    _verify_batch(config, db, provider, group, folder, destination, result, note)
-                except CloudError as exc:
-                    # One folder failing is not the run failing. Whatever was
-                    # banked before this stays banked, and a re-run replans
-                    # from the ledger and skips it.
-                    result.seconds += time.monotonic() - began
-                    consecutive_failures += 1
-                    result.failed += len(group)
-                    result.failures.append({"file": f"{channel}/{folder}", "error": str(exc)})
-                    note(f"  batch failed: {exc}")
-                else:
-                    consecutive_failures = 0
-                    result.batches_done += 1
-                    took = max(time.monotonic() - began, 1e-9)
-                    if sent is None:
-                        how = "rate not reported"
-                    elif sent == 0:
-                        how = "nothing sent, already on the remote"
+                    began = time.monotonic()
+                    try:
+                        provider.upload(
+                            config.archive.local_path / channel,
+                            [u.relative for u in group],
+                            destination,
+                        )
+                    except CloudError as exc:
+                        # One piece failing is not the run failing. Whatever was
+                        # banked before this stays banked, and a re-run replans
+                        # from the ledger and skips it.
+                        result.seconds += time.monotonic() - began
+                        consecutive_failures += 1
+                        result.failures.append({"file": f"{channel}/{folder}", "error": str(exc)})
+                        note(f"  batch failed: {exc}")
                     else:
-                        result.bytes_transferred += sent
-                        result.seconds_transferring += took
-                        how = f"{sent / 1e9:.2f} GB sent at {sent / took / 1e6:.2f} MB/s"
-                    note(f"  banked {result.verified:,}/{len(uploads):,} verified, {how}")
+                        took = max(time.monotonic() - began, 1e-9)
+                        result.seconds += took
+                        result.uploaded += len(group)
+                        result.bytes_uploaded += size
+                        consecutive_failures = 0
+                        result.batches_done += 1
+                        sent = getattr(provider, "last_transfer_bytes", None)
+                        if sent is None:
+                            how = "rate not reported"
+                        elif sent == 0:
+                            how = "nothing sent, already on the remote"
+                        else:
+                            result.bytes_transferred += sent
+                            result.seconds_transferring += took
+                            how = f"{sent / 1e9:.2f} GB sent at {sent / took / 1e6:.2f} MB/s"
+                        note(f"  uploaded, {how}")
+                    pending.extend(group)
 
-                operation.note(
-                    uploaded=result.uploaded,
-                    verified=result.verified,
-                    failed=result.failed,
-                    bytes=result.bytes_uploaded,
-                    bytes_transferred=result.bytes_transferred,
-                    batches_done=result.batches_done,
-                )
+                    outage = consecutive_failures >= CONSECUTIVE_BATCH_FAILURE_LIMIT
+                    last_piece = number == len(folder_pieces)
+                    if last_piece or outage or time.monotonic() - last_verify >= verify_every:
+                        before = result.verified
+                        try:
+                            _verify_batch(
+                                config, db, provider, pending, folder, destination, result, note
+                            )
+                        except CloudError as exc:
+                            result.failed += len(pending)
+                            result.failures.append(
+                                {"file": f"{channel}/{folder}", "error": f"could not list: {exc}"}
+                            )
+                            note(f"  could not check what arrived: {exc}")
+                        else:
+                            note(
+                                f"  banked {result.verified:,}/{len(uploads):,} verified "
+                                f"(+{result.verified - before:,})"
+                            )
+                        pending = []
+                        last_verify = time.monotonic()
 
-                if consecutive_failures >= CONSECUTIVE_BATCH_FAILURE_LIMIT:
-                    result.stopped_early = (
-                        f"stopped after {consecutive_failures} batches failed in a row, which "
-                        f"is an outage rather than {consecutive_failures} bad folders. "
-                        f"{result.verified:,} asset(s) are verified and recorded; the next "
-                        f"run replans from the ledger and resumes where this one stopped."
+                    operation.note(
+                        uploaded=result.uploaded,
+                        verified=result.verified,
+                        failed=result.failed,
+                        bytes=result.bytes_uploaded,
+                        bytes_transferred=result.bytes_transferred,
+                        batches_done=result.batches_done,
                     )
-                    log.warning("%s", result.stopped_early)
-                    note(result.stopped_early)
+
+                    if outage:
+                        result.stopped_early = (
+                            f"stopped after {consecutive_failures} batches failed in a row, which "
+                            f"is an outage rather than {consecutive_failures} bad folders. "
+                            f"{result.verified:,} asset(s) are verified and recorded; the next "
+                            f"run replans from the ledger and resumes where this one stopped."
+                        )
+                        log.warning("%s", result.stopped_early)
+                        note(result.stopped_early)
+                        break
+                if result.stopped_early:
                     break
     finally:
         if owned:
@@ -973,6 +1008,15 @@ def _batches(uploads: list[Upload]) -> dict[tuple[str, str, str], list[Upload]]:
         key = (upload.channel, "" if folder == "." else folder, upload.destination)
         batches.setdefault(key, []).append(upload)
     return batches
+
+
+def _pieces(group: list[Upload], size: int) -> list[list[Upload]]:
+    """A folder's uploads in pieces of at most `size` files.
+
+    One rclone call per folder ran 2 hours on 19,184 WhatsApp photos, hit the
+    batch timeout at 1,700 and was killed. Pieces keep every call well inside it.
+    """
+    return [group[i : i + size] for i in range(0, len(group), size)] or [[]]
 
 
 def _verify_batch(

@@ -388,6 +388,71 @@ def test_one_batch_per_folder(env) -> None:
     )
 
 
+class KilledHalfwayCloud(FakeCloud):
+    """rclone killed by the batch timeout after sending part of what it was given."""
+
+    def __init__(self, *, killed_call: int, landed: int, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.killed_call = killed_call
+        self.landed = landed
+
+    def upload(self, root: Path, relatives: list[str], destination: str) -> None:
+        if len(self.calls) == self.killed_call:
+            super().upload(root, relatives[: self.landed], destination)
+            raise cloud_engine.CloudError("rclone copy did not finish within 7200s and was killed")
+        super().upload(root, relatives, destination)
+
+
+def test_a_big_folder_goes_in_pieces_and_is_listed_once(env) -> None:
+    config, db = env
+    config.cloud.upload_batch_files = 2
+    for i in range(5):
+        add_archived(config, db, f"w{i}", f"WhatsApp/IMG_{i}.JPG", body=f"{i}".encode())
+
+    fake = FakeCloud()
+    result = cloud_engine.run(config, Selector(), provider=fake, db=db)
+
+    assert [n for _r, n, _d in fake.calls] == [2, 2, 1], "pieces of at most upload_batch_files"
+    assert result.batches == 3 and result.batches_done == 3
+    assert fake.listed == ["WhatsApp"], "a big folder is slow to list, so once at the end"
+    assert result.verified == 5
+
+
+def test_what_landed_before_a_timeout_is_banked_not_lost(env) -> None:
+    """2026-10-27: 1,700 of 19,184 photos reached Google Drive, the call was killed, 0 recorded."""
+    config, db = env
+    config.cloud.upload_batch_files = 3
+    for i in range(6):
+        add_archived(config, db, f"w{i}", f"WhatsApp/IMG_{i}.JPG", body=f"{i}".encode())
+
+    result = cloud_engine.run(
+        config, Selector(), provider=KilledHalfwayCloud(killed_call=1, landed=1), db=db
+    )
+
+    assert result.verified == 4, "the whole first piece and the one file of the killed one"
+    assert result.failed == 2, "only what never arrived is a failure"
+    recorded = db.conn.execute(
+        "SELECT COUNT(*) FROM assets WHERE cloud_status = 'CLOUD_VERIFIED'"
+    ).fetchone()[0]
+    assert recorded == 4
+
+
+def test_a_long_folder_upload_banks_along_the_way(env, monkeypatch) -> None:
+    config, db = env
+    config.cloud.upload_batch_files = 1
+    config.cloud.verify_every_seconds = 60
+    for i in range(3):
+        add_archived(config, db, f"w{i}", f"WhatsApp/IMG_{i}.JPG", body=f"{i}".encode())
+    clock = iter(range(0, 10_000, 40))
+    monkeypatch.setattr(cloud_engine.time, "monotonic", lambda: next(clock))
+
+    fake = FakeCloud()
+    result = cloud_engine.run(config, Selector(), provider=fake, db=db)
+
+    assert result.verified == 3
+    assert len(fake.listed) >= 2, "listed on the way as well as at the end"
+
+
 def test_an_interrupted_run_keeps_what_it_already_proved(env) -> None:
     """The failure that cost six hours, as a test.
 

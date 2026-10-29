@@ -247,6 +247,15 @@ class CloudConfig(Strict):
     #: the 1.12 MB/s Drive throttled us to.
     batch_timeout_seconds: int = Field(default=7200, ge=60)
 
+    #: Files per rclone call. A folder bigger than this is sent in pieces, each
+    #: well inside `batch_timeout_seconds` even at the shared client's throttled
+    #: ~1 file per 4 seconds that small WhatsApp photos got on 2026-10-27.
+    upload_batch_files: int = Field(default=500, ge=1)
+
+    #: While a big folder uploads piece by piece, list it and bank what arrived
+    #: at least this often. Listing is the cost: 33,000 files took 4m40s.
+    verify_every_seconds: int = Field(default=3600, ge=60)
+
     #: Kill a transfer that has said nothing at all for this long. rclone is
     #: asked for stats every 30s, so silence this long is a wedged process
     #: rather than a slow one. Being throttled still prints stats.

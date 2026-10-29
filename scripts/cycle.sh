@@ -139,11 +139,28 @@ c=sqlite3.connect('file:$DB?mode=ro',uri=True)
 print(c.execute(\"SELECT COUNT(*) FROM assets WHERE local_status='LOCAL_VERIFIED' AND cloud_status!='CLOUD_VERIFIED'\").fetchone()[0])" 2>/dev/null || echo 0
 }
 
+# This job's own items still waiting for Google Drive.
+unuploaded_here() {
+  $PY -c "
+import sqlite3, sys
+sys.path.insert(0, 'src')
+from iphone_image.selector import Selector
+c=sqlite3.connect('file:$DB?mode=ro',uri=True)
+w,pr=Selector(source='$SOURCE', media_type='$TYPE', older_than='$OLDER' or None).where()
+print(c.execute(f\"SELECT COUNT(*) FROM assets a WHERE {w} AND a.local_status='LOCAL_VERIFIED' AND a.cloud_status!='CLOUD_VERIFIED'\", pr).fetchone()[0])" 2>/dev/null || echo 0
+}
+
+# Uploads this job's items, or with "all" every Mac copy still waiting for
+# Google Drive. The backlog is uploaded unscoped: on 2026-10-27 a WhatsApp
+# photo upload was killed, the job ended "done", and every later job announced
+# the 19,184 photos it left behind and then uploaded only its own source.
 upload_now() {
+  local scope=("${SEL[@]}")
+  [ "${1:-}" = "all" ] && scope=()
   wait_for_net
   say "uploading what landed"
   local mark; mark=$(log_bytes)
-  if ! $PY -m iphone_image cloud "${SEL[@]}" --apply >> "$LOG" 2>&1; then
+  if ! $PY -m iphone_image cloud ${scope[@]+"${scope[@]}"} --apply >> "$LOG" 2>&1; then
     say "cloud returned non-zero"
     if net_hit_since "$mark"; then NET_WAITED=1; wait_for_net; fi
   fi
@@ -318,15 +335,31 @@ for cycle in $(seq 1 "$CYCLES"); do
   # 1b. Upload any backlog before fetching more. Unuploaded bytes sit on the Mac
   #     and cannot be released, so fetching on top of them only spends the disk.
   if [ "$(unuploaded)" -gt 0 ]; then
-    say "$(unuploaded) file(s) on the Mac not yet in Drive: uploading them before fetching"
-    upload_now
+    say "$(unuploaded) file(s) on the Mac not yet in Google Drive: uploading them before fetching"
+    upload_now all
     gphotos_follow
     do_release
   fi
 
   # 2. Stop if there is nothing left to do.
   left=$(to_fetch)
-  if [ "$left" -eq 0 ]; then say "nothing left to fetch. done."; break; fi
+  if [ "$left" -eq 0 ]; then
+    # Fetched is not backed up: done only when nothing of this job is still
+    # waiting for Google Drive. One more upload first, then say so if not.
+    waiting=$(unuploaded_here)
+    if [ "$waiting" -gt 0 ]; then
+      say "all copied from Photos, but $waiting still waiting for Google Drive: uploading them"
+      upload_now
+      gphotos_follow
+      do_release
+      waiting=$(unuploaded_here)
+    fi
+    if [ "$waiting" -gt 0 ]; then
+      say "NOT DONE: $waiting copied from Photos but still not in Google Drive. Resume to try again."
+      exit 3
+    fi
+    say "nothing left to fetch. done."; break
+  fi
 
   # A loop that makes no progress must stop, not spin. One cycle of no change is
   # normal (it may only have uploaded a backlog); two in a row means whatever is

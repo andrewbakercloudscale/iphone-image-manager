@@ -1608,7 +1608,7 @@ def cloud(ctx: Context, apply_: bool, **kwargs: Any) -> None:
                 ("destination", _destinations_in_play(uploads, config)),
                 ("uploaded", f"{result.uploaded:,} files, {human_bytes(result.bytes_uploaded)}"),
                 ("verified by hash", f"{result.verified:,}"),
-                ("folders banked", f"{result.batches_done:,} of {result.batches:,}"),
+                ("batches uploaded", f"{result.batches_done:,} of {result.batches:,}"),
                 ("failed", f"{result.failed:,}"),
                 ("rate", f"{result.rate_mb_s:.2f} MB/s" if result.seconds else "-"),
             ]

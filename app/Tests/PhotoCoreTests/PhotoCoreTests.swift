@@ -627,3 +627,11 @@ final class GooglePhotosTests: XCTestCase {
         guard case .stopped = Jobs.read(log: failed, processes: [])[0].state else { return XCTFail("a dead job is still stopped") }
     }
 }
+
+final class NotDoneTests: XCTestCase {
+    func testAJobWithUploadsLeftIsStoppedNotFinished() {
+        XCTAssertEqual(Jobs.state(after: "all copied from Photos, but 19184 still waiting for Google Drive: uploading them", previous: .running), .running)
+        let s = Jobs.state(after: "NOT DONE: 19184 copied from Photos but still not in Google Drive. Resume to try again.", previous: .running)
+        XCTAssertEqual(s, .stopped("19184 were copied from Photos but did not reach Google Drive. Resume to upload them; what got there is kept."))
+    }
+}

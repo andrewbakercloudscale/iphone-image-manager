@@ -232,7 +232,7 @@ public enum Jobs {
     /// What a log message means for the job's state.
     static func state(after m: String, previous: Job.State) -> Job.State {
         if m.contains("nothing left to fetch") || m.hasPrefix("cycle finished") && m.hasSuffix(" 0 still to fetch") { return .finished }
-        if m.contains("STOPPING") || m.contains("EMPTY THE BIN") || m.hasPrefix("release failed") {
+        if m.contains("STOPPING") || m.contains("EMPTY THE BIN") || m.hasPrefix("release failed") || m.hasPrefix("NOT DONE") {
             return .stopped(plain(m))
         }
         if m.contains("metered connection") { return .paused("On your iPhone's hotspot. Carries on by itself on normal wifi.") }
@@ -248,6 +248,9 @@ public enum Jobs {
         if m.contains("Google Drive still over quota") { return "Google Drive refused uploads for 3 hours (quota)." }
         if m.contains("EMPTY THE BIN") { return "Not enough disk space: empty the Bin or free some space, then resume." }
         if m.hasPrefix("release failed") { return "Tidying the Mac copies failed. Read cycle.log before resuming." }
+        if m.hasPrefix("NOT DONE"), let n = m.split(separator: " ").dropFirst(2).first {
+            return "\(n) were copied from Photos but did not reach Google Drive. Resume to upload them; what got there is kept."
+        }
         return m
     }
 
