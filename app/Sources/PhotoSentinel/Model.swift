@@ -20,6 +20,8 @@ final class Model: ObservableObject {
     @Published var doctor: DoctorReport?
     /// Size of the Bin, where tidied Mac copies go; nil when macOS will not let the app look.
     @Published var binBytes: Int64?
+    /// A Checkup tile opened to show how its number is made.
+    @Published var statDetail: StatDetail.Stat?
     @Published var error: String?
     @Published var loading = false
     @Published var doctorRunning = false

@@ -131,7 +131,7 @@ private struct TimeControls: View {
 }
 
 /// Three donuts side by side: where it came from, what it is, whether Drive has it.
-private struct Donuts: View {
+struct Donuts: View {
     let b: Breakdown
     let onSource: ((Channel) -> Void)?
 
@@ -163,7 +163,7 @@ private struct Donuts: View {
     }
 }
 
-private struct Donut: View {
+struct Donut: View {
     let title: String
     let slices: [Breakdown.Slice]
     let total: Tally

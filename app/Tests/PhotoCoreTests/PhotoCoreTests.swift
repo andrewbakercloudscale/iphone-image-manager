@@ -1,5 +1,6 @@
 import Foundation
 @testable import PhotoCore
+import SQLite3
 import XCTest
 
 final class AgeTests: XCTestCase {
@@ -119,6 +120,53 @@ final class LedgerTests: XCTestCase {
         XCTAssertEqual(wa.total, Tally(count: 2, bytes: 300))
         XCTAssertEqual(wa.bySource.map(\.key), ["whatsapp"])
         XCTAssertEqual(wa.oldest?.prefix(7), "2019-03")
+    }
+
+    /// A WAL ledger nothing else has open has no -wal or -shm file. It must still read, and never take a write.
+    func testAClosedWALLedgerReadsAndRefusesWrites() throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("wal-\(UUID().uuidString).sqlite").path
+        defer { for s in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + s) } }
+        var w: OpaquePointer?
+        sqlite3_open(path, &w)
+        sqlite3_exec(w, "PRAGMA journal_mode=WAL; CREATE TABLE t (x); INSERT INTO t VALUES (1);", nil, nil, nil)
+        sqlite3_close(w)
+        // macOS may keep the -wal after close; with everything checkpointed it is safe to drop.
+        for s in ["-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + s) }
+
+        let db = try SQLiteReader(path: path)
+        XCTAssertEqual(try db.rows("SELECT x FROM t").first?.int(0), 1)
+        XCTAssertThrowsError(try db.exec("INSERT INTO t VALUES (2)"))
+    }
+
+    func testEachCheckupNumberBreaksDownToItsOwnTotal() throws {
+        let db = try makeDB()
+        let wa = "net.whatsapp.WhatsApp"
+        try insert(db, 1, file: "a", bundle: wa, bytes: 100, cloud: "CLOUD_VERIFIED")
+        try insert(db, 2, file: "b", type: "VIDEO", bundle: "com.apple.camera", bytes: 200)
+        try insert(db, 3, file: "c", bundle: wa, bytes: 300, cloud: "CLOUD_VERIFIED", present: 0)
+        try insert(db, 4, file: "d", subtypes: "[\"screenshot\"]", bundle: "com.apple.springboard", bytes: 400, cloud: "CLOUD_VERIFIED", present: 0)
+        try db.exec("ALTER TABLE assets ADD COLUMN cloud_verified_at TEXT")
+        try db.exec("UPDATE assets SET cloud_verified_at = '2026-09-03T00:00:00Z'")
+        try db.exec("""
+        INSERT INTO deletion_events (asset_id, status, completed_at, size_bytes) VALUES
+          (3, 'REMOVED', '2026-08-01T00:00:00Z', 300), (4, 'REMOVED', '2026-10-20T00:00:00Z', 400), (2, 'FAILED', '2026-10-20T00:00:00Z', 200);
+        """)
+        let now = ISO8601DateFormatter().date(from: "2026-10-25T00:00:00Z")!
+
+        let v = try Ledger.statDetail(db, .verified, now: now)
+        XCTAssertEqual(v.total, Tally(count: 1, bytes: 100), "the tile's number: verified and still on the phone")
+        XCTAssertEqual(v.parts.map(\.total.bytes), [300, 800], "the phone, and all of Google Drive")
+        XCTAssertEqual(v.overTime.map(\.key), ["2026-09"])
+
+        let f = try Ledger.statDetail(db, .freed, now: now)
+        XCTAssertEqual(f.total, Tally(count: 2, bytes: 700), "failed removals do not count")
+        XCTAssertEqual(f.bySource.map(\.key), ["screenshot", "whatsapp"])
+        XCTAssertEqual(f.overTime.map(\.key), ["2026-08", "2026-10"])
+
+        let r = try Ledger.statDetail(db, .recentlyDeleted, now: now)
+        XCTAssertEqual(r.total, Tally(count: 1, bytes: 400))
+        XCTAssertEqual(r.overTime.map(\.key), ["2026-10-20"])
+        XCTAssertEqual(r.firstExpiry?.prefix(10), "2026-11-19")
     }
 
     func testRoutesSayWhichDriveFolderEachItemIsOrWillBeIn() throws {

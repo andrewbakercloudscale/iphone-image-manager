@@ -14,15 +14,17 @@ public enum SQLiteError: Error, CustomStringConvertible {
 }
 
 /// A read-only connection. The Python engine owns the ledger and may be writing to it
-/// (WAL mode) while this reads, so this never opens it for writing.
+/// (WAL mode) while this reads, so this never writes it: `query_only` refuses every write.
+/// It opens read-write only so SQLite can make the -wal and -shm files: a WAL ledger with
+/// neither (nothing else has it open) cannot be read from a read-only connection.
 public final class SQLiteReader {
     private var db: OpaquePointer?
     public let path: String
 
     public init(path: String) throws {
         self.path = path
-        let rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil)
-        guard rc == SQLITE_OK else {
+        let rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_URI, nil)
+        guard rc == SQLITE_OK, sqlite3_exec(db, "PRAGMA query_only = ON", nil, nil, nil) == SQLITE_OK else {
             let m = db.map { String(cString: sqlite3_errmsg($0)) } ?? "code \(rc)"
             sqlite3_close(db)
             throw SQLiteError.open(path, m)

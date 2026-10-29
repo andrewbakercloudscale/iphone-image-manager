@@ -117,6 +117,7 @@ struct ContentView: View {
             OnboardingView(model: model)
         }
         .sheet(item: $model.removing) { r in RemovalSheet(model: model, recipe: r) }
+        .sheet(item: $model.statDetail) { s in StatDetailSheet(model: model, stat: s) }
     }
 
     @ViewBuilder private var page: some View {

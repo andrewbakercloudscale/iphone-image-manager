@@ -50,6 +50,15 @@ enum Snapshot {
                 try? png.write(to: dir.appendingPathComponent("remove-\(recipe.id).png"))
             }
         }
+        for stat in [StatDetail.Stat.verified, .freed, .recentlyDeleted] {
+            let d = try? Ledger.statDetail(SQLiteReader(path: model.ledgerPath), stat)
+            let r = ImageRenderer(content: StatDetailSheet(model: model, stat: stat, preset: d, scrolls: false).frame(width: 820))
+            r.scale = 1
+            if let img = r.nsImage, let tiff = img.tiffRepresentation,
+               let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                try? png.write(to: dir.appendingPathComponent("stat-\(stat.rawValue).png"))
+            }
+        }
         exit(0)
     }
 

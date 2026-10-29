@@ -73,10 +73,14 @@ struct CheckupView: View {
 
     private func stats(_ s: LibrarySnapshot) -> some View {
         HStack(spacing: 12) {
-            StatTile(symbol: "checkmark.shield.fill", color: Theme.good, value: Fmt.bytes(s.verified.bytes), label: "checked safe in Google Drive")
-            StatTile(symbol: "iphone", color: Tab.backup.color, value: Fmt.bytes(s.removed.total.bytes), label: "freed on the phone so far")
+            StatTile(symbol: "checkmark.shield.fill", color: Theme.good, value: Fmt.bytes(s.verified.bytes), label: "checked safe in Google Drive") {
+                model.statDetail = .verified
+            }
+            StatTile(symbol: "iphone", color: Tab.backup.color, value: Fmt.bytes(s.removed.total.bytes), label: "freed on the phone so far") {
+                model.statDetail = .freed
+            }
             StatTile(symbol: "arrow.uturn.backward", color: Theme.warn, value: "\(Fmt.count(s.removed.recent.count)) items",
-                     label: "in Recently Deleted · can still be undone")
+                     label: "in Recently Deleted · can still be undone") { model.statDetail = .recentlyDeleted }
         }
     }
 }
@@ -86,8 +90,22 @@ struct StatTile: View {
     let color: Color
     let value: String
     let label: String
+    /// Opens how the number is made.
+    var open: (() -> Void)?
+    @State private var hover = false
 
     var body: some View {
+        if let open {
+            Button(action: open) { tile.contentShape(Rectangle()) }
+                .buttonStyle(.plain)
+                .onHover { hover = $0 }
+                .help("See how this number is made")
+        } else {
+            tile
+        }
+    }
+
+    private var tile: some View {
         HStack(spacing: 10) {
             SymbolTile(symbol: symbol, color: color, size: 36)
             VStack(alignment: .leading, spacing: 1) {
@@ -95,10 +113,13 @@ struct StatTile: View {
                 Text(label).font(.callout).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
+            if open != nil {
+                Image(systemName: "chart.pie").foregroundStyle(hover ? color : .secondary)
+            }
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 12).fill(Theme.cardFill))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.cardStroke, lineWidth: 1.5))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(hover ? color : Theme.cardStroke, lineWidth: 1.5))
     }
 }
 

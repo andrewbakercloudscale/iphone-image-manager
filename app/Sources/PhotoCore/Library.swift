@@ -550,6 +550,11 @@ public enum Fmt {
         return f.date(from: String(s.prefix(10)))
     }
 
+    /// "27 Nov 2026", for a ledger timestamp.
+    public static func dateOnly(_ s: String) -> String? {
+        date(s).map { $0.formatted(.dateTime.day().month(.abbreviated).year()) }
+    }
+
     public static func bytes(_ b: Int64) -> String {
         let gb = Double(b) / 1e9
         if gb >= 100 { return "\(Int(gb.rounded())) GB" }
