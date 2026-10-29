@@ -168,3 +168,214 @@ def archive_problem(path: Path) -> str | None:
     if not os.access(probe, os.W_OK):
         return f"{probe} cannot be written to"
     return None
+
+
+class OwnClientError(Exception):
+    """Why signing in with the owner's own Google client did not go ahead. The
+    rclone account is left as it was."""
+
+
+#: How long the browser sign-in may take before it is given up.
+AUTHORIZE_SECONDS = 600
+
+
+def own_client(
+    remote: str,
+    client_id: str,
+    client_secret: str,
+    destination: str,
+    binary: str = "rclone",
+    run=subprocess.run,
+) -> dict[str, object]:
+    """Point a Google Drive account at the owner's own Google Cloud client, so it
+    stops sharing rclone's throttled one.
+
+    The new sign-in is tried on the side first (`rclone authorize`, in the
+    browser) and checked to reach the same Google Drive: the same top-level
+    folders, by id. Only then is the account changed, after a copy of the rclone
+    config is kept, and the change is checked again; if that check fails the copy
+    is put back. Refused while any rclone runs: a running upload would write its
+    old sign-in back over the new one when it refreshes it.
+    """
+    client_id, client_secret = client_id.strip(), client_secret.strip()
+    if not client_id.endswith(".apps.googleusercontent.com"):
+        raise OwnClientError(
+            "that is not a client ID: it ends in .apps.googleusercontent.com. "
+            "Copy it from the client you made in Google Cloud."
+        )
+    if not client_secret:
+        raise OwnClientError("the client secret is empty. Copy it from the same client.")
+    name = remote.rstrip(":")
+    settings = _config_show(name, binary, run)
+    if settings is None or settings.get("type") != "drive":
+        raise OwnClientError(f"{name} is not a Google Drive account in rclone.")
+    _refuse_while_rclone_runs(binary, run)
+
+    before = _top_folders(f"{name}:", binary, run)
+    token = _authorize(client_id, client_secret, binary, run)
+    trial = {
+        "RCLONE_CONFIG_IIMOWNCLIENT_TYPE": "drive",
+        "RCLONE_CONFIG_IIMOWNCLIENT_CLIENT_ID": client_id,
+        "RCLONE_CONFIG_IIMOWNCLIENT_CLIENT_SECRET": client_secret,
+        "RCLONE_CONFIG_IIMOWNCLIENT_TOKEN": token,
+        "RCLONE_CONFIG_IIMOWNCLIENT_SCOPE": settings.get("scope") or "drive",
+    }
+    after = _top_folders("iimownclient:", binary, run, env=trial)
+    if after is None:
+        raise OwnClientError(
+            "signed in, but Google Drive could not be read with it. Check the Google Drive API "
+            "is turned on in that Google Cloud project, then try again."
+        )
+    _same_drive(before, after, destination)
+
+    _refuse_while_rclone_runs(binary, run)
+    conf = _config_file(binary, run)
+    kept = conf.with_name(conf.name + ".before-own-client")
+    kept.write_bytes(conf.read_bytes())
+    kept.chmod(0o600)
+    changed = run(
+        [
+            binary,
+            "config",
+            "update",
+            name,
+            "client_id",
+            client_id,
+            "client_secret",
+            client_secret,
+            "token",
+            token,
+            "config_refresh_token",
+            "false",
+            "--non-interactive",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    now = _config_show(name, binary, run) or {}
+    check = _top_folders(f"{name}:", binary, run)
+    if (
+        changed.returncode != 0
+        or now.get("client_id") != client_id
+        or check is None
+        or set(check) != set(after)
+    ):
+        conf.write_bytes(kept.read_bytes())
+        raise OwnClientError(
+            f"{name} did not work after the change, so it was put back as it was. "
+            "Backups carry on through rclone's shared client."
+        )
+    return {"remote": name, "clientId": client_id, "folders": len(after), "kept": str(kept)}
+
+
+def _config_show(name: str, binary: str, run) -> dict[str, str] | None:
+    try:
+        out = run([binary, "config", "show", name], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    found = {}
+    for line in out.stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            found[key.strip()] = value.strip()
+    return found
+
+
+def _config_file(binary: str, run) -> Path:
+    out = run([binary, "config", "file"], capture_output=True, text=True, timeout=20)
+    lines = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+    if out.returncode != 0 or not lines or not Path(lines[-1]).is_file():
+        raise OwnClientError("could not find the rclone config file, so nothing was changed.")
+    return Path(lines[-1])
+
+
+def _refuse_while_rclone_runs(binary: str, run) -> None:
+    out = run(["pgrep", "-x", Path(binary).name], capture_output=True, text=True, timeout=20)
+    if out.returncode == 0:
+        raise OwnClientError(
+            "an upload is running. Signing in again now would be undone when it refreshes "
+            "its sign-in, so try again once it has finished."
+        )
+
+
+def _authorize(client_id: str, client_secret: str, binary: str, run) -> str:
+    """The token from signing in in the browser, as rclone stores it."""
+    try:
+        out = run(
+            [binary, "authorize", "drive", client_id, client_secret],
+            capture_output=True,
+            text=True,
+            timeout=AUTHORIZE_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        raise OwnClientError(
+            "the sign-in was not finished in the browser within 10 minutes."
+        ) from None
+    except OSError as e:
+        raise OwnClientError(f"rclone could not start: {e}") from None
+    token = parse_authorize(out.stdout)
+    if out.returncode != 0 or token is None:
+        said = (out.stderr or "").strip().splitlines()
+        raise OwnClientError(
+            "Google did not sign in with that client"
+            + (f": {said[-1]}" if said else ".")
+            + " Check the client is a Desktop app and the ID and secret were copied in full."
+        )
+    return token
+
+
+def parse_authorize(text: str) -> str | None:
+    """`rclone authorize`: the token JSON it prints between its paste markers."""
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                token = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(token, dict) and token.get("access_token"):
+                return line
+    return None
+
+
+def _top_folders(
+    target: str, binary: str, run, env: dict[str, str] | None = None
+) -> dict[str, str] | None:
+    """{id: name} of the folders at the top of a Google Drive, or None when it cannot be read."""
+    try:
+        out = run(
+            [binary, "lsjson", "--dirs-only", target],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env={**os.environ, **env} if env else None,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    try:
+        entries = json.loads(out.stdout)
+    except ValueError:
+        return None
+    return {e["ID"]: e.get("Name", "") for e in entries if isinstance(e, dict) and e.get("ID")}
+
+
+def _same_drive(before: dict[str, str] | None, after: dict[str, str], destination: str) -> None:
+    """The new sign-in reaches the Google Drive that holds the backups."""
+    if before:
+        if set(before) != set(after):
+            raise OwnClientError(
+                "that sign-in opens a different Google Drive from the one holding your backups. "
+                "Sign in as the Google account your backups are in. Nothing was changed."
+            )
+        return
+    top = PurePosixPath(destination.strip("/")).parts[:1]
+    if top and top[0] not in after.values():
+        raise OwnClientError(
+            f"that Google Drive has no {top[0]} folder, so it is not the one holding your "
+            "backups. Sign in as the Google account your backups are in. Nothing was changed."
+        )

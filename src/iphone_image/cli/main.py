@@ -8,6 +8,7 @@ destructive yet; removal arrives in P10, gated on its own test harness.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import textwrap
 from dataclasses import dataclass, replace
@@ -552,6 +553,40 @@ def config_folder_link(ctx: Context, folder: str) -> None:
         _fail(ctx.out, f"{folder} is not in Google Drive yet: nothing has been backed up there.")
         return
     ctx.out.result({"folder": folder, "url": url}, lambda: ctx.out.pairs([(folder, url)]))
+
+
+@config.command("own-client")
+@click.option("--client-id", required=True, help="The OAuth client ID, type Desktop app.")
+@pass_context
+def config_own_client(ctx: Context, client_id: str) -> None:
+    """Sign the Google Drive account in with your own Google Cloud client.
+
+    rclone's built-in client is shared by every rclone user, so Google Drive
+    slows its uploads. The secret is read from IPHONE_IMAGE_CLIENT_SECRET, or
+    asked for, never taken as an argument. Opens the browser to sign in; the
+    account changes only if that sign-in reaches the same Google Drive.
+    """
+    from .. import storage
+
+    secret = os.environ.get("IPHONE_IMAGE_CLIENT_SECRET") or click.prompt(
+        "Client secret", hide_input=True
+    )
+    c = ctx.config
+    try:
+        done = storage.own_client(c.cloud.remote, client_id, secret, c.cloud.destination)
+    except storage.OwnClientError as e:
+        _fail(ctx.out, f"Not changed: {e}")
+        return
+    ctx.out.result(
+        done,
+        lambda: ctx.out.pairs(
+            [
+                ("account", f"{done['remote']} now signs in with your own client"),
+                ("checked", f"same Google Drive, {done['folders']} top-level folders"),
+                ("previous config", done["kept"]),
+            ]
+        ),
+    )
 
 
 @config.command("storage")

@@ -93,13 +93,14 @@ public struct CLIEngine: Engine {
         return try JSONDecoder().decode(DoctorReport.self, from: data)
     }
 
-    func run(_ args: [String], stderrLine: (@Sendable (String) -> Void)? = nil) throws -> Data {
+    func run(_ args: [String], env extra: [String: String] = [:], stderrLine: (@Sendable (String) -> Void)? = nil) throws -> Data {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: repo + "/.venv/bin/python")
         p.arguments = ["-m", "iphone_image"] + args
         p.currentDirectoryURL = URL(fileURLWithPath: repo)
         var env = ProcessInfo.processInfo.environment
         env["PYTHONPATH"] = repo + "/src"
+        env.merge(extra) { $1 }
         p.environment = env
         let out = Pipe()
         p.standardOutput = out
@@ -286,6 +287,15 @@ extension CLIEngine {
         if let archive { args += ["--archive", archive] }
         if apply { args.append("--apply") }
         return try decode(StorageReport.self, run(args))
+    }
+
+    /// Signs the Google Drive account in with the owner's own Google Cloud client: rclone opens
+    /// the browser, and the account changes only if that reaches the same Google Drive. Waits
+    /// for the sign-in, up to 10 minutes. The secret goes in the environment, not the arguments.
+    public func ownClient(id: String, secret: String) throws {
+        let data = try run(["--json", "config", "own-client", "--client-id", id], env: ["IPHONE_IMAGE_CLIENT_SECRET": secret])
+        let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        if let e = obj?["error"] as? String { throw JobError.message(e) }
     }
 
     /// The Google Drive web address of `folder` in the backup account.

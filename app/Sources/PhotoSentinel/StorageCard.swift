@@ -10,6 +10,10 @@ struct StorageCard: View {
     @State private var archive = ""
     @State private var message: (ok: Bool, text: String)?
     @State private var saving = false
+    @State private var showOwnClient = false
+    @State private var clientId = ""
+    @State private var clientSecret = ""
+    @State private var signingIn = false
 
     var body: some View {
         Card(title: "Where backups go", symbol: "externaldrive.fill.badge.icloud", tint: Tab.backup.color) {
@@ -76,31 +80,97 @@ struct StorageCard: View {
         }
     }
 
-    /// rclone's built-in Google project is shared by every rclone user, so Drive throttles it.
+    /// rclone's built-in Google project is shared by every rclone user, so Google Drive throttles
+    /// it. The owner makes their own client in Google Cloud (links below), pastes it here, and
+    /// `config own-client` signs in with it in the browser. The account only changes if that
+    /// reaches the same Google Drive.
     @ViewBuilder private func clientIdHint(_ s: StorageReport) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("Uploads to \(s.accountTitle) are slowed down: it signs in through rclone's shared Google project, and Google Drive limits how fast everyone using it can upload. Your own client ID, free, lifts that.",
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Uploads to \(s.accountTitle) are slowed down: it signs in through rclone's shared Google project, and Google Drive limits how fast everyone using it can upload. Your own sign-in, free, lifts that. About 10 minutes, once.",
                   systemImage: "tortoise.fill")
                 .foregroundStyle(Theme.warn)
-            Text("""
-                1. In the guide, make a Google Cloud project, turn on the Drive API and create an OAuth client ID of type Desktop app (about 5 minutes).
-                2. In Terminal, type e to edit \(s.remote), paste the client ID and secret, keep every other answer as it is, and say yes to signing in again.
-                3. Back up as before. Nothing already backed up changes.
-                """)
-                .foregroundStyle(.secondary)
-            HStack(spacing: 8) {
-                CapsuleButton(title: "Open the guide", symbol: "book.fill", color: Tab.backup.color, style: .soft) {
-                    NSWorkspace.shared.open(URL(string: "https://rclone.org/drive/#making-your-own-client-id")!)
+            if showOwnClient {
+                ownClientSteps(s)
+            } else {
+                CapsuleButton(title: "Use my own Google sign-in", symbol: "person.badge.key.fill", color: Tab.backup.color) {
+                    showOwnClient = true
                 }
-                CapsuleButton(title: "Open rclone in Terminal", symbol: "terminal.fill", color: Tab.backup.color, style: .soft) {
-                    Self.openRcloneConfig()
-                }
-                .disabled(model.backupBusy)
-                .help(model.backupBusy ? "Wait for the running backup to finish: signing in again cuts off its uploads." : "")
             }
-            if model.backupBusy { Text("Do step 2 once the running backup finishes: signing in again cuts off its uploads.").foregroundStyle(.secondary) }
         }
         .font(.callout).fixedSize(horizontal: false, vertical: true)
+    }
+
+    private static let ownClientSteps: [(title: String, how: String, url: String)] = [
+        ("Make a Google Cloud project", "Any name, then Create. Sign in to Google Cloud with any Google account.", "https://console.cloud.google.com/projectcreate"),
+        ("Turn on the Google Drive API", "Check the new project is picked at the top, then Enable.", "https://console.cloud.google.com/apis/library/drive.googleapis.com"),
+        ("Set up its sign-in screen", "Get started: any app name, your email, Audience External, your email again, then Create.", "https://console.cloud.google.com/auth/branding"),
+        ("Publish it", "Publish app, then Confirm. Skip this and Google signs you out every 7 days, which stops backups.", "https://console.cloud.google.com/auth/audience"),
+        ("Make a client", "Application type Desktop app, any name, Create. Keep that window open: it shows the Client ID and Client secret.", "https://console.cloud.google.com/auth/clients/create"),
+    ]
+
+    @ViewBuilder private func ownClientSteps(_ s: StorageReport) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                ForEach(Array(Self.ownClientSteps.enumerated()), id: \.offset) { i, step in
+                    GridRow(alignment: .firstTextBaseline) {
+                        Text("\(i + 1).").monospacedDigit().foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(step.title).fontWeight(.medium)
+                            Text(step.how).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
+                        CapsuleButton(title: "Open", symbol: "arrow.up.right.square", color: Tab.backup.color, style: .soft) {
+                            NSWorkspace.shared.open(URL(string: step.url)!)
+                        }
+                    }
+                }
+                GridRow(alignment: .firstTextBaseline) {
+                    Text("6.").monospacedDigit().foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Paste them here and sign in").fontWeight(.medium)
+                        TextField("Client ID", text: $clientId).textFieldStyle(.roundedBorder).font(.callout.monospaced())
+                        SecureField("Client secret", text: $clientSecret).textFieldStyle(.roundedBorder).font(.callout.monospaced())
+                        Text("Your browser opens: sign in as the Google account your backups are in. Google says it hasn't verified the app: it is your own, so click Continue. The account changes only if that sign-in reaches the same Google Drive.")
+                            .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Color.clear.frame(width: 1, height: 1)
+                }
+            }
+            HStack(spacing: 8) {
+                CapsuleButton(title: signingIn ? "Waiting for the browser…" : "Sign in to Google", symbol: "person.badge.key.fill", color: Tab.backup.color) {
+                    Task { await signIn() }
+                }
+                .disabled(signingIn || model.backupBusy || clientId.trimmingCharacters(in: .whitespaces).isEmpty || clientSecret.isEmpty)
+                .help(model.backupBusy ? "Wait for the running backup to finish: signing in again cuts off its uploads." : "")
+                if signingIn { ProgressView().controlSize(.small) }
+                CapsuleButton(title: "Cancel", color: .secondary, style: .ghost) {
+                    showOwnClient = false
+                    clientSecret = ""
+                }
+                .disabled(signingIn)
+            }
+            if model.backupBusy { Text("Signing in waits until the running backup finishes: it would cut off its uploads.").foregroundStyle(.secondary) }
+            Button("rclone's guide to this") { NSWorkspace.shared.open(URL(string: "https://rclone.org/drive/#making-your-own-client-id")!) }
+                .buttonStyle(.link)
+        }
+    }
+
+    private func signIn() async {
+        signingIn = true
+        message = nil
+        let engine = model.engine
+        let id = clientId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let secret = clientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        let result = await Task.detached { Result { try engine.ownClient(id: id, secret: secret) } }.value
+        signingIn = false
+        switch result {
+        case .success:
+            clientSecret = ""
+            showOwnClient = false
+            message = (true, "Done. Uploads to Google Drive now use your own sign-in. Nothing already backed up changes.")
+            model.refresh()
+        case .failure(let e):
+            message = (false, (e as? JobError)?.text ?? "\(e)")
+        }
     }
 
     private func changed(_ s: StorageReport) -> Bool {
