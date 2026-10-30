@@ -240,6 +240,9 @@ final class TaskTests: XCTestCase {
 
     /// The real CLI, detached, read back from disk: what the app does for audit and plan.
     func testATaskRunsDetachedAndIsReadBack() throws {
+        // It needs this Mac's CLI and ledger; CI has neither.
+        guard FileManager.default.fileExists(atPath: CLIEngine.defaultRepo + "/.venv/bin/python"),
+              FileManager.default.fileExists(atPath: Ledger.defaultPath) else { throw XCTSkip("no CLI or ledger here") }
         let saved = TaskStore.root
         TaskStore.root = NSTemporaryDirectory() + "tasks-\(UUID().uuidString)"
         defer { TaskStore.root = saved }
