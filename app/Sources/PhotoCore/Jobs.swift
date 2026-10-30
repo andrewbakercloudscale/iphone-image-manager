@@ -82,7 +82,8 @@ public struct Job: Identifiable, Hashable, Sendable {
         case "whatsapp": name = "WhatsApp"
         case "screenshot": name = "Screenshots"
         case "screenrecording": name = "Screen recordings"
-        default: name = source.capitalized
+        // A job started from one app's row runs by its bundle id: "WhatsApp", not "Net.Whatsapp.Whatsapp".
+        default: name = source.contains(".") ? Fmt.app(source) : source.capitalized
         }
         return what.isEmpty ? name : "\(name) \(what)"
     }
