@@ -436,13 +436,13 @@ def config_layout(
         if not c.source_path:
             _fail(ctx.out, "no configuration file to save to. Run `config init` first.")
             return
-        path = Path(c.source_path)
-        text = path.read_text()
+        cfg = Path(c.source_path)
+        text = cfg.read_text()
         if org_changes:
             text = layout_engine.edit_section(text, "organization", org_changes)
         if cloud_changes:
             text = layout_engine.edit_section(text, "cloud", cloud_changes)
-        tmp = path.with_suffix(".yaml.tmp")
+        tmp = cfg.with_suffix(".yaml.tmp")
         tmp.write_text(text)
         try:
             saved = load_config(tmp)
@@ -454,7 +454,7 @@ def config_layout(
             tmp.unlink()
             _fail(ctx.out, "not saved, the edited file did not say what was asked.")
             return
-        tmp.replace(path)
+        tmp.replace(cfg)
         data["applied"] = True
 
     def render() -> None:
@@ -509,9 +509,7 @@ def config_network(ctx: Context, pause_on_hotspot: str | None) -> None:
             _fail(ctx.out, "no configuration file to save to. Run `config init` first.")
             return
         path = Path(c.source_path)
-        text = layout_engine.edit_section(
-            path.read_text(), "network", {"pause_on_hotspot": wanted}
-        )
+        text = layout_engine.edit_section(path.read_text(), "network", {"pause_on_hotspot": wanted})
         tmp = path.with_suffix(".yaml.tmp")
         tmp.write_text(text)
         try:
@@ -594,9 +592,7 @@ def config_own_client(ctx: Context, client_id: str) -> None:
 @click.option("--archive", default=None, help="The folder on this Mac files are copied into.")
 @click.option("--apply", "apply_", is_flag=True, help="Save it to the configuration file.")
 @pass_context
-def config_storage(
-    ctx: Context, remote: str | None, archive: str | None, apply_: bool
-) -> None:
+def config_storage(ctx: Context, remote: str | None, archive: str | None, apply_: bool) -> None:
     """Show or change the backup account and the archive folder on this Mac.
 
     Accounts come from your rclone config (`rclone config` adds one). Only an
@@ -2284,8 +2280,13 @@ def google_photos_folders(ctx: Context, depth: int) -> None:
         ctx.out.table(
             ["FOLDER", "COUNT", "SENT", "NOT YET", "SIZE"],
             [
-                (f["path"], f"{f['count']:,}", f"{f['sent']:,}", f"{f['notSent']:,}",
-                 human_bytes(f["notSentBytes"]))
+                (
+                    f["path"],
+                    f"{f['count']:,}",
+                    f"{f['sent']:,}",
+                    f"{f['notSent']:,}",
+                    human_bytes(f["notSentBytes"]),
+                )
                 for f in found
             ],
         )

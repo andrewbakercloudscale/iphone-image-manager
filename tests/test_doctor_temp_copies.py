@@ -23,6 +23,7 @@ def _library(tmp_path: Path) -> Path:
 
 def test_copy_registers_its_own_removal(tmp_path, monkeypatch):
     registered = []
+
     def record(fn, *a, **k):
         registered.append((fn, a, k))
 

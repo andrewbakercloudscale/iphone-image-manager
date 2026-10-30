@@ -121,8 +121,16 @@ def test_the_remote_path_of_a_flat_file_is_just_its_name(env) -> None:
         "sha256, first_seen_at, last_seen_at, created_at, updated_at) "
         "VALUES (1, 'wa1', 'IMG_1.jpg', 'VIDEO', '2023-02-14T10:00:00+00:00', ?, ?, 1, '[]', "
         "?, 'LOCAL_VERIFIED', ?, ?, ?, ?, ?)",
-        (len(body), WA_BUNDLE, str(path), hashlib.sha256(body).hexdigest(),
-         utcnow(), utcnow(), utcnow(), utcnow()),
+        (
+            len(body),
+            WA_BUNDLE,
+            str(path),
+            hashlib.sha256(body).hexdigest(),
+            utcnow(),
+            utcnow(),
+            utcnow(),
+            utcnow(),
+        ),
     )
     [upload] = cloud_engine.plan(config, Selector(source="whatsapp"), db)
     assert upload.destination == WA

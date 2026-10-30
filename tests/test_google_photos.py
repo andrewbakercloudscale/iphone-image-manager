@@ -220,7 +220,12 @@ def test_following_keeps_only_the_chosen_sources(tmp_path: Path, env) -> None:
     config = make_config(tmp_path, sources=["screenshot"])
     backed_up(config, db, "a", "2019/IMG_1.HEIC")
     shot = backed_up(
-        config, db, "b", "2019/s.PNG", bundle="com.apple.springboard", dest=SHOTS,
+        config,
+        db,
+        "b",
+        "2019/s.PNG",
+        bundle="com.apple.springboard",
+        dest=SHOTS,
         channel="screenshot",
     )
     items = gp.plan(config, db, Selector(), following=True)
@@ -407,7 +412,12 @@ def test_folders_count_what_send_folder_would_select(env) -> None:
     backed_up(config, db, "a", "2019/03/IMG_1.HEIC", gphotos=gp.SENT)
     backed_up(config, db, "b", "2019/11/IMG_2.HEIC")
     backed_up(
-        config, db, "c", "2019/s.PNG", bundle="com.apple.springboard", dest=SHOTS,
+        config,
+        db,
+        "c",
+        "2019/s.PNG",
+        bundle="com.apple.springboard",
+        dest=SHOTS,
         channel="screenshot",
     )
     found = {f["path"]: f for f in gp.folders(config, db)}

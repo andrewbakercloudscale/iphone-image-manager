@@ -111,3 +111,13 @@ def test_foreign_keys_are_enforced(db: Database) -> None:
             "INSERT INTO scans (device_id, started_at, status) "
             "VALUES (999, '2026-01-01', 'RUNNING')"
         )
+
+
+def test_the_upload_owner_check_uses_an_index(db: Database) -> None:
+    """Without it each file in an upload plan read the whole table: 19,184 files
+    sat silent for about 15 minutes before the first byte went up."""
+    plan = db.conn.execute(
+        "EXPLAIN QUERY PLAN SELECT id FROM assets WHERE cloud_path = ? AND id != ? LIMIT 1",
+        ("x", 1),
+    ).fetchall()
+    assert any("idx_assets_cloud_path" in row[-1] for row in plan), plan

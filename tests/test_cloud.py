@@ -927,10 +927,11 @@ def test_a_parents_listing_does_not_claim_its_nested_destinations_files(env) -> 
 def test_a_listing_counts_its_files_while_rclone_is_still_running(tmp_path: Path) -> None:
     """lsjson is silent on stderr, so the count comes from the lines it has written."""
     heard: list[int] = []
+    # rclone stays open across several 1 s count ticks, so a busy machine still hears one.
     binary = _fake_rclone(
         tmp_path,
         'printf "[\\n{\\"Path\\":\\"a\\"},\\n{\\"Path\\":\\"b\\"}\\n"\n'
-        'sleep 1.6\nprintf "]\\n"\nexit 0\n',
+        'sleep 3.5\nprintf "]\\n"\nexit 0\n',
     )
     provider = cloud_engine.RcloneProvider("gdrive", binary=binary)
     provider._run(["lsjson", "gdrive:Dest"], timeout=10, on_lines=heard.append)

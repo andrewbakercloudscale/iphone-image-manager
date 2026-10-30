@@ -182,14 +182,40 @@ def _incomplete_group(asset: dict[str, Any], db: Database) -> str | None:
 #: user's: an unrecognised smart album keeps an asset on the phone, never the
 #: other way round. Observed on the owner's library 2026-09-29 plus the rest of
 #: the standard set.
-AUTOMATIC_ALBUMS = frozenset({
-    "Recents", "Recently Saved", "Recently Added", "Favorites", "Videos",
-    "Selfies", "Live Photos", "Portrait", "Panoramas", "Time-lapse", "Slo-mo",
-    "Cinematic", "Spatial", "Bursts", "Screenshots", "Screen Recordings",
-    "Animated", "Long Exposure", "RAW", "Hidden", "Recently Deleted", "Imports",
-    "Duplicates", "Recently Edited", "Recently Viewed", "Recently Shared",
-    "All Photos", "Unable to Upload", "Depth Effect", "Camera Roll",
-})
+AUTOMATIC_ALBUMS = frozenset(
+    {
+        "Recents",
+        "Recently Saved",
+        "Recently Added",
+        "Favorites",
+        "Videos",
+        "Selfies",
+        "Live Photos",
+        "Portrait",
+        "Panoramas",
+        "Time-lapse",
+        "Slo-mo",
+        "Cinematic",
+        "Spatial",
+        "Bursts",
+        "Screenshots",
+        "Screen Recordings",
+        "Animated",
+        "Long Exposure",
+        "RAW",
+        "Hidden",
+        "Recently Deleted",
+        "Imports",
+        "Duplicates",
+        "Recently Edited",
+        "Recently Viewed",
+        "Recently Shared",
+        "All Photos",
+        "Unable to Upload",
+        "Depth Effect",
+        "Camera Roll",
+    }
+)
 
 #: The album a source app files its own saves into. Being in it is where the
 #: asset came from, not a choice the user made to keep it.
@@ -475,15 +501,15 @@ def plan(
             # there is, and "" == "" would otherwise read as agreement.
             result.block(asset_row, "the remote reported no hash to compare")
             continue
-        expected = recorded_digest(candidate, hash_name)
-        if expected is None:
+        recorded = recorded_digest(candidate, hash_name)
+        if recorded is None:
             # An asset fetched before the ledger kept MD5 has none, and an
             # MD5-only remote (S3) can then prove nothing about it.
             result.block(
                 asset_row, f"no {hash_name.upper()} recorded to compare the remote against"
             )
             continue
-        if digest != expected:
+        if digest != recorded:
             result.block(asset_row, "the remote copy does not match the recorded hash")
             continue
         if candidate.needs_size_check:

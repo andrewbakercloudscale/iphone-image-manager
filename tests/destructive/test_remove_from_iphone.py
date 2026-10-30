@@ -806,8 +806,7 @@ def test_the_fresh_scan_is_of_the_candidates_and_a_missing_one_is_never_removed(
     rows = {
         r["identity_key"]: r
         for r in db.conn.execute(
-            "SELECT identity_key, present_on_phone, last_seen_scan_id, source_bundle_id "
-            "FROM assets"
+            "SELECT identity_key, present_on_phone, last_seen_scan_id, source_bundle_id FROM assets"
         )
     }
     assert rows[a]["last_seen_scan_id"] == fresh.scan_id

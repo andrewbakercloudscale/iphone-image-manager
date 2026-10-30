@@ -386,6 +386,28 @@ final class JobsTests: XCTestCase {
     }
 }
 
+final class AppRowTests: XCTestCase {
+    private func job(_ source: String, _ state: Job.State) -> Job {
+        Job(source: source, type: "photo", state: state, lastLine: "", lastAt: "")
+    }
+
+    func testAJobStartedFromAnAppRowIsNamedByTheApp() {
+        XCTAssertEqual(job("net.whatsapp.WhatsApp", .running).title, "WhatsApp photos")
+        XCTAssertEqual(job("com.apple.sharingd", .running).title, "AirDrop photos")
+        XCTAssertEqual(job("whatsapp", .running).title, "WhatsApp photos")
+    }
+
+    func testTheRowShowsTheBackupItStarted() {
+        let wa = "net.whatsapp.WhatsApp"
+        XCTAssertEqual(Jobs.rowState(source: wa, jobs: [], queuedSources: []), .idle)
+        XCTAssertEqual(Jobs.rowState(source: wa, jobs: [job(wa, .running)], queuedSources: []), .running)
+        XCTAssertEqual(Jobs.rowState(source: wa, jobs: [], queuedSources: [wa]), .queued)
+        XCTAssertEqual(Jobs.rowState(source: wa, jobs: [job(wa, .finished)], queuedSources: []), .idle)
+        // Another source's job says nothing about this row.
+        XCTAssertEqual(Jobs.rowState(source: wa, jobs: [job("whatsapp", .running)], queuedSources: []), .idle)
+    }
+}
+
 final class DetectorTests: XCTestCase {
     func testStoppedJobsComeBeforeSpace() {
         var s = LibrarySnapshot()

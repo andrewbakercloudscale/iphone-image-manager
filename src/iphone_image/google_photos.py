@@ -545,7 +545,7 @@ def source_counts(config: Config, db: Database) -> list[dict[str, Any]]:
     shown = list(SOURCE_TITLES) + [
         s for s in config.google_photos.sources if s not in SOURCE_TITLES
     ]
-    counts = {
+    counts: dict[str, dict[str, Any]] = {
         s: {
             "source": s,
             "title": source_title(s),

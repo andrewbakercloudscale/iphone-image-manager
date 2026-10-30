@@ -197,26 +197,37 @@ struct AppsCard: View {
                 ForEach(library.apps, id: \.bundle) { a in
                     ActionRow(label: Fmt.app(a.bundle), value: Double(a.tally.bytes) / max(top, 1), text: Fmt.bytes(a.tally.bytes),
                               color: Theme.series[2], note: "\(Fmt.count(a.tally.count)) items") {
-                        // The row itself says the backup took: the notice up top is off screen down here.
-                        if model.jobs.contains(where: { $0.source == a.bundle && $0.state == .running }) {
-                            RowButton(title: "Backing up: see Activity", symbol: "waveform.path.ecg", color: Tab.activity.color) {
-                                model.tab = .activity
-                            }
-                        } else if model.queue.contains(where: { $0.source == a.bundle }) {
-                            Pill(text: "Queued", symbol: "clock.fill", color: Theme.warn)
-                        } else {
-                            RowButton(title: "Back up", symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color) {
-                                model.backUp(Recipe(custom: Filter(name: Fmt.app(a.bundle), source: a.bundle)))
-                                // Starting it shows on Activity; stay here only when it waits in the queue.
-                                if !model.queue.contains(where: { $0.source == a.bundle }) { model.tab = .activity }
-                            }
-                        }
+                        AppBackupButton(model: model, bundle: a.bundle)
                         RowButton(title: "Clean up", symbol: "line.3.horizontal.decrease") {
                             model.draft = Filter(source: a.bundle)
                             model.openBuilder()
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// An app row's Back up. The row itself says the backup took: the notice up top is
+/// off screen down here, so a click that only set it looked like nothing happened.
+struct AppBackupButton: View {
+    @ObservedObject var model: Model
+    let bundle: String
+
+    var body: some View {
+        let state = Jobs.rowState(source: bundle, jobs: model.jobs, queuedSources: model.queue.map { $0.source })
+        if state == .running {
+            RowButton(title: "Backing up: see Activity", symbol: "waveform.path.ecg", color: Tab.activity.color) {
+                model.tab = .activity
+            }
+        } else if state == .queued {
+            Pill(text: "Queued", symbol: "clock.fill", color: Theme.warn)
+        } else {
+            RowButton(title: "Back up", symbol: "icloud.and.arrow.up.fill", color: Tab.backup.color) {
+                model.backUp(Recipe(custom: Filter(name: Fmt.app(bundle), source: bundle)))
+                // Starting it shows on Activity; stay here only when it waits in the queue.
+                if !model.queue.contains(where: { $0.source == bundle }) { model.tab = .activity }
             }
         }
     }

@@ -163,7 +163,8 @@ def test_archive_path_must_be_writable(tmp_path: Path) -> None:
 
 def test_disk_check_reports_the_volume(tmp_path: Path) -> None:
     check = doctor.check_disk(Config(archive={"local_path": str(tmp_path / "a")}))
-    assert check.status in (PASS, FAIL)
+    # Any verdict: it reads this Mac's real disk, which may be short of space.
+    assert check.status in (PASS, WARN, FAIL)
     assert "free" in check.detail
 
 

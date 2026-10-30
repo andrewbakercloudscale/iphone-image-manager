@@ -72,3 +72,24 @@ jobs:
             exit 1
           fi
           echo "no-device path exits 2 as intended"
+
+  app:
+    # Photo Sentinel's own logic (PhotoCore): job titles, queue and row states,
+    # ledger reads. build-app.sh runs the same tests before every install.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Test
+        working-directory: app
+        run: swift test
+
+  photos-helper:
+    # The PhotoKit helper the scans run through must still compile.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build iimphotos
+        working-directory: spikes/iimphotos
+        run: swift build -c release

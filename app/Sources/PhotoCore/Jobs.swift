@@ -147,6 +147,13 @@ public struct Job: Identifiable, Hashable, Sendable {
 }
 
 public enum Jobs {
+    /// Where one source's backup stands, for a row's button: never "nothing happened".
+    public enum RowState: Equatable { case idle, queued, running }
+    public static func rowState(source: String, jobs: [Job], queuedSources: [String]) -> RowState {
+        if jobs.contains(where: { $0.source == source && $0.state == .running }) { return .running }
+        return queuedSources.contains(source) ? .queued : .idle
+    }
+
     public static let home = NSString(string: "~/.iphone-image").expandingTildeInPath
     public static var logPath: String { home + "/cycle.log" }
     public static var cyclePath: String { home + "/cycle.sh" }
