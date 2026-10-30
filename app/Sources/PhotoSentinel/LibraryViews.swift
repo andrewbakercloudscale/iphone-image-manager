@@ -112,7 +112,7 @@ struct BackupView: View {
         if let s = model.library {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 12) {
-                    Kpi(label: "CHECKED IN DRIVE", value: Fmt.count(s.verified.count), note: Fmt.bytes(s.verified.bytes), color: Theme.good)
+                    Kpi(label: "CHECKED IN GOOGLE DRIVE", value: Fmt.count(s.verified.count), note: Fmt.bytes(s.verified.bytes), color: Theme.good)
                     Kpi(label: "ONLY ON THE PHONE", value: Fmt.count(s.onPhone.count - s.verified.count), note: Fmt.bytes(s.onPhone.bytes - s.verified.bytes), color: Theme.warn)
                 }
                 Card(title: "Coverage by source", symbol: "icloud.and.arrow.up.fill", tint: Tab.backup.color) {
@@ -293,7 +293,7 @@ struct CoverageRow: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(why(c, left)).foregroundStyle(c.verified.count == 0 ? Theme.warn : .secondary)
                             if let kinds = c.notBackedUpKinds { Text(kinds).foregroundStyle(.secondary).monospacedDigit() }
-                            if let apps = c.notBackedUpApps {
+                            if c.channel != .otherApps, let apps = c.notBackedUpApps {
                                 Text("From: \(apps)").foregroundStyle(.secondary).monospacedDigit()
                                     .fixedSize(horizontal: false, vertical: true)
                             }
@@ -314,6 +314,9 @@ struct CoverageRow: View {
                     }
                 }
                 .font(.caption)
+                if c.channel == .otherApps, c.notBackedUpByApp.count > 1, !state.running {
+                    AppBreakdown(model: model, apps: c.notBackedUpByApp)
+                }
             }
         }
         .font(.callout)
@@ -365,4 +368,64 @@ private struct Spinning: ViewModifier {
 
 extension View {
     func spinning() -> some View { modifier(Spinning()) }
+}
+
+/// Other apps, one row per app: what it saved that is not in Google Drive, photos and videos
+/// apart, biggest first, each with its own Back up. The six biggest show; the rest on request.
+struct AppBreakdown: View {
+    @ObservedObject var model: Model
+    let apps: [ChannelStats.AppTally]
+    @State private var all = false
+
+    var body: some View {
+        let shown = all ? apps : Array(apps.prefix(6))
+        let top = Double(max(apps.first?.tally.bytes ?? 1, 1))
+        VStack(alignment: .leading, spacing: 6) {
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
+                ForEach(shown) { a in
+                    GridRow {
+                        Text(a.app).fontWeight(.medium).lineLimit(1)
+                        Text(Fmt.bytes(a.tally.bytes)).monospacedDigit().gridColumnAlignment(.trailing)
+                        Capsule().fill(Theme.series[6].opacity(0.8))
+                            .frame(width: max(2, 120 * Double(a.tally.bytes) / top), height: 6)
+                            .frame(width: 120, alignment: .leading)
+                        Text(kinds(a)).foregroundStyle(.secondary).monospacedDigit()
+                        Spacer(minLength: 0)
+                        button(a)
+                    }
+                }
+            }
+            if apps.count > 6 {
+                let rest = apps.dropFirst(6)
+                Button(all ? "Show fewer" : "Show all \(apps.count) apps (\(rest.count) more, \(Fmt.bytes(rest.reduce(0) { $0 + $1.tally.bytes })))") {
+                    all.toggle()
+                }
+                .buttonStyle(.link)
+            }
+        }
+        .font(.caption)
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.06)))
+    }
+
+    /// "40 videos · 35 photos", the bigger part first.
+    private func kinds(_ a: ChannelStats.AppTally) -> String {
+        func part(_ t: Tally, _ one: String) -> (Int64, String)? {
+            t.count == 0 ? nil : (t.bytes, "\(Fmt.count(t.count)) \(one)\(t.count == 1 ? "" : "s")")
+        }
+        return [part(a.videos, "video"), part(a.photos, "photo")].compactMap { $0 }
+            .sorted { $0.0 > $1.0 }.map(\.1).joined(separator: " · ")
+    }
+
+    @ViewBuilder private func button(_ a: ChannelStats.AppTally) -> some View {
+        if let q = model.queue.first(where: { $0.label == Model.appLabel(a) }) {
+            RowButton(title: "Queued", symbol: "xmark", color: .secondary, style: .ghost) { model.cancelQueued(q) }
+                .help("Starts when the running backup ends. Click to take it off the queue.")
+        } else {
+            RowButton(title: "Back up", symbol: "icloud.and.arrow.up", color: Tab.backup.color, style: .soft) {
+                model.backUpApp(a)
+            }
+            .help("Copies \(a.app)'s \(Fmt.count(a.tally.count)) (\(Fmt.bytes(a.tally.bytes))) to Google Drive and checks each hash. Nothing is removed from the phone.")
+        }
+    }
 }

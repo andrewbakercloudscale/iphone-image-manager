@@ -379,6 +379,15 @@ final class Model: ObservableObject {
         if queue.contains(where: { wanted.contains($0) }) { notice = "\(c.title): backup queued. It starts when the running job ends." }
     }
 
+    /// One app's items in Other apps with no Drive copy yet.
+    func backUpApp(_ a: ChannelStats.AppTally) {
+        let ids = (try? Ledger.notBackedUpIds(SQLiteReader(path: ledgerPath), channel: .otherApps, bundle: a.bundle)) ?? []
+        if !ids.isEmpty { backUpItems(ids, bytes: a.tally.bytes, label: Self.appLabel(a)) }
+    }
+
+    /// "Other apps: AirDrop", so `backupState(.otherApps)` counts it too.
+    static func appLabel(_ a: ChannelStats.AppTally) -> String { "\(Channel.otherApps.title): \(a.app)" }
+
     /// Where a source's backup stands: running now, waiting in the queue, or neither.
     func backupState(_ c: Channel) -> (running: Bool, queued: [QueuedBackup]) {
         let source = c.cliSource

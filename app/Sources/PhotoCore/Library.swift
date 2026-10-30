@@ -219,7 +219,15 @@ public struct ChannelStats: Identifiable, Hashable, Sendable {
     /// What has no Drive copy, split by kind and, for Other apps, by app, largest first.
     public var notBackedUpPhotos = Tally()
     public var notBackedUpVideos = Tally()
-    public struct AppTally: Hashable, Sendable { public let app: String; public var tally: Tally }
+    public struct AppTally: Hashable, Sendable, Identifiable {
+        public let bundle: String
+        public var photos = Tally()
+        public var videos = Tally()
+        public var app: String { Fmt.app(bundle) }
+        public var tally: Tally { Tally(count: photos.count + videos.count, bytes: photos.bytes + videos.bytes) }
+        public var id: String { bundle }
+        public init(bundle: String) { self.bundle = bundle }
+    }
     public var notBackedUpByApp: [AppTally] = []
 
     /// "580 photos (1.2 GB) and 834 videos (37 GB)".
@@ -393,12 +401,14 @@ public enum Ledger {
             if r.str(1) == "VIDEO" { s.channels[i].notBackedUpVideos = add(s.channels[i].notBackedUpVideos, t) }
             else { s.channels[i].notBackedUpPhotos = add(s.channels[i].notBackedUpPhotos, t) }
             guard s.channels[i].channel == .otherApps else { continue }
-            let app = Fmt.app(r.str(2))
-            if let j = s.channels[i].notBackedUpByApp.firstIndex(where: { $0.app == app }) {
-                s.channels[i].notBackedUpByApp[j].tally = add(s.channels[i].notBackedUpByApp[j].tally, t)
-            } else {
-                s.channels[i].notBackedUpByApp.append(.init(app: app, tally: t))
+            let bundle = r.str(2)
+            var j = s.channels[i].notBackedUpByApp.firstIndex { $0.bundle == bundle }
+            if j == nil {
+                s.channels[i].notBackedUpByApp.append(.init(bundle: bundle))
+                j = s.channels[i].notBackedUpByApp.count - 1
             }
+            if r.str(1) == "VIDEO" { s.channels[i].notBackedUpByApp[j!].videos = add(s.channels[i].notBackedUpByApp[j!].videos, t) }
+            else { s.channels[i].notBackedUpByApp[j!].photos = add(s.channels[i].notBackedUpByApp[j!].photos, t) }
         }
         for i in s.channels.indices { s.channels[i].notBackedUpByApp.sort { $0.tally.bytes > $1.tally.bytes } }
 
@@ -578,6 +588,17 @@ public enum Fmt {
             "com.facebook.Facebook": "Facebook", "ph.telegra.Telegraph": "Telegram",
             "com.google.Gmail": "Gmail", "com.google.Drive": "Google Drive",
             "com.openai.chat": "ChatGPT", "ai.x.GrokApp": "Grok",
+            "com.lemon.lvoverseas": "CapCut", "com.neocortext.doublicatapp": "Doublicat",
+            "io.faceapp.ios": "FaceApp", "com.apple.mobileslideshow": "Photos",
+            "com.apple.camera.CameraMessagesApp": "Messages camera",
+            "com.6wunderkinder.wunderlistmobile": "Wunderlist", "vsmedia.de.imagesize": "Image Size",
+            "org.jw.jwlibrary": "JW Library", "com.trilliarden.mematic": "Mematic",
+            "com.tinyspeck.chatlyio": "Slack", "com.nianticlabs.pokemongo": "Pokémon GO",
+            "com.microsoft.skype.teams": "Teams", "com.microsoft.Office.Outlook": "Outlook",
+            "com.linkedin.LinkedIn": "LinkedIn", "com.google.gemini": "Gemini",
+            "com.cardinalblue.PicCollage": "PicCollage", "com.burbn.layouts": "Layout",
+            "com.apple.ScreenshotServicesService": "Screenshot markup", "com.anthropic.claude": "Claude",
+            "com.adobe.scan.ios": "Adobe Scan", "com.voodoocoding.lolbucket": "Lolbucket",
         ]
         return names[bundle] ?? bundle.split(separator: ".").last.map(String.init) ?? bundle
     }
@@ -586,11 +607,13 @@ public enum Fmt {
 extension Ledger {
     /// Everything from one source still on the phone with no verified Drive copy, for
     /// sources the backup jobs cannot select by name (Other apps spans many apps).
-    public static func notBackedUpIds(_ db: SQLiteReader, channel: Channel) throws -> [Int] {
+    /// With `bundle`, only what that one app saved.
+    public static func notBackedUpIds(_ db: SQLiteReader, channel: Channel, bundle: String? = nil) throws -> [Int] {
         try db.rows("""
             SELECT a.id FROM assets a
             WHERE a.present_on_phone = 1 AND a.cloud_status <> 'CLOUD_VERIFIED' AND \(Channel.sql) = ?
+            \(bundle == nil ? "" : "AND a.source_bundle_id = ?")
             ORDER BY a.created_at_device
-            """, [channel.rawValue]).map { $0.int(0) }
+            """, [channel.rawValue] + (bundle.map { [$0] } ?? [])).map { $0.int(0) }
     }
 }
